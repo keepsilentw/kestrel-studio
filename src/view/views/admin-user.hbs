@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{account.username}} · Kestrel Studio</title>
+  <link rel="icon" type="image/svg+xml" href="/logo.svg">
+  <link rel="stylesheet" href="/assets/main.css">
+</head>
+<body class="admin-page">
+  <header class="topbar">
+    <a class="brand" href="/">
+      <img class="brand-logo" src="/logo.svg" alt="" width="32" height="32">
+      <span class="brand-name">Kestrel Studio</span>
+    </a>
+
+    <nav class="menu">
+      <a class="menu-button" href="/">返回对话</a>
+      <a class="menu-button" href="/admin">账号管理</a>
+      <a class="menu-button" href="/admin/conversations">全站会话</a>
+    </nav>
+
+    <div class="account">
+      <div class="account-menu">
+        <span class="account-name">{{user.username}}</span>
+        <form action="/logout" method="post" class="logout-form">
+          <button type="submit" class="logout-button">退出登录</button>
+        </form>
+      </div>
+    </div>
+  </header>
+
+  <main class="admin-main">
+    {{#if notice}}
+      <p class="admin-notice{{#if notice.isError}} admin-notice-error{{/if}}">{{notice.text}}</p>
+    {{/if}}
+
+    <section class="admin-card">
+      <h2 class="admin-title">{{account.username}}</h2>
+      <dl class="admin-facts">
+        <dt>角色</dt><dd>{{account.roleLabel}}</dd>
+        <dt>会话</dt><dd><a href="/admin/conversations?user={{account.id}}">{{account.conversationCount}} 个</a></dd>
+        <dt>资产</dt><dd>{{account.assetCount}} 个</dd>
+        <dt>创建时间</dt><dd>{{account.createdAtLabel}}</dd>
+      </dl>
+    </section>
+
+    <section class="admin-card">
+      <h2 class="admin-title">重置密码</h2>
+      <p class="admin-hint">账号名只作显示，实际按本页地址里的账号重置。</p>
+      {{! The account name is a real, visible field on purpose: Chrome warns about a
+          password box with no visible username next to it, and password managers
+          need the pairing to know whose password this is. Its value is not what
+          identifies the account — the id in the form action does. }}
+      <form class="admin-form" action="/admin/users/{{account.id}}/password" method="post">
+        <label class="admin-field">
+          <span>账号</span>
+          <input name="username" type="text" value="{{account.username}}" readonly autocomplete="username">
+        </label>
+        <label class="admin-field">
+          <span>新密码</span>
+          <input name="password" type="password" required autocomplete="new-password">
+        </label>
+        <button type="submit" class="admin-button">重置密码</button>
+      </form>
+    </section>
+
+    <section class="admin-card admin-card-danger">
+      <h2 class="admin-title">删除账号</h2>
+      <p class="admin-hint">
+        将一并删除该账号名下 {{account.conversationCount}} 个会话、{{account.assetCount}} 个资产文件，
+        以及这些会话的全部消息与任务记录。此操作不可撤销。
+      </p>
+      <a class="admin-button admin-button-danger" href="/admin/users/{{account.id}}/delete">删除账号</a>
+    </section>
+  </main>
+</body>
+</html>

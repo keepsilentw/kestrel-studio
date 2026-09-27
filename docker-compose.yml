@@ -1,0 +1,25 @@
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: kestrel-studio:latest
+    container_name: kestrel-studio
+    restart: unless-stopped
+    ports:
+      - "${HOST_PORT:-8848}:8848"
+    # Holds BAILIAN_API_KEY, SESSION_SECRET and the SUPER_ADMIN_* credentials.
+    # Created on the host by scripts/deploy.sh on first deploy and never
+    # overwritten afterwards.
+    env_file:
+      - .env
+    # PORT is set here, not in .env. Because .env is written once and never
+    # rewritten (that is what preserves SESSION_SECRET across deploys), a stale
+    # PORT left in it would silently win and the app would listen on the wrong
+    # port while the published mapping pointed elsewhere. compose's
+    # `environment` takes precedence over `env_file`.
+    environment:
+      - PORT=${HOST_PORT:-8848}
+    volumes:
+      - ./data:/app/data
+      - ./storage:/app/storage

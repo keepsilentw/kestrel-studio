@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Kestrel Studio</title>
+  <link rel="icon" type="image/svg+xml" href="/logo.svg">
+  <link rel="stylesheet" href="/assets/main.css">
+</head>
+<body data-conversation-id="{{activeConversationId}}" data-can-delete-conversations="{{canDeleteConversations}}">
+  <header class="topbar">
+    <a class="brand" href="/">
+      <img class="brand-logo" src="/logo.svg" alt="" width="32" height="32">
+      <span class="brand-name">Kestrel Studio</span>
+    </a>
+
+    <nav class="menu">
+      <button type="button" class="menu-button" id="new-conversation">新会话</button>
+      <a class="menu-button" href="/voice">语音</a>
+      {{#if (eq user.role "super")}}
+        <a class="menu-button" href="/admin">管理</a>
+      {{/if}}
+      <details class="menu-dropdown">
+        <summary class="menu-button">历史会话</summary>
+        <ul class="conversation-list">
+          {{#each conversations}}
+            {{! The delete control is rebuilt by refreshConversationList() in
+                web/scripts/main.ts — keep the two in step. It is only rendered
+                for a normal account; the same rule is enforced in the endpoint. }}
+            <li class="conversation-item">
+              <a class="conversation-link{{#if this.isActive}} is-active{{/if}}" href="/?c={{this.id}}">{{this.title}}</a>
+              {{#if ../canDeleteConversations}}
+                <button
+                  type="button"
+                  class="conversation-delete"
+                  data-delete-conversation="{{this.id}}"
+                  aria-label="删除会话 {{this.title}}"
+                  title="删除会话"
+                >删除</button>
+              {{/if}}
+            </li>
+          {{else}}
+            <li class="conversation-empty">暂无会话</li>
+          {{/each}}
+        </ul>
+      </details>
+    </nav>
+
+    <div class="account">
+      <div class="account-menu">
+        <span class="account-name">{{user.username}}</span>
+        <form action="/logout" method="post" class="logout-form">
+          <button type="submit" class="logout-button">退出登录</button>
+        </form>
+      </div>
+    </div>
+  </header>
+
+  <main class="stream" id="stream">
+    {{#each messages}}
+      {{> turn}}
+    {{/each}}
+    {{#each pendingTasks}}
+      <div class="task-pending" data-task-id="{{this.id}}">
+        <span class="task-spinner" aria-hidden="true"></span>
+        {{#if (eq this.kind "video")}}视频{{else}}图片{{/if}}任务 #{{this.id}} {{this.statusLabel}}…
+      </div>
+    {{/each}}
+  </main>
+
+  {{#if turnAnchors.length}}
+    <nav class="turn-index" id="turn-index" aria-label="会话节点">
+      <p class="turn-index-title">会话节点</p>
+      <ol class="turn-index-list" id="turn-index-list">
+        {{#each turnAnchors}}
+          <li>
+            <button type="button" class="turn-index-link" data-target="{{this.messageId}}" title="{{this.label}}">{{this.label}}</button>
+          </li>
+        {{/each}}
+      </ol>
+    </nav>
+  {{/if}}
+
+  <footer class="composer">
+    <div class="composer-modes" id="composer-modes" role="radiogroup" aria-label="生成模式">
+      <button type="button" class="mode-option is-active" data-mode="auto" role="radio" aria-checked="true">智能</button>
+      <button type="button" class="mode-option" data-mode="chat" role="radio" aria-checked="false">对话</button>
+      <button type="button" class="mode-option" data-mode="image" role="radio" aria-checked="false">图片</button>
+      <button type="button" class="mode-option" data-mode="video" role="radio" aria-checked="false">视频</button>
+    </div>
+
+    <form class="composer-form" id="composer-form">
+      <textarea
+        id="prompt"
+        class="composer-input"
+        rows="1"
+        placeholder="描述你想要的图片，例如：一只站在岩石上的红隼，清晨逆光"
+      ></textarea>
+      <button type="submit" class="composer-send" id="send" aria-label="发送">
+        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+          <path d="M3 20.5 21 12 3 3.5 3 10l12 2-12 2z" fill="currentColor"/>
+        </svg>
+      </button>
+    </form>
+    <p class="composer-hint"><kbd>Enter</kbd> 发送，<kbd>Shift</kbd> + <kbd>Enter</kbd> 换行</p>
+  </footer>
+
+  <dialog class="preview" id="preview">
+    <img class="preview-image" id="preview-image" alt="">
+  </dialog>
+
+  <dialog class="download-dialog" id="download-dialog">
+    <h2 class="download-title">下载图片</h2>
+
+    <fieldset class="download-group">
+      <legend>尺寸</legend>
+      <div class="size-options">
+        <label><input type="radio" name="download-size" value="50">50 × 50</label>
+        <label><input type="radio" name="download-size" value="100" checked>100 × 100</label>
+        <label><input type="radio" name="download-size" value="200">200 × 200</label>
+        <label><input type="radio" name="download-size" value="1024">1024 × 1024</label>
+      </div>
+    </fieldset>
+
+    <div class="download-group">
+      <label class="download-row" for="download-format">
+        <span>格式</span>
+        <select id="download-format">
+          <option value="image/jpeg" selected>JPEG</option>
+          <option value="image/webp">WebP</option>
+          <option value="image/png">PNG</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="download-group">
+      <label class="download-row" for="download-quality">
+        <span>压缩质量</span>
+        <output id="download-quality-value" for="download-quality">90%</output>
+      </label>
+      <input type="range" id="download-quality" min="10" max="100" step="5" value="90">
+      <p class="download-hint" id="download-hint"></p>
+    </div>
+
+    <p class="download-estimate" id="download-estimate">预计大小：计算中…</p>
+
+    <div class="download-actions">
+      <button type="button" class="download-cancel" id="download-cancel">取消</button>
+      <button type="button" class="download-confirm" id="download-confirm">下载</button>
+    </div>
+  </dialog>
+
+  <script type="module" src="/assets/main.js"></script>
+</body>
+</html>

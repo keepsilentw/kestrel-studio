@@ -1,0 +1,37 @@
+{
+  // Type-checks the unit tests, which the application config excludes.
+  //
+  // `nest build` compiles everything under tsconfig.json's `include`, so test
+  // files must not be part of it: a test-only import (vitest) resolving badly
+  // would break `make build` / `make start` / `make deploy`, not just the tests.
+  // Keeping them out also stops compiled tests from landing in dist/.
+  //
+  // Tests are still fully type-checked, just under a config whose module
+  // resolution understands package `exports` — the application config uses
+  // node10 resolution, which ignores it.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "module": "esnext",
+    "moduleResolution": "bundler",
+    "noEmit": true,
+    // The base config sets `incremental`, which would drop a .tsbuildinfo next
+    // to the real one and serve no purpose for a config that never emits.
+    "incremental": false,
+    // Required, and not a stylistic choice. TypeScript 6 only auto-includes
+    // node_modules/@types when `types` explicitly contains "*" (`usesWildcardTypes`
+    // in the compiler is `some(options.types, t => t === "*")`); leaving `types`
+    // unset now means "none". The application gets Node globals only because its
+    // module graph reaches express → @types/express-serve-static-core → @types/node.
+    // A program rooted at test files never imports express, so without this line
+    // every `process` / `Buffer` / `node:*` reference is an unresolved name.
+    "types": ["node"]
+  },
+  // Must be re-stated: `exclude` is inherited from the base config, which
+  // excludes test files (the app build must not depend on test-only types).
+  // Leaving it inherited makes the child's `include` match nothing: TS18003.
+  "exclude": ["node_modules", "dist", "web"],
+  // The global declarations are included explicitly: a test that touches
+  // `request.user` needs `src/types/express.d.ts`, and .d.ts files are never
+  // pulled in by an import, only by being in the program.
+  "include": ["src/**/*.test.ts", "src/types/**/*.d.ts"]
+}

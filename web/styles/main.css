@@ -1,0 +1,1237 @@
+:root {
+  --bg: #faf7f2;
+  --surface: #ffffff;
+  --border: #e5ddd1;
+  --text: #2b2622;
+  --muted: #7d7367;
+  --accent: #8c2f27;
+  --accent-soft: #f5e6e3;
+  --danger: #b3261e;
+  --radius: 14px;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+  font-size: 15px;
+  line-height: 1.65;
+}
+
+/* ---------- top bar ---------- */
+
+.topbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  height: 56px;
+  padding: 0 20px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: inherit;
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.brand-logo {
+  display: block;
+  border-radius: 50%;
+}
+
+.brand-name {
+  letter-spacing: 0.01em;
+}
+
+.menu {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: 8px;
+}
+
+.menu-button {
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text);
+  font: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.menu-button:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent-soft);
+  color: var(--accent);
+}
+
+.menu-dropdown {
+  position: relative;
+}
+
+.menu-dropdown > summary {
+  list-style: none;
+}
+
+.menu-dropdown > summary::-webkit-details-marker {
+  display: none;
+}
+
+.conversation-list {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  z-index: 20;
+  min-width: 240px;
+  max-height: 320px;
+  overflow-y: auto;
+  margin: 0;
+  padding: 6px;
+  list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 12px 32px rgb(43 38 34 / 12%);
+}
+
+.conversation-link {
+  display: block;
+  padding: 8px 10px;
+  border-radius: 8px;
+  color: inherit;
+  text-decoration: none;
+  font-size: 14px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.conversation-link:hover {
+  background: var(--bg);
+}
+
+.conversation-link.is-active {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.conversation-empty {
+  padding: 8px 10px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.account {
+  margin-left: auto;
+}
+
+.account-menu {
+  position: relative;
+}
+
+.account-name {
+  display: block;
+  padding: 6px 12px;
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 14px;
+  cursor: default;
+}
+
+.account-menu:hover .account-name,
+.account-menu:focus-within .account-name {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+/*
+ * The gap above the button is padding, not margin: a margin would leave a dead
+ * zone the pointer crosses on its way down, closing the menu before it lands.
+ * :focus-within keeps the same menu reachable by keyboard.
+ */
+.logout-form {
+  position: absolute;
+  top: 100%;
+  right: 0;
+  z-index: 30;
+  margin: 0;
+  padding-top: 8px;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.15s ease, visibility 0.15s ease;
+}
+
+.account-menu:hover .logout-form,
+.account-menu:focus-within .logout-form {
+  opacity: 1;
+  visibility: visible;
+}
+
+.logout-button {
+  display: block;
+  padding: 8px 16px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface);
+  color: var(--text);
+  font-family: inherit;
+  font-size: 14px;
+  white-space: nowrap;
+  cursor: pointer;
+  box-shadow: 0 10px 28px rgb(43 38 34 / 14%);
+}
+
+.logout-button:hover {
+  background: var(--accent-soft);
+  border-color: var(--accent-soft);
+  color: var(--accent);
+}
+
+/* ---------- stream ---------- */
+
+.stream {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding: 28px 20px 40px;
+  scroll-behavior: smooth;
+}
+
+.stream > * {
+  max-width: 760px;
+  margin-inline: auto;
+}
+
+.turn {
+  margin-bottom: 24px;
+  /* Breathing room above a turn when the sidebar scrolls to it. */
+  scroll-margin-top: 12px;
+}
+
+.turn-mode {
+  display: inline-block;
+  margin-bottom: 6px;
+  padding: 1px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 18px;
+  user-select: none;
+}
+
+.turn-user .content {
+  display: inline-block;
+  padding: 10px 16px;
+  background: var(--accent-soft);
+  border-radius: var(--radius);
+  white-space: pre-wrap;
+}
+
+.turn-assistant .content {
+  white-space: pre-wrap;
+}
+
+.turn-assistant .content p:first-child {
+  margin-top: 0;
+}
+
+.turn-assistant .content p:last-child {
+  margin-bottom: 0;
+}
+
+.turn-error {
+  margin: 12px 0 0;
+  padding: 10px 14px;
+  background: #fdecea;
+  border-radius: 10px;
+  color: var(--danger);
+  font-size: 14px;
+}
+
+.reasoning {
+  margin-bottom: 12px;
+  padding: 10px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.reasoning > summary {
+  cursor: pointer;
+  color: var(--muted);
+  font-size: 13px;
+  user-select: none;
+}
+
+.reasoning-body {
+  margin: 10px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: inherit;
+  font-size: 13px;
+  line-height: 1.7;
+  color: var(--muted);
+}
+
+.tool-calls {
+  margin: 0 0 12px;
+  padding: 0;
+  list-style: none;
+}
+
+.tool-call {
+  padding: 6px 12px;
+  margin-bottom: 6px;
+  background: var(--surface);
+  border: 1px dashed var(--border);
+  border-radius: 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* ---------- assets ---------- */
+
+.assets {
+  display: grid;
+  gap: 16px;
+  margin-top: 16px;
+}
+
+.asset {
+  margin: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+}
+
+.asset-image {
+  display: block;
+  width: 100%;
+  height: auto;
+  cursor: zoom-in;
+}
+
+.asset-video {
+  display: block;
+  width: 100%;
+  height: auto;
+  background: #000;
+}
+
+/* A render that outlives the turn that submitted it. */
+.task-pending {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 24px;
+  padding: 12px 16px;
+  background: var(--surface);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.task-spinner {
+  flex: 0 0 auto;
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: task-spin 0.9s linear infinite;
+}
+
+@keyframes task-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.asset-actions {
+  padding: 8px 14px;
+  border-top: 1px solid var(--border);
+}
+
+.asset-download {
+  color: var(--accent);
+  text-decoration: none;
+  font-size: 14px;
+}
+
+.asset-download:hover {
+  text-decoration: underline;
+}
+
+/* ---------- composer ---------- */
+
+.composer {
+  flex: 0 0 auto;
+  padding: 12px 20px 16px;
+  background: linear-gradient(to top, var(--bg) 70%, transparent);
+}
+
+.composer-hint {
+  max-width: 760px;
+  margin: 8px auto 0;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: right;
+  user-select: none;
+}
+
+.composer-hint kbd {
+  padding: 1px 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  font-family: inherit;
+  font-size: 11px;
+}
+
+.composer-modes {
+  display: flex;
+  gap: 6px;
+  max-width: 760px;
+  margin: 0 auto 8px;
+}
+
+.mode-option {
+  padding: 4px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.mode-option:hover {
+  border-color: var(--accent);
+}
+
+.mode-option.is-active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.composer-form {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  max-width: 760px;
+  margin-inline: auto;
+  padding: 12px 12px 12px 20px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 22px;
+  box-shadow: 0 6px 24px rgb(43 38 34 / 8%);
+}
+
+.composer-form:focus-within {
+  border-color: var(--accent);
+}
+
+.composer-input {
+  flex: 1 1 auto;
+  min-height: 56px;
+  max-height: 240px;
+  padding: 14px 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: 16px;
+  line-height: 1.6;
+  resize: none;
+  outline: none;
+}
+
+.composer-send {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: none;
+  border-radius: 50%;
+  background: var(--accent);
+  color: #fff;
+  cursor: pointer;
+}
+
+.composer-send:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.composer-send:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* ---------- turn index (right sidebar) ---------- */
+
+/* Sits in the free margin beside the 760px content column; hidden below the
+   width where that margin disappears. */
+.turn-index {
+  position: fixed;
+  top: 88px;
+  right: 24px;
+  bottom: 150px;
+  display: flex;
+  flex-direction: column;
+  width: 200px;
+  padding-left: 14px;
+  border-left: 1px solid var(--border);
+}
+
+.turn-index[hidden] {
+  display: none;
+}
+
+.turn-index-title {
+  flex: 0 0 auto;
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  user-select: none;
+}
+
+.turn-index-list {
+  flex: 1 1 auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.turn-index-link {
+  display: block;
+  width: 100%;
+  padding: 4px 8px;
+  border: none;
+  border-left: 2px solid transparent;
+  border-radius: 0 6px 6px 0;
+  background: none;
+  color: var(--muted);
+  font-family: inherit;
+  font-size: 12px;
+  line-height: 1.45;
+  text-align: left;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+}
+
+.turn-index-link:hover {
+  background: var(--surface);
+  color: var(--text);
+}
+
+.turn-index-link.is-active {
+  border-left-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+@media (max-width: 1280px) {
+  .turn-index {
+    display: none;
+  }
+}
+
+/* ---------- preview dialog ---------- */
+
+.preview {
+  max-width: 92vw;
+  max-height: 92vh;
+  padding: 0;
+  border: none;
+  background: transparent;
+}
+
+.preview::backdrop {
+  background: rgb(20 16 14 / 72%);
+}
+
+.preview-image {
+  display: block;
+  max-width: 92vw;
+  max-height: 92vh;
+  border-radius: 10px;
+  cursor: zoom-out;
+}
+
+/* ---------- download dialog ---------- */
+
+.download-dialog {
+  width: min(420px, 92vw);
+  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.download-dialog::backdrop {
+  background: rgb(20 16 14 / 72%);
+}
+
+.download-title {
+  margin: 0 0 18px;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.download-group {
+  margin: 0 0 16px;
+  padding: 0;
+  border: none;
+}
+
+.download-group > legend {
+  padding: 0;
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.size-options {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+
+.size-options > label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.size-options > label:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.download-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 8px;
+  font-size: 14px;
+}
+
+.download-row > span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.download-row > select {
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  color: inherit;
+  font-family: inherit;
+  font-size: 14px;
+}
+
+#download-quality {
+  width: 100%;
+  accent-color: var(--accent);
+}
+
+#download-quality:disabled {
+  opacity: 0.45;
+}
+
+.download-hint {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.download-estimate {
+  margin: 0 0 18px;
+  padding: 10px 12px;
+  background: var(--bg);
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.download-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.download-actions > button {
+  padding: 9px 18px;
+  border-radius: 10px;
+  font-family: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.download-cancel {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+}
+
+.download-confirm {
+  border: none;
+  background: var(--accent);
+  color: #fff;
+}
+
+.download-confirm:hover {
+  filter: brightness(1.08);
+}
+
+/* ---------- login ---------- */
+
+.login-page {
+  display: grid;
+  place-items: center;
+}
+
+.login-card {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  width: min(360px, 90vw);
+  padding: 32px 28px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 20px;
+  box-shadow: 0 16px 48px rgb(43 38 34 / 10%);
+  text-align: center;
+}
+
+.login-logo {
+  margin-inline: auto;
+  border-radius: 50%;
+}
+
+.login-title {
+  margin: 0 0 6px;
+  font-size: 20px;
+  font-weight: 600;
+}
+
+.login-error {
+  margin: 0;
+  padding: 8px 12px;
+  background: #fdecea;
+  border-radius: 10px;
+  color: var(--danger);
+  font-size: 14px;
+}
+
+.login-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  text-align: left;
+}
+
+.login-field > span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.login-field > input {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  color: inherit;
+  font: inherit;
+  outline: none;
+}
+
+.login-field > input:focus {
+  border-color: var(--accent);
+}
+
+.login-submit {
+  margin-top: 6px;
+  padding: 11px 16px;
+  border: none;
+  border-radius: 10px;
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+}
+
+.login-submit:hover {
+  filter: brightness(1.08);
+}
+
+/* ---------- voice ---------- */
+
+.voice-page {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.voice-stage {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 20px;
+  overflow: hidden;
+}
+
+.voice-status {
+  margin: 0;
+  text-align: center;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.voice-log {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.voice-entry {
+  padding: 10px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+/* The user's own words: quiet, and pushed to the right so the two sides read
+   apart at a glance. */
+.voice-entry-user {
+  align-self: flex-end;
+  max-width: 80%;
+  background: var(--accent-soft);
+  border-color: transparent;
+}
+
+.voice-entry-assistant {
+  max-width: 90%;
+}
+
+.voice-entry-tool,
+.voice-entry-note {
+  border-style: dashed;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.voice-entry-error {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.voice-entry .asset {
+  margin: 10px 0 0;
+}
+
+.voice-controls {
+  padding: 16px 20px 24px;
+  display: flex;
+  justify-content: center;
+}
+
+/* Held down rather than clicked, so the usual text-selection and long-press
+   behaviours of a button have to be switched off. */
+.voice-button {
+  min-width: 200px;
+  padding: 18px 32px;
+  border: none;
+  border-radius: 999px;
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  font-size: 16px;
+  font-weight: 500;
+  cursor: pointer;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+
+.voice-button:hover:not(:disabled) {
+  filter: brightness(1.08);
+}
+
+.voice-button:disabled {
+  background: var(--border);
+  color: var(--muted);
+  cursor: default;
+}
+
+.voice-button-active {
+  transform: scale(0.97);
+  filter: brightness(0.92);
+}
+
+/* ---------- admin ---------- */
+
+.admin-page {
+  display: flex;
+  flex-direction: column;
+  height: 100vh;
+}
+
+.admin-main {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  width: 100%;
+  max-width: 1080px;
+  margin-inline: auto;
+  padding: 24px 20px 48px;
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.admin-card {
+  padding: 20px 22px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.admin-card-danger {
+  border-color: var(--danger);
+}
+
+.admin-title {
+  margin: 0 0 8px;
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.admin-hint {
+  margin: 0 0 14px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.admin-notice {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  font-size: 14px;
+}
+
+.admin-notice-error {
+  background: #fdecea;
+  color: var(--danger);
+}
+
+.admin-form {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: 12px;
+}
+
+.admin-form-inline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.admin-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.admin-field > input,
+.admin-input {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--text);
+  font: inherit;
+  outline: none;
+}
+
+.admin-field > input:focus,
+.admin-input:focus {
+  border-color: var(--accent);
+}
+
+.admin-input {
+  width: 130px;
+  padding: 6px 8px;
+  font-size: 13px;
+}
+
+.admin-button {
+  display: inline-block;
+  padding: 8px 16px;
+  border: none;
+  border-radius: 10px;
+  background: var(--accent);
+  color: #fff;
+  font: inherit;
+  font-weight: 500;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.admin-button:hover {
+  filter: brightness(1.08);
+}
+
+.admin-button-quiet {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+}
+
+.admin-button-danger {
+  background: var(--danger);
+}
+
+.admin-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 14px;
+}
+
+.admin-table th,
+.admin-table td {
+  padding: 10px 8px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+  vertical-align: middle;
+}
+
+.admin-table th {
+  color: var(--muted);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+.admin-table tr:last-child td {
+  border-bottom: none;
+}
+
+.admin-account-name {
+  font-weight: 500;
+}
+
+.admin-empty {
+  padding: 16px 8px;
+  color: var(--muted);
+  font-size: 14px;
+}
+
+.admin-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin: 0 0 16px;
+  padding: 0;
+  list-style: none;
+}
+
+.admin-chip {
+  display: inline-block;
+  padding: 4px 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.admin-chip.is-active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.admin-danger-link {
+  color: var(--danger);
+}
+
+.admin-banner {
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: 10px;
+  background: var(--accent-soft);
+  color: var(--muted);
+  font-size: 13px;
+}
+
+/* The read-only replay reuses the chat page's turn markup but not its layout:
+   there is no composer here, and .admin-main already scrolls. */
+.admin-stream {
+  padding: 0;
+  overflow: visible;
+}
+
+.admin-facts {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 6px 18px;
+  margin: 0;
+  font-size: 14px;
+}
+
+.admin-facts dt {
+  color: var(--muted);
+}
+
+.admin-facts dd {
+  margin: 0;
+}
+
+/* The account name beside a password box is displayed, not edited. */
+.admin-field > input[readonly] {
+  background: var(--surface);
+  color: var(--muted);
+  cursor: default;
+}
+
+/* A history row is a link plus its delete control, so the link can no longer
+   claim the full width. */
+.conversation-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.conversation-item > .conversation-link {
+  flex: 1;
+  min-width: 0;
+}
+
+/* Always visible: an action hidden behind hover is an action nobody finds. */
+.conversation-delete {
+  flex: 0 0 auto;
+  padding: 4px 8px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.conversation-delete:hover,
+.conversation-delete:focus-visible {
+  background: #fdecea;
+  color: var(--danger);
+}
+
+/* A delete that failed says so where it was attempted; the next refresh clears it. */
+.conversation-error {
+  padding: 8px 10px;
+  color: var(--danger);
+  font-size: 13px;
+}
+
+/* Marks a conversation its owner hid: the super admin still reads it, so the
+   admin lists say which ones those are. */
+.admin-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 8px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+/* The second step of a delete: the row itself asks, so the answer lands where
+   the eye already is. */
+.conversation-confirm {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--danger);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.conversation-confirm button {
+  padding: 2px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.conversation-confirm .conversation-confirm-yes {
+  border-color: var(--danger);
+  color: var(--danger);
+}
+
+.conversation-confirm .conversation-confirm-no {
+  color: var(--muted);
+}
+
+.conversation-confirm button:hover {
+  background: var(--bg);
+}

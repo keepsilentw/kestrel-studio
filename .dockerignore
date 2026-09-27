@@ -1,0 +1,16 @@
+# node_modules, dist and public ARE deliberately shipped: the host's outbound
+# bandwidth (~65 KB/s) makes installing or building them there impractical, so
+# the build context carries the finished artifacts from the dev machine.
+#
+# Every path below is anchored with a leading slash. Unanchored patterns match
+# at ANY depth, and a bare `storage` silently deleted
+# node_modules/.pnpm/multer@2.4.0/node_modules/multer/storage, which surfaced as
+# `Cannot find module './storage/disk'` at runtime. Keep the slashes.
+/data
+/storage
+/.git
+/.gitignore
+/docs
+/.claude
+/.env
+*.log

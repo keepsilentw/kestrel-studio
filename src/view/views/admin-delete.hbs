@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>删除账号 · Kestrel Studio</title>
+  <link rel="icon" type="image/svg+xml" href="/logo.svg">
+  <link rel="stylesheet" href="/assets/main.css">
+</head>
+<body class="admin-page">
+  <header class="topbar">
+    <a class="brand" href="/">
+      <img class="brand-logo" src="/logo.svg" alt="" width="32" height="32">
+      <span class="brand-name">Kestrel Studio</span>
+    </a>
+
+    <nav class="menu">
+      <a class="menu-button" href="/">返回对话</a>
+      <a class="menu-button" href="/admin">账号管理</a>
+    </nav>
+
+    <div class="account">
+      <div class="account-menu">
+        <span class="account-name">{{user.username}}</span>
+        <form action="/logout" method="post" class="logout-form">
+          <button type="submit" class="logout-button">退出登录</button>
+        </form>
+      </div>
+    </div>
+  </header>
+
+  {{! A separate page rather than a confirm() on the row, since the admin pages
+      carry no client script. }}
+  <main class="admin-main">
+    <section class="admin-card admin-card-danger">
+      <h2 class="admin-title">删除账号 {{account.username}}</h2>
+      <p class="admin-hint">
+        将一并删除该账号名下 {{account.conversationCount}} 个会话、{{account.assetCount}} 个资产文件，
+        以及这些会话的全部消息与任务记录。此操作不可撤销。
+      </p>
+      <form class="admin-form" action="/admin/users/{{account.id}}/delete" method="post">
+        <button type="submit" class="admin-button admin-button-danger">确认删除</button>
+        <a class="admin-button admin-button-quiet" href="/admin">取消</a>
+      </form>
+    </section>
+  </main>
+</body>
+</html>

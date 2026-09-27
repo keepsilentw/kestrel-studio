@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>账号管理 · Kestrel Studio</title>
+  <link rel="icon" type="image/svg+xml" href="/logo.svg">
+  <link rel="stylesheet" href="/assets/main.css">
+</head>
+<body class="admin-page">
+  <header class="topbar">
+    <a class="brand" href="/">
+      <img class="brand-logo" src="/logo.svg" alt="" width="32" height="32">
+      <span class="brand-name">Kestrel Studio</span>
+    </a>
+
+    <nav class="menu">
+      <a class="menu-button" href="/">返回对话</a>
+      <a class="menu-button" href="/admin/conversations">全站会话</a>
+    </nav>
+
+    <div class="account">
+      <div class="account-menu">
+        <span class="account-name">{{user.username}}</span>
+        <form action="/logout" method="post" class="logout-form">
+          <button type="submit" class="logout-button">退出登录</button>
+        </form>
+      </div>
+    </div>
+  </header>
+
+  <main class="admin-main">
+    {{#if notice}}
+      <p class="admin-notice{{#if notice.isError}} admin-notice-error{{/if}}">{{notice.text}}</p>
+    {{/if}}
+
+    {{! Plain POST + redirect, like /login: no client script runs on this page. }}
+    <section class="admin-card">
+      <h2 class="admin-title">新建账号</h2>
+      <p class="admin-hint">
+        新账号一律是普通用户，只能看到自己的会话。用户名 3-32 位字母、数字、下划线或短横线，密码至少 6 位。
+      </p>
+      <form class="admin-form" action="/admin/users" method="post">
+        <label class="admin-field">
+          <span>用户名</span>
+          <input name="username" type="text" required autocomplete="username">
+        </label>
+        <label class="admin-field">
+          <span>密码</span>
+          <input name="password" type="password" required autocomplete="new-password">
+        </label>
+        <button type="submit" class="admin-button">创建</button>
+      </form>
+    </section>
+
+    <section class="admin-card">
+      <h2 class="admin-title">账号（{{accounts.length}}）</h2>
+      <table class="admin-table">
+        <thead>
+          <tr>
+            <th>账号</th>
+            <th>角色</th>
+            <th>会话</th>
+            <th>资产</th>
+            <th>创建时间</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {{#each accounts}}
+            <tr>
+              <td class="admin-account-name">{{this.username}}</td>
+              <td>{{this.roleLabel}}</td>
+              <td><a href="/admin/conversations?user={{this.id}}">{{this.conversationCount}}</a></td>
+              <td>{{this.assetCount}}</td>
+              <td>{{this.createdAtLabel}}</td>
+              <td><a href="/admin/users/{{this.id}}">管理</a></td>
+            </tr>
+          {{/each}}
+        </tbody>
+      </table>
+    </section>
+  </main>
+</body>
+</html>

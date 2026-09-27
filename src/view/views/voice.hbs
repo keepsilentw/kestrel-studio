@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>语音 · Kestrel Studio</title>
+  <link rel="icon" type="image/svg+xml" href="/logo.svg">
+  <link rel="stylesheet" href="/assets/main.css">
+</head>
+<body class="voice-page">
+  <header class="topbar">
+    <a class="brand" href="/">
+      <img class="brand-logo" src="/logo.svg" alt="" width="32" height="32">
+      <span class="brand-name">Kestrel Studio</span>
+    </a>
+
+    <nav class="menu">
+      <a class="menu-button" href="/">返回对话</a>
+      {{#if (eq user.role "super")}}
+        <a class="menu-button" href="/admin">管理</a>
+      {{/if}}
+    </nav>
+
+    <div class="account">
+      <div class="account-menu">
+        <span class="account-name">{{user.username}}</span>
+        <form action="/logout" method="post" class="logout-form">
+          <button type="submit" class="logout-button">退出登录</button>
+        </form>
+      </div>
+    </div>
+  </header>
+
+  {{! Everything below is appended by web/scripts/voice.ts: the server renders no
+      turns here, because a call has no history to replay — the upstream session
+      holds the context for the life of the call. }}
+  <main class="voice-stage">
+    <p class="voice-status" id="voice-status">按住按钮开始说话</p>
+    <ol class="voice-log" id="voice-log"></ol>
+  </main>
+
+  <div class="voice-controls">
+    <button type="button" class="voice-button" id="voice-button">按住说话</button>
+  </div>
+
+  <script type="module" src="/assets/voice.js"></script>
+</body>
+</html>

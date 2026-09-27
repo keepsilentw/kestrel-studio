@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>全站会话 · Kestrel Studio</title>
+  <link rel="icon" type="image/svg+xml" href="/logo.svg">
+  <link rel="stylesheet" href="/assets/main.css">
+</head>
+<body class="admin-page">
+  <header class="topbar">
+    <a class="brand" href="/">
+      <img class="brand-logo" src="/logo.svg" alt="" width="32" height="32">
+      <span class="brand-name">Kestrel Studio</span>
+    </a>
+
+    <nav class="menu">
+      <a class="menu-button" href="/">返回对话</a>
+      <a class="menu-button" href="/admin">账号管理</a>
+    </nav>
+
+    <div class="account">
+      <div class="account-menu">
+        <span class="account-name">{{user.username}}</span>
+        <form action="/logout" method="post" class="logout-form">
+          <button type="submit" class="logout-button">退出登录</button>
+        </form>
+      </div>
+    </div>
+  </header>
+
+  <main class="admin-main">
+    {{#if notice}}
+      <p class="admin-notice{{#if notice.isError}} admin-notice-error{{/if}}">{{notice.text}}</p>
+    {{/if}}
+
+    <section class="admin-card">
+      <h2 class="admin-title">全站会话</h2>
+      <p class="admin-hint">
+        共 {{siteTotal}} 个会话{{#if ownerName}}，当前只看 {{ownerName}} 的{{/if}}。查看他人会话是只读的。
+      </p>
+
+      <ul class="admin-chips">
+        <li><a class="admin-chip{{#unless ownerName}} is-active{{/unless}}" href="/admin/conversations">全部</a></li>
+        {{#each chips}}
+          <li>
+            <a class="admin-chip{{#if this.isActive}} is-active{{/if}}" href="/admin/conversations?user={{this.id}}">{{this.username}}</a>
+          </li>
+        {{/each}}
+      </ul>
+
+      <table class="admin-table">
+        <thead>
+          <tr>
+            <th>会话</th>
+            <th>归属</th>
+            <th>更新时间</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {{#each conversations}}
+            <tr>
+              <td>
+                {{this.title}}
+                {{#if this.deletedAtLabel}}
+                  <span class="admin-tag">已删除 · {{this.deletedAtLabel}}</span>
+                {{/if}}
+              </td>
+              <td>{{this.ownerName}}</td>
+              <td>{{this.updatedAtLabel}}</td>
+              <td><a href="/admin/conversations/{{this.id}}">查看</a></td>
+            </tr>
+          {{else}}
+            <tr><td colspan="4" class="admin-empty">没有会话</td></tr>
+          {{/each}}
+        </tbody>
+      </table>
+    </section>
+  </main>
+</body>
+</html>

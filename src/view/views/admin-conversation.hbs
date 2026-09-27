@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{{conversation.title}} · Kestrel Studio</title>
+  <link rel="icon" type="image/svg+xml" href="/logo.svg">
+  <link rel="stylesheet" href="/assets/main.css">
+</head>
+<body class="admin-page">
+  <header class="topbar">
+    <a class="brand" href="/">
+      <img class="brand-logo" src="/logo.svg" alt="" width="32" height="32">
+      <span class="brand-name">Kestrel Studio</span>
+    </a>
+
+    <nav class="menu">
+      <a class="menu-button" href="/">返回对话</a>
+      <a class="menu-button" href="/admin">账号管理</a>
+      <a class="menu-button" href="/admin/conversations">全站会话</a>
+    </nav>
+
+    <div class="account">
+      <div class="account-menu">
+        <span class="account-name">{{user.username}}</span>
+        <form action="/logout" method="post" class="logout-form">
+          <button type="submit" class="logout-button">退出登录</button>
+        </form>
+      </div>
+    </div>
+  </header>
+
+  {{! Read-only: the turns are rendered by the server and nothing here talks to
+      /api, so the composer and the client script are absent on purpose. }}
+  <main class="admin-main">
+    <p class="admin-banner">
+      {{conversation.ownerName}} 的会话 · 更新于 {{conversation.updatedAtLabel}}
+      {{#if conversation.deletedAtLabel}}
+        · <span class="admin-tag">已于 {{conversation.deletedAtLabel}} 被用户删除</span>
+      {{/if}}
+      {{#if isOwn}}· 这是你自己的会话{{else}}· 只读视图，不能在此发送消息{{/if}}
+    </p>
+    <h2 class="admin-title">{{conversation.title}}</h2>
+
+    <div class="stream admin-stream">
+      {{#each messages}}
+        {{> turn}}
+      {{else}}
+        <p class="admin-empty">这个会话还没有消息</p>
+      {{/each}}
+    </div>
+  </main>
+</body>
+</html>

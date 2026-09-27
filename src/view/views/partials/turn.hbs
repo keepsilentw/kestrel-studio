@@ -1,0 +1,39 @@
+<article class="turn turn-{{this.role}}" data-message-id="{{this.id}}">
+  {{#if this.modeLabel}}
+    <span class="turn-mode">{{this.modeLabel}}</span>
+  {{/if}}
+
+  {{#if this.reasoning}}
+    <details class="reasoning">
+      <summary>思考过程</summary>
+      <pre class="reasoning-body">{{this.reasoning}}</pre>
+    </details>
+  {{/if}}
+
+  {{! Tool calls are persisted on the message; replay them here so a reloaded
+      page shows the same "called X → got Y" trail the live stream built. }}
+  {{#if this.toolCalls}}
+    <ul class="tool-calls">
+      {{#each this.toolCalls}}
+        <li class="tool-call">{{this.name}} — {{this.summary}}</li>
+      {{/each}}
+    </ul>
+  {{/if}}
+
+  {{#if this.contentHtml}}
+    <div class="content">{{{this.contentHtml}}}</div>
+  {{/if}}
+
+  {{#each this.assets}}
+    <figure class="asset">
+      {{#if (eq this.kind "video")}}
+        <video src="{{this.url}}" controls preload="metadata" class="asset-video"></video>
+      {{else}}
+        <img src="{{this.url}}" alt="生成的图片" loading="lazy" class="asset-image">
+      {{/if}}
+      <figcaption class="asset-actions">
+        <a href="{{this.url}}" download class="asset-download">下载</a>
+      </figcaption>
+    </figure>
+  {{/each}}
+</article>
