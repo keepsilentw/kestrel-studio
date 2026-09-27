@@ -183,6 +183,14 @@ Vite 只做打包，产物固定为 `public/assets/main.js` / `main.css`（由 `
 
 `src/config/configuration.ts` 是唯一的读取点，`loadConfig()` 到处被直接调用（不是 Nest 的 ConfigService 注入）。
 
+入口 `src/main.ts` 在**第一次读环境之前**调 `loadEnvFile()`（`src/config/env-file.ts`），把项目根的
+`./.env` 叠进 `process.env`。三条规则要记住：**已存在的变量一律不覆盖**（容器里由 docker `env_file`
+注入，镜像内也没有 `.env`，所以真实环境永远赢；`PORT=3000 make dev` 也不会被本地文件顶掉）；
+文件不存在不是错误；值按字面取（第一个 `=` 之后全部保留，含 `#`，只剥掉成对包裹的引号）。
+没用 `@nestjs/config` 的 `ConfigModule`，因为它在模块初始化期才写环境，而 `main.ts` 与各
+provider 工厂在此之前就已经直接调 `loadConfig()` 了。`drizzle.config.ts` 不走这条路，
+它直接读 `process.env.DATABASE_FILE`。
+
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `PORT` | 8848 | |

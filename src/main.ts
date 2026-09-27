@@ -9,9 +9,14 @@ import { join } from 'node:path';
 import passport from 'passport';
 import { AppModule } from '@/app.module';
 import { loadConfig } from '@/config/configuration';
+import { loadEnvFile } from '@/config/env-file';
 import { SQLITE_CONNECTION } from '@/database/database.module';
 
 async function bootstrap(): Promise<void> {
+  // Before any read of the environment: the container gets its values from
+  // docker's env_file and has no .env of its own, so this only ever overlays a
+  // local developer file, and never over something already exported.
+  loadEnvFile();
   const config = loadConfig();
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   app.disable('x-powered-by');

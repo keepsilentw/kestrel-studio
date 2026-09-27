@@ -277,6 +277,11 @@ kestrel-studio/
 沿用 `bailian-media-mcp` 的策略：`BAILIAN_API_KEY` 环境变量优先，回退读 cc-switch 库中的
 `bailian-token-plan` provider。这样切换 provider 不需要改配置，key 也不会落到仓库文件里。
 
+配置来源有两层，顺序不能反：入口先由 `src/config/env-file.ts` 把项目根的 `./.env`（git 忽略，
+镜像内不存在）**叠加**进 `process.env`——只填没有的键，绝不覆盖真实环境；之后
+`configuration.ts` 才是唯一的读取点。所以线上容器（docker `env_file` 注入、镜像里没有 `.env`）
+与本地（可选的 `.env`）走的是同一套语义，差别只在叠加层有没有文件。
+
 | 变量 | 说明 |
 |---|---|
 | `BAILIAN_API_KEY` | 可选，未设时回退读 cc-switch 库 |

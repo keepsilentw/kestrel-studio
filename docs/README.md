@@ -41,6 +41,10 @@ make stop         # 停止
 
 权限模型见 [architecture.md](./architecture.md) §12。部署侧的密钥约定见 [deployment.md](./deployment.md) §5。
 
+本地凭据可选：在项目根放一个 `.env`（已被 git 与 `.dockerignore` 排除），启动时会被
+**叠加**进环境——只填没设过的变量，shell 里已导出的值优先。要让本地也建出超管，写
+`SUPER_ADMIN_USERNAME` / `SUPER_ADMIN_PASSWORD` 两行即可；不给就是普通用户单机。
+
 改代码时用 watch 模式，两个终端（pm2 占用同一端口，先 `make stop`）：
 
 ```bash
