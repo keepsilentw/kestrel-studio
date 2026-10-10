@@ -428,6 +428,8 @@ describe('模板与客户端脚本的契约', () => {
       'download-estimate',
       'download-confirm',
       'download-cancel',
+      'conversation-delete-dialog',
+      'conversation-delete-target',
     ];
 
     const missing = requiredIds.filter((id) => !html.includes(`id="${id}"`));

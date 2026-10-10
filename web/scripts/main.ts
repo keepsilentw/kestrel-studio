@@ -38,6 +38,9 @@ const downloadEstimate = requireElement<HTMLElement>('#download-estimate');
 const downloadConfirm = requireElement<HTMLButtonElement>('#download-confirm');
 const downloadCancel = requireElement<HTMLButtonElement>('#download-cancel');
 
+const deleteDialog = requireElement<HTMLDialogElement>('#conversation-delete-dialog');
+const deleteDialogTarget = requireElement<HTMLElement>('#conversation-delete-target');
+
 /* ---------- modes ---------- */
 
 type Mode = 'auto' | 'chat' | 'image' | 'video';
@@ -585,8 +588,9 @@ function appendToolCall(list: HTMLElement, name: string): HTMLLIElement {
  *
  * Mirrors what chat.hbs paints on the initial render — the two must stay in step,
  * or a row changes shape the first time the list refreshes. The delete control is
- * addressed by `data-delete-conversation`, which the delegated listener below
- * picks up.
+ * addressed by `data-delete-conversation`, which the delegated listener picks up;
+ * the row also has to keep the `.conversation-link` sibling, because that is where
+ * the confirmation dialog reads the title it shows.
  */
 function buildConversationItem(id: number, title: string, isActive: boolean): HTMLLIElement {
   const item = document.createElement('li');
@@ -652,62 +656,34 @@ function showConversationError(message: string): void {
   list.prepend(item);
 }
 
+/** Which conversation the open dialog is about; null once it has been answered. */
+let pendingDeleteId: number | null = null;
+
 /**
- * The second step: a row that has been asked about swaps its delete control for
- * 确认 / 取消. In the row rather than in a browser dialog, so the answer lands
- * next to the thing it is about and the click that follows is deliberate.
+ * The second step: a modal that names the conversation about to be hidden, so
+ * the answer cannot land on the wrong row, and Esc cancels for free. The row is
+ * left untouched — there is no state in it to unwind when the question is never
+ * answered.
  */
 function askToDelete(button: HTMLButtonElement): void {
+  const id = Number(button.dataset.deleteConversation ?? '');
   const item = button.closest('li');
-  const id = button.dataset.deleteConversation ?? '';
-  if (item === null || id.length === 0) {
+  const link = item === null ? null : item.querySelector<HTMLElement>('.conversation-link');
+  const title = link?.textContent?.trim() ?? '';
+  if (!Number.isInteger(id) || id <= 0 || item === null || title.length === 0) {
     return;
   }
 
-  const strip = document.createElement('span');
-  strip.className = 'conversation-confirm';
-
-  const question = document.createElement('span');
-  question.textContent = '删除？';
-
-  const confirm = document.createElement('button');
-  confirm.type = 'button';
-  confirm.className = 'conversation-confirm-yes';
-  confirm.dataset.confirmDelete = id;
-  confirm.textContent = '确认';
-
-  const cancel = document.createElement('button');
-  cancel.type = 'button';
-  cancel.className = 'conversation-confirm-no';
-  cancel.dataset.cancelDelete = 'true';
-  cancel.textContent = '取消';
-
-  strip.append(question, confirm, cancel);
-  button.hidden = true;
-  item.append(strip);
-}
-
-/** Puts the row back. A list refresh clears it too. */
-function cancelDelete(button: HTMLButtonElement): void {
-  const item = button.closest('li');
-  button.closest('.conversation-confirm')?.remove();
-  const remove =
-    item === null ? null : item.querySelector<HTMLButtonElement>('button[data-delete-conversation]');
-  if (remove !== null) {
-    remove.hidden = false;
-  }
+  pendingDeleteId = id;
+  deleteDialogTarget.textContent = `「${title}」`;
+  deleteDialog.showModal();
 }
 
 /**
- * Hides a conversation from the history. Reached only from the confirm strip, so
- * the deletion is always two clicks.
+ * Hides a conversation from the history. Reached only from the confirm dialog,
+ * so the deletion is always two clicks.
  */
-async function deleteConversation(button: HTMLButtonElement): Promise<void> {
-  const id = Number(button.dataset.confirmDelete ?? '');
-  if (!Number.isInteger(id) || id <= 0) {
-    return;
-  }
-
+async function deleteConversation(id: number): Promise<void> {
   const response = await fetch(`/api/conversations/${id}/delete`, { method: 'POST' });
   if (!response.ok) {
     showConversationError(`删除失败（HTTP ${response.status}）`);
@@ -901,22 +877,41 @@ historyDropdown?.addEventListener('click', (event) => {
     return;
   }
 
-  const confirmed = target.closest('button[data-confirm-delete]');
-  if (confirmed instanceof HTMLButtonElement) {
-    void deleteConversation(confirmed);
-    return;
-  }
-
-  const cancelled = target.closest('button[data-cancel-delete]');
-  if (cancelled instanceof HTMLButtonElement) {
-    cancelDelete(cancelled);
-    return;
-  }
-
   const asked = target.closest('button[data-delete-conversation]');
   if (asked instanceof HTMLButtonElement) {
     askToDelete(asked);
   }
+});
+
+/**
+ * The dialog's two answers. Read off the click rather than through a form with
+ * `method="dialog"`, because Esc fires `cancel`/`close` without a click at all
+ * and must never be mistaken for 确认.
+ */
+deleteDialog.addEventListener('click', (event) => {
+  const target = event.target;
+  if (!(target instanceof Element)) {
+    return;
+  }
+
+  const choice = target.closest<HTMLButtonElement>('button[data-delete-choice]');
+  if (choice === null) {
+    return;
+  }
+
+  const conversationId = pendingDeleteId;
+  // Cleared here rather than left to the `close` event, which the spec queues:
+  // one answer must not be able to fire the same request twice.
+  pendingDeleteId = null;
+  deleteDialog.close();
+  if (choice.dataset.deleteChoice === 'confirm' && conversationId !== null) {
+    void deleteConversation(conversationId);
+  }
+});
+
+/** Esc, or any other dismissal, is a cancel: the pending question is dropped. */
+deleteDialog.addEventListener('close', () => {
+  pendingDeleteId = null;
 });
 
 /** Back to the "no conversation yet" state, for 新会话 and for a deleted one. */

@@ -55,6 +55,12 @@ const FIXTURE = `
     <button type="button" id="download-confirm">下载</button>
     <button type="button" id="download-cancel">取消</button>
   </dialog>
+  <dialog id="conversation-delete-dialog" aria-labelledby="conversation-delete-title">
+    <h2 id="conversation-delete-title">从历史里删除这条会话？</h2>
+    <p id="conversation-delete-target"></p>
+    <button type="button" data-delete-choice="cancel">取消</button>
+    <button type="button" data-delete-choice="confirm">删除</button>
+  </dialog>
 `;
 
 const MODE_STORAGE_KEY = 'kestrel-studio:mode';
@@ -165,13 +171,15 @@ function deleteButton(conversationId: number): HTMLButtonElement {
   return element<HTMLButtonElement>(`button[data-delete-conversation="${conversationId}"]`);
 }
 
-/** The second step of a delete, which only exists once a row has been asked. */
-function confirmButton(): HTMLButtonElement {
-  return element<HTMLButtonElement>('button[data-confirm-delete]');
+/** The modal that asks before a conversation is hidden from the history. */
+function deleteDialog(): HTMLDialogElement {
+  return element<HTMLDialogElement>('#conversation-delete-dialog');
 }
 
-function cancelButton(): HTMLButtonElement {
-  return element<HTMLButtonElement>('button[data-cancel-delete]');
+/** One of its two answers, addressed by the choice it stands for. */
+function deleteChoice(choice: 'confirm' | 'cancel'): HTMLButtonElement {
+  const selector = `#conversation-delete-dialog button[data-delete-choice="${choice}"]`;
+  return element<HTMLButtonElement>(selector);
 }
 
 beforeEach(() => {
@@ -465,23 +473,22 @@ describe('历史会话删除', () => {
     await Promise.resolve();
 
     expect(vi.mocked(fetch)).not.toHaveBeenCalled();
-    expect(element('.conversation-confirm').textContent).toContain('删除？');
-    expect(confirmButton().dataset.confirmDelete).toBe('6');
-    // 原来那个「删除」被收起，同一行不会有两个入口
-    expect(deleteButton(6).hidden).toBe(true);
+    expect(deleteDialog().open).toBe(true);
+    // 确认框里写着问的是哪一条，答案不会落错行
+    expect(element('#conversation-delete-target').textContent).toContain('另一个会话');
   });
 
-  it('点取消回到原样，也不发请求', async () => {
+  it('点取消关掉确认框，也不发请求', async () => {
     await boot();
     stubDeleteFetch();
 
     deleteButton(6).click();
-    cancelButton().click();
+    deleteChoice('cancel').click();
     await Promise.resolve();
 
     expect(vi.mocked(fetch)).not.toHaveBeenCalled();
-    expect(document.querySelector('.conversation-confirm')).toBeNull();
-    expect(deleteButton(6).hidden).toBe(false);
+    expect(deleteDialog().open).toBe(false);
+    expect(deleteButton(6)).not.toBeNull();
   });
 
   it('点确认才发请求，随后刷新列表', async () => {
@@ -489,7 +496,7 @@ describe('历史会话删除', () => {
     stubDeleteFetch();
 
     deleteButton(6).click();
-    confirmButton().click();
+    deleteChoice('confirm').click();
     await vi.waitFor(() => {
       expect(document.querySelector('button[data-delete-conversation="6"]')).toBeNull();
     });
@@ -507,7 +514,7 @@ describe('历史会话删除', () => {
     const stream = openedStreams[0];
 
     deleteButton(5).click();
-    confirmButton().click();
+    deleteChoice('confirm').click();
     await vi.waitFor(() => {
       expect(stream.closed).toBe(true);
     });
@@ -523,7 +530,7 @@ describe('历史会话删除', () => {
     stubDeleteFetch({ ok: false });
 
     deleteButton(6).click();
-    confirmButton().click();
+    deleteChoice('confirm').click();
     await vi.waitFor(() => {
       expect(document.querySelector('.conversation-error')).not.toBeNull();
     });
@@ -532,7 +539,7 @@ describe('历史会话删除', () => {
     expect(document.querySelector('button[data-delete-conversation="6"]')).not.toBeNull();
   });
 
-  it('id 解析不出来的按钮确认后也不触发请求', async () => {
+  it('id 解析不出来的按钮不会打开确认框', async () => {
     await boot();
     stubDeleteFetch();
     const item = document.createElement('li');
@@ -545,15 +552,15 @@ describe('历史会话删除', () => {
     element('.conversation-list').append(item);
 
     stray.click();
-    confirmButton().click();
     await Promise.resolve();
 
+    expect(deleteDialog().open).toBe(false);
     expect(vi.mocked(fetch)).not.toHaveBeenCalled();
   });
 
   it('不在列表项里的按钮什么都不做', async () => {
-    // The row is what holds the state the second step needs, so a button without
-    // one is inert rather than half-working.
+    // The row is where the question gets the title it names, so a button without
+    // one cannot ask a sensible question — inert rather than half-working.
     await boot();
     stubDeleteFetch();
     const stray = document.createElement('button');
@@ -563,8 +570,28 @@ describe('历史会话删除', () => {
     stray.click();
     await Promise.resolve();
 
-    expect(document.querySelector('.conversation-confirm')).toBeNull();
+    expect(deleteDialog().open).toBe(false);
     expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  });
+
+  it('一次确认只发一次请求', async () => {
+    // The dialog is closed by its answer, so 删除 cannot be reached again by a
+    // pointer. A test can still dispatch a click on the hidden button, which is
+    // why the pending conversation is cleared on the click itself.
+    await boot();
+    stubDeleteFetch();
+
+    deleteButton(6).click();
+    deleteChoice('confirm').click();
+    await vi.waitFor(() => {
+      expect(deleteDialog().open).toBe(false);
+    });
+
+    deleteChoice('confirm').click();
+    await Promise.resolve();
+
+    const requested = vi.mocked(fetch).mock.calls.map((call) => String(call[0]));
+    expect(requested.filter((url) => url === '/api/conversations/6/delete')).toHaveLength(1);
   });
 
   it('超管那一侧重建列表时不带删除控件', async () => {

@@ -10,3 +10,30 @@ if (typeof Element.prototype.scrollIntoView !== 'function') {
     // No layout in jsdom, so there is nothing to scroll.
   };
 }
+
+/**
+ * jsdom ships <dialog> without the top layer: showModal() and close() are
+ * missing, and the delete confirmation cannot be driven without them. Mirrored
+ * here are only the two things the script observes — the open attribute and the
+ * close event — so a test still sees whether the dialog was dismissed.
+ * showModal returns a promise because Chrome's does; nothing awaits it.
+ */
+if (typeof HTMLDialogElement.prototype.showModal !== 'function') {
+  HTMLDialogElement.prototype.showModal = function showModal(this: HTMLDialogElement): Promise<void> {
+    this.setAttribute('open', '');
+    return Promise.resolve();
+  };
+}
+
+if (typeof HTMLDialogElement.prototype.close !== 'function') {
+  HTMLDialogElement.prototype.close = function close(
+    this: HTMLDialogElement,
+    returnValue?: string,
+  ): void {
+    if (returnValue !== undefined) {
+      this.returnValue = returnValue;
+    }
+    this.removeAttribute('open');
+    this.dispatchEvent(new Event('close'));
+  };
+}

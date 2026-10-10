@@ -126,3 +126,29 @@ Nest CLI 12 需要 TypeScript 的 programmatic compiler API，而 TS 7.0 只提�
 处理：单段按住截在 25 秒自动提交（`MAX_HOLD_MS`）、收到 error 后本次按住停止送音频、中继在拒绝后
 不再往缓冲区灌、一次失败只往页面发一行。教训与 §8 开头同一条：**上游的报错必须落日志**——
 它的原话就是根因本身。
+
+## 9. jsdom 没有 <dialog> 的 showModal/close
+
+**症状**：给历史会话的二次确认换成 `<dialog>` 后，`web/scripts/main.test.ts` 里凡是走到
+`showModal()` / `close()` 的用例全部抛 `TypeError: deleteDialog.close is not a function`，
+而且是**未捕获异常**——它逃出用例，直接把整个文件的其他测试一起拖挂。
+
+**根因**：jsdom 有 `HTMLDialogElement` 这个类，也反射 `open` 属性，但**没有实现 top layer**，
+所以 `showModal` / `close` 两个方法压根不存在。实测：
+
+```bash
+node -e "const {JSDOM}=require('jsdom'); const d=new JSDOM('<dialog></dialog>');
+const el=d.window.document.querySelector('dialog');
+console.log(el.constructor.name, typeof el.showModal, typeof el.close, 'open' in el);"
+# HTMLDialogElement undefined undefined true
+```
+
+**为什么以前没撞上**：页面上原有的两个 `<dialog>`（图片预览、下载弹窗）在这套测试里从没被打开过，
+缺的是这两条路径的覆盖，不是 jsdom 突然变了。
+
+**处理**：`web/scripts/test-setup.ts` 里补最小实现，与既有的 `scrollIntoView` 同一位置、同一理由
+——**脚本本身不留测试专用的分支**。只镜像脚本真正观察的两件事：`open` 属性与 `close` 事件，
+于是「对话框是否被关掉」在用例里依然可断言。`showModal` 返回 Promise（Chrome 的就是），只是没人 await。
+
+**教训**：测试环境缺的是**能力**不是**版本**。用到一个新 DOM 接口前，先确认 jsdom 有没有它，
+比等一个未捕获异常把整个文件带走便宜得多。

@@ -1208,38 +1208,75 @@ body {
   white-space: nowrap;
 }
 
-/* The second step of a delete: the row itself asks, so the answer lands where
-   the eye already is. */
-.conversation-confirm {
-  flex: 0 0 auto;
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  color: var(--danger);
-  font-size: 13px;
-  white-space: nowrap;
+/*
+ * ---------- delete-confirmation dialog ----------
+ *
+ * The second step of hiding a conversation. The title it is about is quoted
+ * inside the question, so the answer cannot land on the wrong row — and Esc is a
+ * cancel for free, which the inline strip could not offer.
+ */
+.conversation-delete-dialog {
+  width: min(380px, 92vw);
+  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--surface);
+  color: var(--text);
 }
 
-.conversation-confirm button {
-  padding: 2px 8px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--surface);
-  color: inherit;
-  font: inherit;
-  font-size: 12px;
+.conversation-delete-dialog::backdrop {
+  background: rgb(20 16 14 / 72%);
+}
+
+.conversation-delete-title {
+  margin: 0 0 14px;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+/* Which one is being asked about. A long title wraps instead of overflowing. */
+.conversation-delete-target {
+  margin: 0 0 10px;
+  padding: 8px 12px;
+  background: var(--bg);
+  border-radius: 10px;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.conversation-delete-hint {
+  margin: 0 0 18px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.conversation-delete-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.conversation-delete-actions > button {
+  padding: 9px 18px;
+  border-radius: 10px;
+  font-family: inherit;
+  font-size: 14px;
   cursor: pointer;
 }
 
-.conversation-confirm .conversation-confirm-yes {
-  border-color: var(--danger);
-  color: var(--danger);
+.conversation-delete-no {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
 }
 
-.conversation-confirm .conversation-confirm-no {
-  color: var(--muted);
+/* The destructive answer, in the colour the page already reserves for it. */
+.conversation-delete-yes {
+  border: none;
+  background: var(--danger);
+  color: #fff;
 }
 
-.conversation-confirm button:hover {
-  background: var(--bg);
+.conversation-delete-yes:hover {
+  filter: brightness(1.08);
 }

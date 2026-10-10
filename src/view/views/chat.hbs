@@ -150,6 +150,27 @@
     </div>
   </dialog>
 
+  {{!
+    The second step of hiding a conversation from the history. Painted for every
+    role because main.ts looks it up unconditionally; only a normal account is
+    offered the row control that opens it, and the endpoint enforces the same
+    rule, so on a super admin's page this stays closed forever.
+    The two buttons are addressed by data-delete-choice, not by id.
+  }}
+  <dialog
+    class="conversation-delete-dialog"
+    id="conversation-delete-dialog"
+    aria-labelledby="conversation-delete-title"
+  >
+    <h2 class="conversation-delete-title" id="conversation-delete-title">删除这条会话？</h2>
+    <p class="conversation-delete-target" id="conversation-delete-target"></p>
+    <p class="conversation-delete-hint">删除后它不再出现在你的历史会话里，也无法恢复。如需保留已生成的图片或视频，请先下载。</p>
+    <div class="conversation-delete-actions">
+      <button type="button" class="conversation-delete-no" data-delete-choice="cancel">取消</button>
+      <button type="button" class="conversation-delete-yes" data-delete-choice="confirm">删除</button>
+    </div>
+  </dialog>
+
   <script type="module" src="/assets/main.js"></script>
 </body>
 </html>
