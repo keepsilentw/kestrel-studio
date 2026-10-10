@@ -234,6 +234,24 @@ describe('GET / — 历史回放', () => {
     expect(html).not.toContain('**加粗**');
   });
 
+  it('用户消息按纯文本回放，不走 markdown', async () => {
+    // The live path prints the prompt with textContent (buildUserTurn), so the
+    // replay must not differ from it. Parsing the user's words here too wrapped
+    // them in a <p>, and inside an inline-block with pre-wrap the paragraph's own
+    // margins plus the parser's trailing newline made a one-line bubble three
+    // lines tall.
+    const conversationId = conversations.create(ALICE, 'q');
+    conversations.appendUserMessage(conversationId, '**加粗** 与 <b>标签</b>', 'chat');
+
+    const html = await (await get('/?c=' + conversationId)).text();
+
+    // Literal source, and escaped markup instead of injected DOM.
+    expect(html).toContain('**加粗** 与 &lt;b&gt;标签&lt;/b&gt;');
+    expect(html).not.toContain('<b>标签</b>');
+    // The bubble holds text only, which is what lets its height hug that text.
+    expect(html).not.toContain('<div class="content"><p>');
+  });
+
   it('思考过程与工具调用一并回放', async () => {
     const conversationId = conversations.create(ALICE, 'q');
     const assistant = conversations.createAssistantPlaceholder(conversationId, 'image');

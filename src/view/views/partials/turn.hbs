@@ -22,6 +22,13 @@
 
   {{#if this.contentHtml}}
     <div class="content">{{{this.contentHtml}}}</div>
+  {{else}}
+    {{! The user's words are plain text, printed escaped — the same thing
+        textContent does on the live path in web/scripts/main.ts. Keeping the
+        bubble free of block children is also what makes its height hug the text. }}
+    {{#if this.content}}
+      <div class="content">{{this.content}}</div>
+    {{/if}}
   {{/if}}
 
   {{#each this.assets}}

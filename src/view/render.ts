@@ -21,11 +21,24 @@ export interface TurnAnchor {
   label: string;
 }
 
-/** Assistant text is markdown; templates inject the result with a triple-stash. */
+/**
+ * Assistant text is markdown; templates inject the result with a triple-stash.
+ *
+ * The user's own words are NOT markdown, and must not be parsed here either:
+ * the client prints them with `textContent` (`buildUserTurn`), so parsing on the
+ * server made a reloaded turn differ from the live one. `marked` wraps a
+ * paragraph in `<p>`, and inside an inline-block with `white-space: pre-wrap`
+ * the paragraph's own margins plus the newline the parser leaves after `</p>`
+ * stacked two blank lines of height onto a one-line prompt. An empty
+ * `contentHtml` tells the template to print the text escaped instead.
+ */
 export function renderMessages(views: MessageView[]): RenderedMessage[] {
   return views.map((view) => ({
     ...view,
-    contentHtml: view.content.length > 0 ? marked.parse(view.content, { async: false }) : '',
+    contentHtml:
+      view.role === 'assistant' && view.content.length > 0
+        ? marked.parse(view.content, { async: false })
+        : '',
     modeLabel: view.mode === null ? null : (MODE_LABEL[view.mode] ?? null),
   }));
 }
