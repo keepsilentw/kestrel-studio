@@ -68,6 +68,36 @@ export const assets = sqliteTable('assets', {
 });
 
 /**
+ * Durable log of everything the conversation stream has carried (docs/roadmap.md
+ * §2.4.1). `seq` counts per conversation and is the stream cursor: a client
+ * reconnects with Last-Event-ID, the stream replays rows past it, and a
+ * requested seq below the retained window becomes a `resync` instead of a
+ * partial lie. Retention is bounded per conversation; finalized turns live on
+ * in `messages` anyway, so the journal only has to cover what is not yet
+ * durable elsewhere.
+ */
+export const conversationEvents = sqliteTable('conversation_events', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  conversationId: integer('conversation_id')
+    .notNull()
+    .references(() => conversations.id),
+  /**
+   * Conversation-scoped sequence, starting at 1: the SSE `id:` and the
+   * Last-Event-ID cursor. Global ids would make "the conversation's first
+   * event" indistinguishable from "events pruned before it", so gap detection
+   * has to count per conversation — and per conversation is what a per-URL
+   * cursor means anyway.
+   */
+  seq: integer('seq').notNull(),
+  /** Present when the event belongs to one message; task events have none. */
+  messageId: integer('message_id'),
+  type: text('type').notNull(),
+  /** The full event JSON as it was sent on the stream, replayed verbatim. */
+  payload: text('payload').notNull(),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+});
+
+/**
  * Async provider jobs (video today). A video render takes minutes, which does not
  * fit inside an SSE turn: the tool submits, returns immediately, and a background
  * worker polls the provider, mirrors the bytes at the moment of success (provider

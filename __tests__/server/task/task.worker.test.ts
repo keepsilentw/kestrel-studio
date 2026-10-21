@@ -7,7 +7,7 @@ import { applySchema, DRIZZLE_INSTANCE } from '@/database/database.module';
 import * as schema from '@/database/schema';
 import type { GenerationTask } from '@/database/schema';
 import { MediaService, type AssetKind, type StoredAsset, type VideoTaskSnapshot } from '@/media/media.service';
-import { TaskEventsService, type ConversationEvent } from '@/task/task-events.service';
+import { ConversationEventsService, type ConversationEvent } from '@/conversation/conversation-events.service';
 import { TaskService } from '@/task/task.service';
 import { TaskWorker } from '@/task/task.worker';
 
@@ -67,7 +67,7 @@ async function buildHarness(): Promise<Harness> {
     providers: [
       TaskWorker,
       TaskService,
-      TaskEventsService,
+      ConversationEventsService,
       ConversationService,
       { provide: DRIZZLE_INSTANCE, useValue: db },
       { provide: MediaService, useValue: { queryVideoTask, store } },
@@ -76,7 +76,7 @@ async function buildHarness(): Promise<Harness> {
 
   const tasks = moduleRef.get(TaskService);
   const conversations = moduleRef.get(ConversationService);
-  const events = moduleRef.get(TaskEventsService);
+  const events = moduleRef.get(ConversationEventsService);
   let seeded = 0;
 
   return {
@@ -118,7 +118,7 @@ async function buildHarness(): Promise<Harness> {
     },
     eventsFor(conversationId: number): ConversationEvent[] {
       const collected: ConversationEvent[] = [];
-      events.subscribe(conversationId).subscribe((event) => collected.push(event));
+      events.subscribe(conversationId).subscribe((published) => collected.push(published.event));
       return collected;
     },
   };

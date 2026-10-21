@@ -6,10 +6,12 @@ import hbs from 'hbs';
 import { join } from 'node:path';
 import type { NextFunction, Request, Response } from 'express';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { AgentService } from '@/agent/agent.service';
+import { TurnRunner } from '@/agent/turn-runner.service';
+import { ConversationEventsService } from '@/conversation/conversation-events.service';
 import { ConversationService } from '@/conversation/conversation.service';
 import { applySchema, DRIZZLE_INSTANCE } from '@/database/database.module';
 import * as schema from '@/database/schema';
-import { TaskEventsService } from '@/task/task-events.service';
 import { TaskService } from '@/task/task.service';
 import { ViewController } from '@/view/view.controller';
 import type { Role } from '@/auth/roles';
@@ -58,9 +60,14 @@ async function bootstrap(): Promise<void> {
     controllers: [ViewController],
     providers: [
       ConversationService,
+      ConversationEventsService,
       TaskService,
-      TaskEventsService,
+      TurnRunner,
       { provide: DRIZZLE_INSTANCE, useValue: db },
+      // The view never runs a turn; it only asks the runner where the stream
+      // should start. TurnRunner's boot recovery is a no-op against an empty DB
+      // here, because bootstrap() seeds users before app creation only.
+      { provide: AgentService, useValue: { run: async (): Promise<void> => undefined } },
     ],
   }).compile();
 
@@ -102,7 +109,7 @@ afterAll(async () => {
 
 beforeEach(() => {
   connection.exec(
-    'DELETE FROM generation_tasks; DELETE FROM assets; DELETE FROM messages; DELETE FROM conversations;',
+    'DELETE FROM conversation_events; DELETE FROM generation_tasks; DELETE FROM assets; DELETE FROM messages; DELETE FROM conversations;',
   );
 });
 
@@ -284,13 +291,31 @@ describe('GET / — 历史回放', () => {
       mime: 'video/mp4',
       bytes: 2,
     });
+    conversations.finalizeAssistant(assistant, {
+      content: '都做好了',
+      reasoning: null,
+      toolCalls: null,
+    });
 
     const html = await (await get(`/?c=${conversationId}`)).text();
     expect(html).toContain('<img');
     expect(html).toContain('<video');
     // Renders the download endpoint, never the expiring provider URL.
-    expect(html).toContain(`/api/assets/${videoAsset}/download`);
+    expect(html).toContain(`/api/v1/assets/${videoAsset}/download`);
     expect(html).not.toContain('provider.example');
+  });
+
+  it('跑着的轮次不画占位行：它由事件流从第一条事件起重建', async () => {
+    // An unfinished assistant placeholder has empty content. Painting it would
+    // double the turn the stream is about to replay, so SSR leaves it to the
+    // stream — the user echo above it is a durable row and does get painted.
+    const conversationId = conversations.create(ALICE, 'q');
+    conversations.appendUserMessage(conversationId, '正在画的红隼', 'image');
+    conversations.createAssistantPlaceholder(conversationId, 'image');
+
+    const html = await (await get(`/?c=${conversationId}`)).text();
+    expect(html).toContain('正在画的红隼');
+    expect(html).not.toContain('turn-assistant');
   });
 
   it('轮次索引由用户消息推出，空消息不参与', async () => {
@@ -449,6 +474,15 @@ describe('模板与客户端脚本的契约', () => {
     // The client reads document.body.dataset.conversationId, so it has to be on
     // <body>, not on some inner container.
     expect(/<body[^>]*data-conversation-id=/.test(html)).toBe(true);
+  });
+
+  it('data-start-seq 挂在 body 上：首屏画到哪，事件流就从哪接', async () => {
+    // The client passes it as ?from= on its first stream connection; without
+    // it, events published between the SSR render and the stream connecting
+    // would fall in the gap between "already painted" and "starting live".
+    const conversationId = conversations.create(ALICE, 'q');
+    const html = await (await get(`/?c=${conversationId}`)).text();
+    expect(/<body[^>]*data-start-seq=/.test(html)).toBe(true);
   });
 
   it('脚本入口与样式表路径固定，模板只能按这两个名字引用', async () => {

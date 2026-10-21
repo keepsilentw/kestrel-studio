@@ -1,5 +1,6 @@
 import { Controller, Get, Query, Req, Res, UseGuards } from '@nestjs/common';
 import type { Request, Response } from 'express';
+import { TurnRunner } from '@/agent/turn-runner.service';
 import { ViewAuthGuard } from '@/auth/guards';
 import { isSuperAdmin } from '@/auth/roles';
 import { readPositiveInt } from '@/common/http';
@@ -32,6 +33,7 @@ export class ViewController {
   constructor(
     private readonly conversations: ConversationService,
     private readonly tasks: TaskService,
+    private readonly runner: TurnRunner,
   ) {}
 
   @UseGuards(ViewAuthGuard)
@@ -91,13 +93,21 @@ export class ViewController {
             statusLabel: TASK_STATUS_LABEL[task.status] ?? task.status,
           }));
 
-    const views = active === null ? [] : this.conversations.views(active);
+    const rawViews = active === null ? [] : this.conversations.views(active);
+    // An assistant placeholder of a still-running turn is not painted: the
+    // stream replays that turn from its first event (startSeq is set to
+    // before it), and a half-drawn row would only double or contradict it.
+    const views = rawViews.filter(
+      (view) => !(view.role === 'assistant' && view.content.length === 0),
+    );
     const turnAnchors: TurnAnchor[] = buildTurnAnchors(views);
+    const startSeq = active === null ? null : this.runner.catchUpCursor(active);
 
     res.render('chat', {
       user,
       conversations,
       activeConversationId: active,
+      startSeq,
       messages: renderMessages(views),
       pendingTasks,
       turnAnchors,

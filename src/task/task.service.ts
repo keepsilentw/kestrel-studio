@@ -1,8 +1,8 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { and, asc, eq, inArray } from 'drizzle-orm';
+import { ConversationEventsService } from '@/conversation/conversation-events.service';
 import { DRIZZLE_INSTANCE, type DrizzleDb } from '@/database/database.module';
 import { generationTasks, type GenerationTask } from '@/database/schema';
-import { TaskEventsService } from './task-events.service';
 
 /** Mirrors the provider's own vocabulary so a status never needs translating twice. */
 export type TaskStatus = 'queued' | 'running' | 'succeeded' | 'failed';
@@ -26,7 +26,7 @@ export interface NewTask {
 export class TaskService {
   constructor(
     @Inject(DRIZZLE_INSTANCE) private readonly db: DrizzleDb,
-    private readonly events: TaskEventsService,
+    private readonly events: ConversationEventsService,
   ) {}
 
   create(task: NewTask): number {

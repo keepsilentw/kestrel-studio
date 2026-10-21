@@ -147,7 +147,7 @@ async function boot(): Promise<void> {
   });
   URL.createObjectURL = (): string => 'blob:test';
   URL.revokeObjectURL = (): void => {};
-  await import('./voice');
+  await import('../../web/scripts/voice');
 }
 
 function element<T extends Element>(selector: string): T {
@@ -273,7 +273,7 @@ describe('会话就绪前后', () => {
     socket.emit({ type: 'ready', conversationId: 7 });
 
     expect(FakeEventSource.instances.map((source) => source.url)).toEqual([
-      '/api/conversations/7/events',
+      '/api/v1/conversations/7/stream',
     ]);
   });
 

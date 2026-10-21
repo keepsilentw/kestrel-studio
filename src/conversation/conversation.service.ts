@@ -4,7 +4,7 @@ import type { ResponsesInputItem } from '@/bailian/responses-client';
 import type { Mode } from '@/agent/mode';
 import { isSuperAdmin, type Viewer } from '@/auth/roles';
 import { DRIZZLE_INSTANCE, type DrizzleDb } from '@/database/database.module';
-import { assets, conversations, generationTasks, messages, users } from '@/database/schema';
+import { assets, conversations, conversationEvents, generationTasks, messages, users } from '@/database/schema';
 import { removeAssetFiles, resolveAssetPath, storedAssetName } from '@/media/asset-path';
 import type { StoredAsset } from '@/media/media.service';
 
@@ -99,7 +99,7 @@ const MAX_TITLE_LENGTH = 30;
  * also what the turn stream and the voice socket hand to the client.
  */
 export function assetUrl(assetId: number): string {
-  return `/api/assets/${assetId}/download`;
+  return `/api/v1/assets/${assetId}/download`;
 }
 
 function toAssetView(row: { id: number; kind: 'image' | 'video'; mime: string; bytes: number }): AssetView {
@@ -345,6 +345,48 @@ export class ConversationService {
       .run();
   }
 
+  /**
+   * The assistant placeholder of a turn still running in this process: the row
+   * exists before the text does. The stream's catch-up starting point keys off
+   * it — a fresh connection to a busy conversation replays the live turn from
+   * its first event instead of showing nothing until it finalizes.
+   */
+  unfinishedAssistant(conversationId: number): number | null {
+    const row = this.db
+      .select({ id: messages.id })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.conversationId, conversationId),
+          eq(messages.role, 'assistant'),
+          eq(messages.content, ''),
+        ),
+      )
+      .orderBy(desc(messages.id))
+      .get();
+    return row?.id ?? null;
+  }
+
+  /**
+   * Ends assistant rows a previous process left unfinished, at startup.
+   *
+   * A hard kill (restart, crash) stops a running turn with its placeholder
+   * empty. The empty content itself is not the danger — `buildInputItems`
+   * skipping it would orphan the user message, and two consecutive user
+   * messages make the model re-run the failed request as if it were new
+   * (that once duplicated a paid video submission; CLAUDE.md §Agent). A
+   * graceful stop finalizes through AgentService's `finally`; this covers
+   * everything that path never got to run.
+   */
+  abandonStalePlaceholders(): number {
+    const result = this.db
+      .update(messages)
+      .set({ content: '本轮处理失败：服务在轮次完成前中断。' })
+      .where(and(eq(messages.role, 'assistant'), eq(messages.content, '')))
+      .run();
+    return result.changes;
+  }
+
   addAsset(messageId: number, asset: StoredAsset): number {
     const result = this.db
       .insert(assets)
@@ -400,6 +442,9 @@ export class ConversationService {
       if (messageIds.length > 0) {
         tx.delete(assets).where(inArray(assets.messageId, messageIds)).run();
       }
+      tx.delete(conversationEvents)
+        .where(inArray(conversationEvents.conversationId, conversationIds))
+        .run();
       tx.delete(generationTasks)
         .where(inArray(generationTasks.conversationId, conversationIds))
         .run();

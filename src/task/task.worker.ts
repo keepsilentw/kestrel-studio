@@ -1,8 +1,8 @@
 import { Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
+import { ConversationEventsService, type ConversationEvent } from '@/conversation/conversation-events.service';
 import { ConversationService } from '@/conversation/conversation.service';
 import type { GenerationTask } from '@/database/schema';
 import { MediaService, type VideoTaskSnapshot } from '@/media/media.service';
-import { TaskEventsService } from './task-events.service';
 import { TaskService, type TaskStatus } from './task.service';
 
 /** Provider renders are minutes long; polling faster only burns quota. */
@@ -39,7 +39,7 @@ export class TaskWorker implements OnModuleInit, OnModuleDestroy {
     private readonly tasks: TaskService,
     private readonly media: MediaService,
     private readonly conversations: ConversationService,
-    private readonly events: TaskEventsService,
+    private readonly events: ConversationEventsService,
   ) {}
 
   onModuleInit(): void {

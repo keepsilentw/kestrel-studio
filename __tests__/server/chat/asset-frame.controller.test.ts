@@ -120,7 +120,7 @@ function get(path: string): Promise<globalThis.Response> {
   return fetch(`${origin}${path}`);
 }
 
-describe('GET /api/assets/:id/frame — 有效签名', () => {
+describe('GET /api/v1/assets/:id/frame — 有效签名', () => {
   it('返回文件本身与正确的 Content-Type', async () => {
     const assetId = seedImageAsset();
 
@@ -144,7 +144,7 @@ describe('GET /api/assets/:id/frame — 有效签名', () => {
   });
 });
 
-describe('GET /api/assets/:id/frame — 签名必须有效', () => {
+describe('GET /api/v1/assets/:id/frame — 签名必须有效', () => {
   it('过期签名返回 403', async () => {
     const assetId = seedImageAsset();
     const response = await get(framePath(assetId, Date.now() - 3 * FRAME_TTL_MS));
@@ -163,26 +163,26 @@ describe('GET /api/assets/:id/frame — 签名必须有效', () => {
     const assetId = seedImageAsset();
     const other = seedImageAsset();
     const query = new URL(`https://x${framePath(assetId)}`).search;
-    expect((await get(`/api/assets/${other}/frame${query}`)).status).toBe(403);
+    expect((await get(`/api/v1/assets/${other}/frame${query}`)).status).toBe(403);
   });
 
   it('签名长度不对时返回 403 而不是 500', async () => {
     // timingSafeEqual throws on a length mismatch; the guard before it is what
     // keeps a malformed query string from becoming a server error.
     const assetId = seedImageAsset();
-    const response = await get(`/api/assets/${assetId}/frame?exp=${Date.now() + 1000}&sig=short`);
+    const response = await get(`/api/v1/assets/${assetId}/frame?exp=${Date.now() + 1000}&sig=short`);
     expect(response.status).toBe(403);
   });
 
   it('缺 sig 返回 403', async () => {
     const assetId = seedImageAsset();
-    expect((await get(`/api/assets/${assetId}/frame?exp=${Date.now() + 1000}`)).status).toBe(403);
+    expect((await get(`/api/v1/assets/${assetId}/frame?exp=${Date.now() + 1000}`)).status).toBe(403);
   });
 
   it('缺 exp 返回 403', async () => {
     const assetId = seedImageAsset();
     const sig = new URL(`https://x${framePath(assetId)}`).searchParams.get('sig') ?? '';
-    expect((await get(`/api/assets/${assetId}/frame?sig=${sig}`)).status).toBe(403);
+    expect((await get(`/api/v1/assets/${assetId}/frame?sig=${sig}`)).status).toBe(403);
   });
 
   it('exp 不是数字时返回 403', async () => {
@@ -200,7 +200,7 @@ describe('GET /api/assets/:id/frame — 签名必须有效', () => {
   });
 });
 
-describe('GET /api/assets/:id/frame — 资产不存在', () => {
+describe('GET /api/v1/assets/:id/frame — 资产不存在', () => {
   it('签名有效但资产不存在时返回 404', async () => {
     // Signed for an id that was never created: the signature is genuine, so
     // this is a 404 rather than a 403.
@@ -210,6 +210,6 @@ describe('GET /api/assets/:id/frame — 资产不存在', () => {
   it('非法 id 返回 403', async () => {
     const assetId = seedImageAsset();
     const query = new URL(`https://x${framePath(assetId)}`).search;
-    expect((await get(`/api/assets/abc/frame${query}`)).status).toBe(403);
+    expect((await get(`/api/v1/assets/abc/frame${query}`)).status).toBe(403);
   });
 });

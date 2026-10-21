@@ -6,7 +6,7 @@ import { ConversationService } from '@/conversation/conversation.service';
 import { applySchema, DRIZZLE_INSTANCE } from '@/database/database.module';
 import * as schema from '@/database/schema';
 import type { GenerationTask } from '@/database/schema';
-import { TaskEventsService, type ConversationEvent } from '@/task/task-events.service';
+import { ConversationEventsService, type ConversationEvent } from '@/conversation/conversation-events.service';
 import { TaskService, type NewTask } from '@/task/task.service';
 
 /**
@@ -43,7 +43,7 @@ async function buildHarness(): Promise<Harness> {
   const moduleRef = await Test.createTestingModule({
     providers: [
       TaskService,
-      TaskEventsService,
+      ConversationEventsService,
       ConversationService,
       { provide: DRIZZLE_INSTANCE, useValue: db },
     ],
@@ -51,7 +51,7 @@ async function buildHarness(): Promise<Harness> {
 
   const tasks = moduleRef.get(TaskService);
   const conversations = moduleRef.get(ConversationService);
-  const events = moduleRef.get(TaskEventsService);
+  const events = moduleRef.get(ConversationEventsService);
 
   // A fresh user per call: usernames are unique, and tests that need two
   // conversations want them owned by two owners anyway.
@@ -71,7 +71,7 @@ async function buildHarness(): Promise<Harness> {
     },
     received(conversationId: number): ConversationEvent[] {
       const collected: ConversationEvent[] = [];
-      events.subscribe(conversationId).subscribe((event) => collected.push(event));
+      events.subscribe(conversationId).subscribe((published) => collected.push(published.event));
       return collected;
     },
   };

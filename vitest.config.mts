@@ -52,7 +52,7 @@ export default defineConfig({
         test: {
           name: 'server',
           environment: 'node',
-          include: ['src/**/*.test.ts'],
+          include: ['__tests__/server/**/*.test.ts'],
         },
       },
       {
@@ -62,8 +62,8 @@ export default defineConfig({
         test: {
           name: 'web',
           environment: 'jsdom',
-          include: ['web/**/*.test.ts'],
-          setupFiles: ['web/scripts/test-setup.ts'],
+          include: ['__tests__/web/**/*.test.ts'],
+          setupFiles: ['__tests__/web/test-setup.ts'],
         },
       },
     ],

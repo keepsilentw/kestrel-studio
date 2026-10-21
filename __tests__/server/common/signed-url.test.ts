@@ -36,7 +36,7 @@ function paramsOf(url: string): { exp: number; sig: string } {
 describe('buildSignedFrameUrl', () => {
   it('指向签名帧端点并带上 exp 与 sig', () => {
     const url = buildSignedFrameUrl(42);
-    expect(url.startsWith('https://frames.example.test/api/assets/42/frame?')).toBe(true);
+    expect(url.startsWith('https://frames.example.test/api/v1/assets/42/frame?')).toBe(true);
     const { exp, sig } = paramsOf(url);
     expect(Number.isFinite(exp)).toBe(true);
     expect(sig).toMatch(/^[0-9a-f]{64}$/);

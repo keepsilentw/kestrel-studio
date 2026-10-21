@@ -13,7 +13,7 @@
 | 期 | 内容 | 理由 | 现状 |
 |---|---|---|---|
 | 一 | 上述一期内容 | 已完成 | 端到端已验证（[verification.md](verification.md) §2） |
-| 二 | 抽出 `/api/v1` + 对话级 SSE（含断线续传）+ 三模式 | 直接服务多端目标，不依赖内核决策，做完不返工 | 三模式**已落地**（模式选择器 + 按轮次存储与回放）；`/api/v1` 与 SSE 续传**未做**——对话级长连接已有，缺 `seq` 与 `Last-Event-ID` |
+| 二 | 抽出 `/api/v1` + 对话级 SSE（含断线续传）+ 三模式 | 直接服务多端目标，不依赖内核决策，做完不返工 | **已全部落地**（2026-10-21）：三模式早先完成；`/api/v1` + 提交/订阅分离 + `seq` 续传见 [architecture.md](./architecture.md) §4.2，实测证据见 [verification.md](./verification.md) §8 |
 | 三 | 异步任务子系统 + 视频能力 | 独立子系统，与内核决策解耦 | **已落地**，见 `src/task/`（提交即返回、后台轮询、成功即镜像、追加消息并推送）；端到端未记录 |
 | 四 | **语音会话**（独立入口 + 工具调用） | 与内核决策无关，走 §2.4.1 之外的一条独立通路。设计已迁至 [architecture.md](./architecture.md) §11 | **已落地**，本地与线上端到端实测均通过（[verification.md](verification.md) §4） |
 | 五 | 内核选型落地（保持 TS 增强 / 引入 Rust sidecar） | 前面各期完成后，内核的真实收益才有可比基准 | 未开始 |
@@ -61,9 +61,10 @@
 
 ### 2.3 目标架构
 
-决定多端能否复用的**不是内核语言，而是产品 API 边界**。当前 SSR 单体没有这条边界：`POST /api/chat`
+决定多端能否复用的**不是内核语言，而是产品 API 边界**。改造前的 SSR 单体没有这条边界：`POST /api/chat`
 把整个 agent 轮次挂在一条 HTTP 连接上流式返回，移动端断网、切后台、被系统回收都会让该轮作废。
-因此无论内核如何选型，都必须先把「发送」与「订阅」拆开。
+因此无论内核如何选型，都必须先把「发送」与「订阅」拆开。（本节目标形态已随二期落地，
+实装见 [architecture.md](./architecture.md) §4.2。）
 
 ```mermaid
 flowchart TB
@@ -103,14 +104,17 @@ Web 只负责首屏骨架，其余全部走同一套 `/api/v1`；App 与小程�
 
 ### 2.4 三个必须做的变更
 
-#### 2.4.1 轮次级 SSE 改为对话级 SSE
+#### 2.4.1 轮次级 SSE 改为对话级 SSE ——已落地（2026-10-21）
 
-| 端点 | 语义 |
-|---|---|
-| `POST /api/v1/conversations/:id/turns` | 提交一轮，立即 `202` 返回 `turnId` |
-| `GET /api/v1/conversations/:id/stream` | 对话级事件流，事件带自增 `seq`，支持 `Last-Event-ID` 断线续传 |
+结论与设计已移入 [architecture.md](./architecture.md) §4.2（事件表 §6、日志表 §5）。
+实装与本节草案的三处出入，以 architecture 为准：
 
-这是移动端可用的前提，同时把 2.4.2 的长任务推送一并解决。
+- `seq` 落在新表 `conversation_events`（会话内自增，每条事件一行）而非
+  `messages.seq`：续传游标要盖住增量、工具调用与后台事件，不是只数消息。
+- `202` 回的是 `{conversationId, messageId}`，`messageId`（助手占位行）就是
+  turn 的身份——不另造只有服务端认识的 `turnId`。
+- 额外两条语义：会话已有轮次在跑时提交吃 `409`（防重复计费）；游标低于
+  保留窗口时回一帧 `resync`，客户端从落库行重建而不是吃半个回放。
 
 #### 2.4.2 异步任务子系统
 
@@ -163,8 +167,9 @@ instructions 与 tools 的一行代码，在 kestrel 里则要改 `shared.system
 
 | 表 | 变更 |
 |---|---|
-| `messages` | 加 `mode`（该轮能力）、`seq`（对话内序号，供 SSE 续传） |
-| `generation_tasks` | 新表：`id, conversation_id, message_id, user_id, kind, provider_task_id, model, prompt, params(json), status, attempts, error, asset_id, created_at, started_at, finished_at` |
+| `messages` | 加 `mode`（该轮能力）**已落地**；原规划的 `seq` 改为落在 `conversation_events.seq`（见 §2.4.1 的落地备注） |
+| `conversation_events` | 新表（2.4.1 落地时）：`id, conversation_id, seq, message_id, type, payload, created_at` |
+| `generation_tasks` | 新表：`id, conversation_id, message_id, user_id, kind, provider_task_id, model, prompt, params(json), status, attempts, error, asset_id, created_at, started_at, finished_at`（落地时字段略有调整，以 schema.ts 为准） |
 | `assets` | 加 `task_id` 反查；保留 `source_url` 但仅作审计 |
 
 ### 2.6 回归路径：若日后引入 kestrel

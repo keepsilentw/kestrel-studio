@@ -12,17 +12,27 @@ export interface SseResponse {
   end(): void;
 }
 
-/** Event names used by the agent stream. Mirrors docs/architecture.md. */
+/**
+ * Event names carried by the conversation stream. Mirrors docs/architecture.md
+ * §6. Everything except `connected` and `resync` is journaled in
+ * `conversation_events` and therefore replayable on reconnect; the two
+ * connection-scoped names never carry an id.
+ */
 export type SseEventName =
+  // Connection-scoped: describe this stream, not the conversation's history.
   | 'connected'
+  | 'resync'
+  // Turn events: journaled as the agent loop emits them.
+  | 'user_message'
+  | 'turn_started'
   | 'reasoning'
   | 'text'
   | 'tool_call'
   | 'tool_result'
   | 'asset'
-  | 'done'
-  | 'error'
-  // Conversation-level stream (background jobs, not tied to a turn).
+  | 'turn_done'
+  | 'turn_error'
+  // Background jobs and their appended results.
   | 'task_updated'
   | 'message_added';
 
@@ -56,11 +66,18 @@ export class SseWriter {
     }, HEARTBEAT_MS);
   }
 
-  send(event: SseEventName, data: unknown): void {
+  /**
+   * `seq` is the journal id of a journaled event. It becomes the SSE `id:`
+   * field, so a browser reconnecting an EventSource sends it back as
+   * Last-Event-ID and the stream replays from there. Connection-scoped frames
+   * (`connected`, `resync`) omit it — they must not move the client's cursor.
+   */
+  send(event: SseEventName, data: unknown, seq?: number): void {
     if (this.closed) {
       return;
     }
-    this.res.write(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
+    const idLine = seq === undefined ? '' : `id: ${seq}\n`;
+    this.res.write(`${idLine}event: ${event}\ndata: ${JSON.stringify(data)}\n\n`);
   }
 
   close(): void {

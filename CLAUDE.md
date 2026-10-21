@@ -41,11 +41,11 @@ Web 生成式媒体 Agent：用户在网页给一句话，LLM 流式思考、调
   内置凭据等于给线上实例发可用登录。
 - **pm2 与 watch 模式争 8848 端口**：跑 `make dev` 前先 `make stop`；`make dev` 会自己检测并警告。
 - **质量门是 `make typecheck` + `make test`**。测试用 vitest，分两个 project（见 `vitest.config.mts`）：
-  - `server`（node 环境）—— `src/**/*.test.ts`。走 **SWC** 而非默认的 esbuild，因为 esbuild 不实现 `emitDecoratorMetadata`，而应用有约 19 处构造参数依赖它；没有 SWC 就起不了 `Test.createTestingModule()`。这也是当初不用 ts-jest 的原因：ts-jest 要 TS 的 programmatic compiler API，而 TS 7 已移除（本项目钉在 TS 6.0.3 正是同一根因）。
-  - `web`（jsdom 环境）—— `web/**/*.test.ts`，测 `web/scripts/main.ts` 的 DOM 行为。`web/scripts/test-setup.ts` 补了 jsdom 缺失的 `scrollIntoView`。
+  - `server`（node 环境）—— `__tests__/server/**`，按 src 的模块结构镜像存放（测试文件不进 `src/`，这是约定）。走 **SWC** 而非默认的 esbuild，因为 esbuild 不实现 `emitDecoratorMetadata`，而应用有约 19 处构造参数依赖它；没有 SWC 就起不了 `Test.createTestingModule()`。这也是当初不用 ts-jest 的原因：ts-jest 要 TS 的 programmatic compiler API，而 TS 7 已移除（本项目钉在 TS 6.0.3 正是同一根因）。
+  - `web`（jsdom 环境）—— `__tests__/web/**`，测 `web/scripts/main.ts` 的 DOM 行为。`__tests__/web/test-setup.ts` 补了 jsdom 缺失的 `scrollIntoView`。
   - 测试里没有类型断言（全局 TS 规则禁止），所以守卫、控制器、登录链路都是**起真实 HTTP 服务再发请求**验证的，不是伪造 `ExecutionContext` 一类对象。
-  - 覆盖到的：纯模块、`ToolRegistry`、`ConversationService` / `TaskService` / `TaskEventsService` / `TaskWorker`（真 SQLite 内存库 + 生产 DDL）、`AuthService`、`ensureAdminUser`、`chat` / `view` / `asset-frame` 控制器（含各端点的归属校验、签名帧的 403/404 边界、登录/登出会话链路）。供应商交互仍由注入边界 stub 掉。`local.strategy` / `session.serializer` / `login-redirect.filter` 没有独立测试文件，但被登录链路测试**行为性覆盖**（策略真被实例化并驱动、序列化由 cookie 往返证明、过滤器由"错误密码 → 302 /login?error=1"证明）。语音侧：服务端只测纯逻辑（票据存储、帧解析），中继按同样的边界归 `docs/verification.md` §4；**浏览器客户端测帧序列**（`web/scripts/voice.test.ts`，jsdom + 假 socket：按下取票、`onopen` 发 `start`、ready 前后音频排队与补发、commit 时机）。这一条是踩过坑才加的——只验"控制台干净"没抓住客户端漏发 `start` 帧、服务端静默等待的故障，见 `docs/implementation-notes.md` §8。账号面（`admin/`）测到守卫的两条分支与非超管的 403、`canRead` 的完整角色矩阵、账号 CRUD 与级联删除、管理页的真实渲染（含"密码框旁必须有可见账号名"这条浏览器契约）。软删除单独测了三件事：属主看不见、超管看得见、数据一条不少（消息/资产行/磁盘文件都断言了）。
-  - **模板与客户端脚本的契约由一对测试守住**：`web/scripts/main.test.ts` 用手抄的 DOM fixture 测行为，`view/view.controller.test.ts` 渲染真模板并断言 `main.ts` 用 `requireElement` 取的那些 id 都在。改模板 id 会让后者失败。
+  - 覆盖到的：纯模块、`ToolRegistry`、`ConversationService` / `ConversationEventsService` / `TaskService` / `TaskWorker`（真 SQLite 内存库 + 生产 DDL）、`AuthService`、`ensureAdminUser`、`chat` / `view` / `asset-frame` 控制器（含各端点的归属校验、签名帧的 403/404 边界、登录/登出会话链路、提交 202/409 与事件流的续传/断档）。供应商交互仍由注入边界 stub 掉。`local.strategy` / `session.serializer` / `login-redirect.filter` 没有独立测试文件，但被登录链路测试**行为性覆盖**（策略真被实例化并驱动、序列化由 cookie 往返证明、过滤器由"错误密码 → 302 /login?error=1"证明）。语音侧：服务端只测纯逻辑（票据存储、帧解析），中继按同样的边界归 `docs/verification.md` §4；**浏览器客户端测帧序列**（`__tests__/web/voice.test.ts`，jsdom + 假 socket：按下取票、`onopen` 发 `start`、ready 前后音频排队与补发、commit 时机）。这一条是踩过坑才加的——只验"控制台干净"没抓住客户端漏发 `start` 帧、服务端静默等待的故障，见 `docs/implementation-notes.md` §8。账号面（`admin/`）测到守卫的两条分支与非超管的 403、`canRead` 的完整角色矩阵、账号 CRUD 与级联删除、管理页的真实渲染（含"密码框旁必须有可见账号名"这条浏览器契约）。软删除单独测了三件事：属主看不见、超管看得见、数据一条不少（消息/资产行/磁盘文件都断言了）。
+  - **模板与客户端脚本的契约由一对测试守住**：`__tests__/web/main.test.ts` 用手抄的 DOM fixture 测行为，`__tests__/server/view/view.controller.test.ts` 渲染真模板并断言 `main.ts` 用 `requireElement` 取的那些 id 都在。改模板 id 会让后者失败。
   - **不做 UT 的范围是刻意划定的，不要再提议补**：agent 轮次循环（`agent/agent.service.ts`）与供应商客户端（`bailian/responses-client.ts`）——它们的行为由活的端点定义（非标准帧、reasoning 事件名、超时），伪造供应商只会把我们的假设重新编码一遍，且在供应商真的变了时照样通过。那部分证据带日期记在 `docs/verification.md`。同样不测的还有 `chat` / `view` 控制器与 `media` 的 HTTP、落盘路径。
 - 改动前端后按全局规则用 Chrome DevTools MCP 验控制台。两个页面都已访查过：
   `/voice` **零条目**；对话页零错误零警告，另有 1 条 Chrome *issue*（`loading="lazy"` 的资产
@@ -63,37 +63,38 @@ hbs 只渲染首屏骨架（登录态、历史会话侧栏、页面外壳、模�
 **从第一个 token 起，主体区全部由客户端 JS 拼 DOM**，服务端不吐 HTML 片段。
 守住这条边界，不要在 hbs 里塞流式占位逻辑。
 
-前端是无框架的原生 TS + Vite：`web/scripts/main.ts`（约 1000 行，发送、SSE 解析、增量渲染、会话流订阅、下载弹窗）＋ `web/styles/main.css`。
-Vite 只做打包，产物固定为 `public/assets/main.js` / `main.css`（由 `vite.config.mts` 指定），模板以 `/assets/main.js` 模块化引入；`body[data-conversation-id]`、`[data-mode]`、`[data-task-id]` 等 data 属性是两条路的交接面。
+前端是无框架的原生 TS + Vite：`web/scripts/main.ts`（提交轮次、EventSource 订会话事件流并按事件绘图 DOM、图片预览、下载弹窗）＋ `web/styles/main.css`。
+Vite 只做打包，产物固定为 `public/assets/main.js` / `main.css`（由 `vite.config.mts` 指定），模板以 `/assets/main.js` 模块化引入；`body[data-conversation-id]`、`body[data-start-seq]`、`[data-mode]`、`[data-task-id]` 等 data 属性是两条路的交接面（`start-seq` 是首屏画到时的事件日志游标，脚本作为流首连的 `?from=`）。
 **管理页（`/admin` 系）刻意不引任何客户端脚本**：纯服务端表单 + 302 + `?notice=` 提示，因此它们的模板不进 `main.ts` 的 id 契约，也没有控制台噪音。
 `web/` 有自己的 `tsconfig.json`（DOM lib、`noEmit`），所以类型检查要跑两次。
 
-### 2. 两条 SSE 流，用途不同
+### 2. 一条产品事件流 + 一条语音 WS，用途不同
 
-| 流 | 端点 | 生命周期 |
+| 通道 | 端点 | 生命周期 |
 |---|---|---|
-| 轮次流 | `POST /api/chat` | 随该 POST 存亡；body 带 prompt 与 mode |
-| 会话流 | `GET /api/conversations/:id/events` | 长连接，推送**没有请求在飞**时发生的事件（视频渲染完成） |
+| 提交 | `POST /api/v1/conversations/:id/turns` | 普通 JSON，`202 {conversationId, messageId}` 即返回；轮次在服务端后台跑，断开不取消 |
+| 会话事件流 | `GET /api/v1/conversations/:id/stream` | 长连接，承载**一切**：轮次增量（reasoning/text/tool/asset/done）、后台任务进度、追加的消息；事件带会话内 `seq`，支持 `Last-Event-ID` 续传 |
 
-服务端两条流都用 `src/common/sse.ts` 的 `SseWriter` **裸写 `@Res()`**，不用 `@Sse()` 装饰器——后者只支持 GET，而发消息需要 POST body。
-每 15s 发 `: ping` 注释帧保活（文生图期间连接静默几十秒，中间层会判定空闲掐断），并带 `X-Accel-Buffering: no`（加压缩中间件会破坏 SSE）。
+服务端流用 `src/common/sse.ts` 的 `SseWriter` **裸写 `@Res()`**，不用 `@Sse()` 装饰器——
+它带不了心跳注释帧与自定义头。每 15s 发 `: ping` 注释帧保活（工具调用期间连接静默几十秒），
+并带 `X-Accel-Buffering: no`（加压缩中间件会破坏 SSE）。
 
-**前端两条流的消费方式不同，别搞混**：
+**前端用真 `EventSource` 订这一条流**（GET + 同源 cookie，自动重连带 `Last-Event-ID`）；
+旧的 fetch+ReadableStream 手写帧读取器随 POST 轮次流一起退役了。首屏把游标 stamp 在
+`body[data-start-seq]`，脚本作为 `?from=` 传给首连（新建会话传 0，否则提交与建连之间
+发布的事件会掉缝）。轮次不本地拼装：用户回声、助手占位、增量全从流里画，DOM 按
+`messageId` 键控；游标低于保留窗口时服务端发 `resync`，客户端重载页面重建。
 
-| 流 | 客户端 |
-|---|---|
-| 轮次流 | 手写 `fetch` + `ReadableStream` 切帧（`readSseFrames`）——`EventSource` 不能 POST body，手写还能 abort |
-| 会话流 | 真 `EventSource`，初始化时打开，`connected` 报出新 id 时重开 |
-
-轮次事件：`connected` `reasoning` `text` `tool_call` `tool_result` `asset` `done` `error`；
-会话事件：`task_updated` `message_added`。事件名的真源是 `src/common/sse.ts` 里的闭合联合类型，`docs/architecture.md` §6 只有轮次那 8 个（会话事件是后加的，那份表的「SSE 事件表」尚未补全）。
+事件名真源是 `src/common/sse.ts` 的闭合联合类型：`connected` `resync` `user_message`
+`turn_started` `reasoning` `text` `tool_call` `tool_result` `asset` `turn_done` `turn_error`
+`task_updated` `message_added`（语义表见 `docs/architecture.md` §6；带 id 的都进日志可重放）。
 
 ### 3. 同步轮次 vs 异步任务
 
-- **图片是同步的**：`generate_image` 在轮次内完成（单次工具超时 120s），产物以 `asset` 事件推给前端。
+- **图片是同步的**：`generate_image` 在轮次内完成（单次工具超时 120s），产物以 `asset` 事件进事件日志并推给前端。
 - **视频是异步的**：`generate_video` 提交后**立刻返回** task id 并结束该轮，落 `generation_tasks` 表；
   `src/task/task.worker.ts` 后台退避轮询（8s 间隔，任务上限 20min），成功后**立刻**把字节镜像到 `storage/`，
-  再往会话追加一条新的 assistant 消息并推 `task_updated` / `message_added`。
+  再往会话追加一条新的 assistant 消息并经事件日志推 `task_updated` / `message_added`。
 
   两条硬约束决定了这个形状：视频渲染要几分钟（塞不进 SSE 轮次），且**供应商返回的媒体 URL 是短时效的**——错过成功那一刻就再也取不回。因此 `assets.source_url` 只作审计，**不作持久引用**。
 
@@ -103,7 +104,8 @@ Vite 只做打包，产物固定为 `public/assets/main.js` / `main.css`（由 `
 
 `AppModule`（`src/app.module.ts`）装配：`config` 读环境变量 → `database` drizzle + 建表 + seed → `auth` / `conversation` / `media` / `task` / `agent` / `chat` / `view`。
 
-- `agent/agent.service.ts` — 轮次引擎：先生成一条**空的 assistant 占位行**（本轮产物要挂 `messageId`），组装 instructions 与工具声明，最多 `MAX_TOOL_ROUNDS = 5` 次 LLM 往返防死循环，把增量推给 `SseWriter`。
+- `agent/turn-runner.service.ts` — 轮次的提交口与登记表：同步建用户消息 + 空 assistant 占位行并记 `user_message`/`turn_started`，然后把 `AgentService.run` 挂后台立即返回；**一个会话同时只跑一轮**（第二次提交 409，防重复计费）；`onApplicationBootstrap` 收尾上个进程留下的空占位行（`abandonStalePlaceholders`，否则孤儿用户消息会触发重提交付费任务）。
+- `agent/agent.service.ts` — 轮次引擎：组装 instructions 与工具声明，最多 `MAX_TOOL_ROUNDS = 5` 次 LLM 往返防死循环，把每条增量发布到会话事件日志（不再持有连接）。
   `finally` 里必定收尾（补全占位行、`touch` 会话、关流）——**这个保证是承重的**：占位行若被留下，用户消息就成了孤儿，下一轮回放会出现两条连续 user 消息，曾因此**重复提交过一次付费视频任务**。
 - `agent/mode.ts` — 模式的**唯一真源**：`TOOL_NAMES_BY_MODE` 决定每轮暴露哪些工具，`MODE_INSTRUCTIONS` 决定提示词片段。前端 `web/scripts/main.ts` 里有一份 `MODE_LABEL` 的重复定义，改中文标签要两处一起改。模式是**用户在 UI 上每轮选的**（`localStorage` 的 `kestrel-studio:mode`），不是模型自己挑的。
 - `agent/tools.ts` — `ToolRegistry`：三个工具按名注册，`specsFor(mode)` 按模式裁剪。加工具 = 写 `AgentTool` + 进构造器数组 + 在 `mode.ts` 的 `TOOL_NAMES_BY_MODE` 里挂到对应模式。
@@ -112,9 +114,10 @@ Vite 只做打包，产物固定为 `public/assets/main.js` / `main.css`（由 `
 - `bailian/token.ts` — 凭据解析优先级：`BAILIAN_API_KEY` / `DASHSCOPE_API_KEY` → cc-switch 库 `providers` 表 → `~/.codex/config.toml` 的 provider block。
 - `media/media.service.ts` — 百炼文生图 / 提交视频任务 / 查询视频任务 / 落盘。
   **同一个 base URL 下有四条上游路径，别混**：chat 走 `/compatible-mode/v1/responses`（Responses API），出图走 `/api/v1/services/aigc/multimodal-generation/generation`，提交视频走 `/api/v1/services/aigc/video-generation/video-synthesis`，轮询走 `/api/v1/tasks/{id}`。
-- `conversation/conversation.service.ts` — 会话、消息、资产的读写与**可见性规则**（`canRead` 读 / `isOwnedBy` 写，共用私有的 `readableBy()`），也是给 agent / tools / view / admin 共用的查询层。两个删除并存：`softDeleteConversations()`（用户侧，只打标记）与 `deleteConversations()`（账号删除的硬级联，含删文件）。
-- `chat/` — HTTP 面：`chat.controller.ts`（轮次流、会话列表、消息回放、任务查询、下载、**软删除会话**）、`asset-frame.controller.ts`（见下）。
-  删除是 `POST /api/conversations/:id/delete`，**只写 `deleted_at`**：属主看不见了，消息/资产/文件全留着，超管照旧能看（`docs/architecture.md` §12.1）。因此它只对普通账号开放，对超管返 403。
+- `conversation/conversation.service.ts` — 会话、消息、资产的读写与**可见性规则**（`canRead` 读 / `isOwnedBy` 写，共用私有的 `readableBy()`），也是给 agent / tools / view / admin 共用的查询层。两个删除并存：`softDeleteConversations()`（用户侧，只打标记）与 `deleteConversations()`（账号删除的硬级联，含删文件）。未完轮次探针：`unfinishedAssistant()` 与启动收尾 `abandonStalePlaceholders()`。
+- `conversation/conversation-events.service.ts` — 事件日志的唯一写入方：**先插 `conversation_events` 行（会话内 `seq` 自增）再扇出**，重放/断档判定/保留窗口裁剪都在这里；`publish` 是同步的，所以日志顺序即扇出顺序。`TaskEventsService` 已废，后台任务事件也走这里。
+- `chat/` — 产品 API 面（`/api/v1`）：`chat.controller.ts`（建会话、轮次提交 202、会话事件流含续传、会话列表、消息回放、任务查询、下载、**软删除会话**）、`asset-frame.controller.ts`（见下）。
+  删除是 `POST /api/v1/conversations/:id/delete`，**只写 `deleted_at`**：属主看不见了，消息/资产/文件全留着，超管照旧能看（`docs/architecture.md` §12.1）。因此它只对普通账号开放，对超管返 403。
   **读端点走 `ConversationService.canRead`，写端点走 `isOwnedBy`**——超管能看别人的会话但发不进去。
 - `admin/` — 超管管理面：`admin.guard.ts`（未登录 → `/login`；非超管 GET → `/`、POST → 403）、`admin.service.ts`（账号 CRUD + 级联删库外文件）、`admin.controller.ts`（纯表单 + 302 + `?notice=`）。它自己不写任何可见性查询，只用 `ConversationService`。
 - `view/view.controller.ts` — hbs 页面：`GET /login`、`GET /`（`?c=` 指定会话）、`GET /voice`；共用的模板预处理（markdown、轮次锚点、时间格式化）在 `view/render.ts`，管理页也用它。
@@ -151,8 +154,8 @@ Vite 只做打包，产物固定为 `public/assets/main.js` / `main.css`（由 `
 
 | 端点 | 鉴权 | 用途 |
 |---|---|---|
-| `GET /api/assets/:id/download` | session 守卫 | 页面内下载 |
-| `GET /api/assets/:id/frame` | HMAC 签名（`?exp=&sig=`），**故意不挂守卫** | 图生视频时交给供应商自己去取首帧 |
+| `GET /api/v1/assets/:id/download` | session 守卫 | 页面内下载 |
+| `GET /api/v1/assets/:id/frame` | HMAC 签名（`?exp=&sig=`），**故意不挂守卫** | 图生视频时交给供应商自己去取首帧 |
 
 签名逻辑在 `src/common/signed-url.ts`：以 `SESSION_SECRET` 对 `assetId.expiresAt` 签 HMAC，TTL 2h，`timingSafeEqual` 比对。
 供应商要能访问到它，所以图生视频强依赖 `PUBLIC_BASE_URL` 指向公网地址；`isPubliclyReachable()` 会在提交前拦掉 localhost 并给出真实原因，否则要等几分钟后拿一个供应商侧的下载错误。
@@ -172,6 +175,7 @@ Vite 只做打包，产物固定为 `public/assets/main.js` / `main.css`（由 `
 `CREATE TABLE IF NOT EXISTS` 加不了列，而 `data/` 是 docker volume 会跨部署存活，所以**首次发布后新增的列**还要进 `ADDED_COLUMNS` 数组（`ensureColumns` 会 `ALTER TABLE` 补上）。`messages.mode` 目前**只在 `ADDED_COLUMNS` 里**、不在 DDL 里，于是新库与老库经不同路径到达同一形态——加新列时别只补一处。正例是 `users.role` 与 `conversations.deleted_at`：两处都写了，老库分别由 `ALTER TABLE … DEFAULT 'user'` 与 `ADD COLUMN … INTEGER`（可空）补上，既有数据自动落到正确形态。
 
 - `sessions` 表由 `better-sqlite3-session-store` 独占管理，**故意不建模进 drizzle**，避免两个写入方共管一张表。
+- **`conversation_events` 是派生数据**（流日志，不是第二个真源）：`seq` 是**会话内**计数——全局 id 会把「新会话第一条」与「已被裁剪」混淆（见 `docs/architecture.md` §5）。新**整表**只需进 DDL（`IF NOT EXISTS` 对老库也建表），`ADDED_COLUMNS` 只服务于老表补列；硬删除级联里别漏它。
 - 需要数据迁移的 schema 变更走 `pnpm db:push`（drizzle-kit，schema 路径写死在 `drizzle.config.ts`）。
 - 建表逻辑由 `database.module.ts` 的 `applySchema(connection)` 统一施加，测试复用它而不是复制 DDL。**测试里请自己 `new Database(':memory:')`**：`openDatabase()` 会把值过一遍 `resolve()`，所以 `DATABASE_FILE=:memory:` 会变成一个真的叫 `:memory:` 的文件，而不是内存库。
 - `reasoning` 与 `tool_calls`（JSON 文本）单独存列，目的是刷新或重进会话能**完整回放思考过程**，而不只剩最终文本。

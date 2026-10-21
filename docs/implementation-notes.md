@@ -115,7 +115,7 @@ Nest CLI 12 需要 TypeScript 的 programmatic compiler API，而 TS 7.0 只提�
 
 **处理**：客户端在 `onopen` 里发 `start`；服务端补上 `Voice session opened / ended` 与会话建立
 失败的 warn（这次难查就是因为成功路径完全不出声）。回归测试断言的是**帧序列**而不是"没报错"，
-见 `web/scripts/voice.test.ts`。
+见 `__tests__/web/voice.test.ts`。
 
 **教训**：协议里定义的双向帧，两端各断言一次。**只验"控制台干净"会放过静默失败**——这次页面从
 外观到控制台都与正常一模一样。查这类故障时要找的是"应该发生的字节没发生"，而不是"报了什么错"。
@@ -129,7 +129,7 @@ Nest CLI 12 需要 TypeScript 的 programmatic compiler API，而 TS 7.0 只提�
 
 ## 9. jsdom 没有 <dialog> 的 showModal/close
 
-**症状**：给历史会话的二次确认换成 `<dialog>` 后，`web/scripts/main.test.ts` 里凡是走到
+**症状**：给历史会话的二次确认换成 `<dialog>` 后，`__tests__/web/main.test.ts` 里凡是走到
 `showModal()` / `close()` 的用例全部抛 `TypeError: deleteDialog.close is not a function`，
 而且是**未捕获异常**——它逃出用例，直接把整个文件的其他测试一起拖挂。
 
@@ -146,7 +146,7 @@ console.log(el.constructor.name, typeof el.showModal, typeof el.close, 'open' in
 **为什么以前没撞上**：页面上原有的两个 `<dialog>`（图片预览、下载弹窗）在这套测试里从没被打开过，
 缺的是这两条路径的覆盖，不是 jsdom 突然变了。
 
-**处理**：`web/scripts/test-setup.ts` 里补最小实现，与既有的 `scrollIntoView` 同一位置、同一理由
+**处理**：`__tests__/web/test-setup.ts` 里补最小实现，与既有的 `scrollIntoView` 同一位置、同一理由
 ——**脚本本身不留测试专用的分支**。只镜像脚本真正观察的两件事：`open` 属性与 `close` 事件，
 于是「对话框是否被关掉」在用例里依然可断言。`showModal` 返回 Promise（Chrome 的就是），只是没人 await。
 

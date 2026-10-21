@@ -10,5 +10,5 @@
     "noEmit": true,
     "isolatedModules": true
   },
-  "include": ["scripts/**/*.ts", "vite-env.d.ts"]
+  "include": ["scripts/**/*.ts", "vite-env.d.ts", "../__tests__/web/**/*.ts"]
 }

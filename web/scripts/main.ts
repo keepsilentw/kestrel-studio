@@ -1,11 +1,6 @@
 import { marked } from 'marked';
 import '../styles/main.css';
 
-interface SseFrame {
-  event: string;
-  data: Record<string, unknown>;
-}
-
 function requireElement<T extends Element>(selector: string): T {
   const element = document.querySelector<T>(selector);
   if (element === null) {
@@ -124,65 +119,6 @@ function rememberRenderedIds(): void {
   }
 }
 
-function parseFrame(raw: string): SseFrame | null {
-  let event: string | null = null;
-  const dataLines: string[] = [];
-  for (const line of raw.split('\n')) {
-    if (line.length === 0 || line.startsWith(':')) {
-      continue;
-    }
-    if (line.startsWith('event:')) {
-      event = line.slice('event:'.length).trim();
-    } else if (line.startsWith('data:')) {
-      dataLines.push(line.slice('data:'.length).replace(/^ /, ''));
-    }
-  }
-  if (event === null || dataLines.length === 0) {
-    return null;
-  }
-  try {
-    return { event, data: JSON.parse(dataLines.join('\n')) as Record<string, unknown> };
-  } catch {
-    return null;
-  }
-}
-
-/**
- * EventSource cannot POST and cannot carry a body, so the stream is read
- * manually off the fetch response. This also makes cancel() possible.
- */
-async function* readSseFrames(response: Response): AsyncGenerator<SseFrame> {
-  const reader = response.body?.getReader();
-  if (reader === undefined) {
-    return;
-  }
-  const decoder = new TextDecoder();
-  let buffer = '';
-
-  try {
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      buffer += decoder.decode(value, { stream: true });
-
-      let boundary = buffer.indexOf('\n\n');
-      while (boundary !== -1) {
-        const raw = buffer.slice(0, boundary);
-        buffer = buffer.slice(boundary + 2);
-        const frame = parseFrame(raw);
-        if (frame !== null) {
-          yield frame;
-        }
-        boundary = buffer.indexOf('\n\n');
-      }
-    }
-  } finally {
-    reader.releaseLock();
-  }
-}
-
 function readString(source: Record<string, unknown>, key: string): string {
   const value = source[key];
   return typeof value === 'string' ? value : '';
@@ -204,17 +140,6 @@ function buildModeBadge(mode: Mode): HTMLElement {
   return badge;
 }
 
-function buildUserTurn(text: string): HTMLElement {
-  const article = document.createElement('article');
-  article.className = 'turn turn-user';
-  article.append(buildModeBadge(currentMode));
-  const div = document.createElement('div');
-  div.className = 'content';
-  div.textContent = text;
-  article.append(div);
-  return article;
-}
-
 interface AssistantTurn {
   article: HTMLElement;
   reasoningSection: HTMLDetailsElement;
@@ -224,7 +149,7 @@ interface AssistantTurn {
   assetList: HTMLElement;
 }
 
-function buildAssistantTurn(): AssistantTurn {
+function buildAssistantTurn(mode: string | null): AssistantTurn {
   const article = document.createElement('article');
   article.className = 'turn turn-assistant';
 
@@ -246,7 +171,10 @@ function buildAssistantTurn(): AssistantTurn {
   const assetList = document.createElement('div');
   assetList.className = 'assets';
 
-  article.append(buildModeBadge(currentMode), reasoningSection, toolList, content, assetList);
+  if (isMode(mode)) {
+    article.append(buildModeBadge(mode));
+  }
+  article.append(reasoningSection, toolList, content, assetList);
   return { article, reasoningSection, reasoningBody, content, toolList, assetList };
 }
 
@@ -344,13 +272,21 @@ function renderStoredMessage(message: StoredMessage): HTMLElement {
   return article;
 }
 
-function appendStoredMessage(message: StoredMessage): void {
+function appendStoredMessage(message: StoredMessage, anchor = false): void {
   const key = String(message.id);
   if (renderedMessageIds.has(key)) {
     return;
   }
   renderedMessageIds.add(key);
-  stream.append(renderStoredMessage(message));
+  const element = renderStoredMessage(message);
+  stream.append(element);
+  // The right sidebar indexes the conversation by what the user asked. Live
+  // user turns used to get their anchor at submit time, when the page was the
+  // only source of them; now the stream is, and every client that sees a
+  // user_message gets the same row it would have painted itself.
+  if (anchor && message.role === 'user') {
+    appendTurnAnchor(element, message.content);
+  }
   scrollToBottom();
 }
 
@@ -540,30 +476,258 @@ function upsertPendingTask(taskId: number, kind: string, status: string): void {
 }
 
 /**
- * A render finishes minutes after the POST that started it, so results arrive
- * on this stream rather than on the turn stream. EventSource reconnects on its
- * own; a completion missed while offline still shows up on the next page load,
- * because the worker also writes it into the conversation.
+ * The conversation event stream: the page's only view into what the
+ * conversation is doing. Turns render entirely from these events — including
+ * the one this page just submitted — so a second tab, a reload, and the
+ * poster itself all see the same sequence (docs/roadmap.md §2.4.1).
+ *
+ * EventSource reconnects on its own and sends the last frame's `id:` back as
+ * Last-Event-ID; the server replays the journal from there. `from` positions
+ * the very first connection: the cursor the page was painted at, or 0 for a
+ * conversation created seconds ago (its journal is empty, so "everything from
+ * the start" is exactly what the DOM is missing).
+ *
+ * A render finishing in the background arrives here minutes after its turn;
+ * a completion missed while offline also survives, because the worker writes
+ * the message into the conversation before announcing it.
  */
-function openConversationStream(conversationId: string): void {
+
+interface LiveTurn extends AssistantTurn {
+  answer: string;
+  pendingTool: HTMLLIElement | null;
+}
+
+const liveTurns = new Map<string, LiveTurn>();
+/** Terminal outcomes of turns this page has seen, so a send can settle late. */
+const finishedTurns = new Map<string, boolean>();
+const turnWaiters = new Map<string, (ok: boolean) => void>();
+
+/** A turn from the stream, created on its first event and reused after. */
+function ensureLiveTurn(messageId: number, mode: string | null): LiveTurn {
+  const key = String(messageId);
+  const existing = liveTurns.get(key);
+  if (existing !== undefined) {
+    return existing;
+  }
+  const built = buildAssistantTurn(mode);
+  built.article.dataset.messageId = key;
+  renderedMessageIds.add(key);
+  stream.append(built.article);
+  const entry: LiveTurn = { ...built, answer: '', pendingTool: null };
+  liveTurns.set(key, entry);
+  return entry;
+}
+
+function streamData(event: Event): Record<string, unknown> | null {
+  try {
+    const parsed = JSON.parse((event as MessageEvent<string>).data) as unknown;
+    return typeof parsed === 'object' && parsed !== null
+      ? (parsed as Record<string, unknown>)
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** The assistant message a turn event belongs to, or null to drop the frame. */
+function turnKeyOf(data: Record<string, unknown>): string | null {
+  const messageId = readNumber(data, 'messageId');
+  return Number.isFinite(messageId) ? String(messageId) : null;
+}
+
+function turnOf(data: Record<string, unknown>): LiveTurn | null {
+  const key = turnKeyOf(data);
+  if (key === null) {
+    return null;
+  }
+  // turn_started always precedes the deltas in the journal; the fallback
+  // creation only guards against a cursor that started mid-window.
+  return ensureLiveTurn(Number(key), null);
+}
+
+function finishLiveTurn(turn: LiveTurn): void {
+  if (turn.reasoningBody.textContent === '') {
+    turn.reasoningSection.remove();
+  } else {
+    turn.reasoningSection.open = false;
+  }
+  if (turn.content.textContent === '') {
+    turn.content.remove();
+  }
+}
+
+function settleTurn(key: string, ok: boolean): void {
+  finishedTurns.set(key, ok);
+  const waiter = turnWaiters.get(key);
+  if (waiter !== undefined) {
+    turnWaiters.delete(key);
+    waiter(ok);
+  }
+}
+
+/** Wait for a turn's `turn_done` / `turn_error` — possibly already seen. */
+function waitForTurn(key: string): Promise<boolean> {
+  const settled = finishedTurns.get(key);
+  if (settled !== undefined) {
+    return Promise.resolve(settled);
+  }
+  return new Promise<boolean>((resolve) => {
+    turnWaiters.set(key, resolve);
+  });
+}
+
+function showTurnError(message: string): void {
+  const paragraph = document.createElement('p');
+  paragraph.className = 'turn-error';
+  paragraph.textContent = message;
+  stream.append(paragraph);
+  scrollToBottom();
+}
+
+let sendBusy = false;
+let streamTurnRunning = false;
+
+/**
+ * One composer lock for two reasons: this page has a submit awaiting its
+ * terminal event, or the stream says a turn of this conversation is running
+ * (possibly started from another tab — and the server enforces one turn per
+ * conversation anyway, so unlocking here would just earn a 409).
+ */
+function syncComposer(): void {
+  const locked = sendBusy || streamTurnRunning;
+  sendButton.disabled = locked;
+  input.disabled = locked;
+}
+
+function openConversationStream(conversationId: string, from: string | null): void {
   closeConversationStream();
-  const source = new EventSource(`/api/conversations/${conversationId}/events`);
+  liveTurns.clear();
+  finishedTurns.clear();
+  turnWaiters.clear();
+  streamTurnRunning = false;
+
+  const query = from === null || from.length === 0 ? '' : `?from=${encodeURIComponent(from)}`;
+  const source = new EventSource(`/api/v1/conversations/${conversationId}/stream${query}`);
+
+  source.addEventListener('user_message', (event) => {
+    const data = streamData(event);
+    const message = data === null ? undefined : data.message;
+    if (typeof message === 'object' && message !== null) {
+      appendStoredMessage(message as StoredMessage, true);
+    }
+  });
+
+  source.addEventListener('turn_started', (event) => {
+    const data = streamData(event);
+    const key = data === null ? null : turnKeyOf(data);
+    if (data === null || key === null) {
+      return;
+    }
+    const mode = typeof data.mode === 'string' ? data.mode : null;
+    ensureLiveTurn(Number(key), mode);
+    streamTurnRunning = true;
+    syncComposer();
+  });
+
+  source.addEventListener('reasoning', (event) => {
+    const data = streamData(event);
+    const turn = data === null ? null : turnOf(data);
+    if (data !== null && turn !== null) {
+      turn.reasoningBody.append(readString(data, 'delta'));
+    }
+  });
+
+  source.addEventListener('text', (event) => {
+    const data = streamData(event);
+    const turn = data === null ? null : turnOf(data);
+    if (data !== null && turn !== null) {
+      turn.answer += readString(data, 'delta');
+      turn.content.innerHTML = marked.parse(turn.answer, { async: false });
+    }
+  });
+
+  source.addEventListener('tool_call', (event) => {
+    const data = streamData(event);
+    const turn = data === null ? null : turnOf(data);
+    if (data !== null && turn !== null) {
+      turn.pendingTool = appendToolCall(turn.toolList, readString(data, 'name'));
+    }
+  });
+
+  source.addEventListener('tool_result', (event) => {
+    const data = streamData(event);
+    const turn = data === null ? null : turnOf(data);
+    if (data !== null && turn !== null && turn.pendingTool !== null) {
+      turn.pendingTool.textContent = `${readString(data, 'name')} — ${readString(data, 'summary')}`;
+      turn.pendingTool = null;
+    }
+  });
+
+  source.addEventListener('asset', (event) => {
+    const data = streamData(event);
+    const turn = data === null ? null : turnOf(data);
+    if (data !== null && turn !== null) {
+      appendAsset(turn.assetList, readString(data, 'url'), readString(data, 'kind'));
+    }
+  });
+
+  source.addEventListener('turn_done', (event) => {
+    const data = streamData(event);
+    const key = data === null ? null : turnKeyOf(data);
+    if (key !== null) {
+      const turn = liveTurns.get(key);
+      if (turn !== undefined) {
+        finishLiveTurn(turn);
+        liveTurns.delete(key);
+      }
+      settleTurn(key, true);
+    }
+    streamTurnRunning = false;
+    syncComposer();
+    scrollToBottom();
+  });
+
+  source.addEventListener('turn_error', (event) => {
+    const data = streamData(event);
+    const key = data === null ? null : turnKeyOf(data);
+    if (key !== null) {
+      const turn = liveTurns.get(key);
+      if (turn !== undefined) {
+        const error = document.createElement('p');
+        error.className = 'turn-error';
+        error.textContent = data === null ? '' : readString(data, 'message');
+        turn.article.append(error);
+        finishLiveTurn(turn);
+        liveTurns.delete(key);
+      }
+      settleTurn(key, false);
+    }
+    streamTurnRunning = false;
+    syncComposer();
+  });
 
   source.addEventListener('message_added', (event) => {
-    const payload = JSON.parse((event as MessageEvent<string>).data) as {
-      type: string;
-      message: StoredMessage;
-    };
-    appendStoredMessage(payload.message);
+    const data = streamData(event);
+    const message = data === null ? undefined : data.message;
+    if (typeof message === 'object' && message !== null) {
+      appendStoredMessage(message as StoredMessage);
+    }
   });
 
   source.addEventListener('task_updated', (event) => {
-    const payload = JSON.parse((event as MessageEvent<string>).data) as {
-      taskId: number;
-      kind: string;
-      status: string;
-    };
-    upsertPendingTask(payload.taskId, payload.kind, payload.status);
+    const payload = streamData(event);
+    if (payload === null) {
+      return;
+    }
+    upsertPendingTask(readNumber(payload, 'taskId'), readString(payload, 'kind'), readString(payload, 'status'));
+  });
+
+  // The cursor this stream asked for is older than the journal's retained
+  // window: the missed events cannot be replayed. The persisted rows are
+  // complete (the server never journals a fact it does not also store), so a
+  // plain reload repaints the truth — the same thing the initial paint does.
+  source.addEventListener('resync', () => {
+    window.location.reload();
   });
 
   conversationStream = source;
@@ -624,7 +788,7 @@ function buildEmptyConversationItem(): HTMLLIElement {
 }
 
 async function refreshConversationList(): Promise<void> {
-  const response = await fetch('/api/conversations');
+  const response = await fetch('/api/v1/conversations');
   if (!response.ok) {
     return;
   }
@@ -684,7 +848,7 @@ function askToDelete(button: HTMLButtonElement): void {
  * so the deletion is always two clicks.
  */
 async function deleteConversation(id: number): Promise<void> {
-  const response = await fetch(`/api/conversations/${id}/delete`, { method: 'POST' });
+  const response = await fetch(`/api/v1/conversations/${id}/delete`, { method: 'POST' });
   if (!response.ok) {
     showConversationError(`删除失败（HTTP ${response.status}）`);
     return;
@@ -699,128 +863,91 @@ async function deleteConversation(id: number): Promise<void> {
   await refreshConversationList();
 }
 
-let busy = false;
+/** Creates a conversation and opens its stream before anything is posted.
+ *
+ * `from=0` is load-bearing: EventSource construction is not the same moment
+ * as the server seeing the connection, so a turn posted right after this could
+ * publish its first events before the stream handler runs. A cursor of 0 makes
+ * the handler replay them instead of starting live past them — the ordering
+ * the poster used to get for free by reading its own POST response.
+ */
+async function createConversation(prompt: string): Promise<number> {
+  const response = await fetch('/api/v1/conversations', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ prompt }),
+  });
+  if (!response.ok) {
+    throw new Error(`无法创建会话（HTTP ${response.status}）`);
+  }
+  const created = (await response.json()) as { conversationId: number };
+  const conversationId = String(created.conversationId);
+  body.dataset.conversationId = conversationId;
+  // Keep the address bar in sync so a reload restores this conversation.
+  window.history.replaceState(null, '', `${window.location.pathname}?c=${conversationId}`);
+  void refreshConversationList();
+  openConversationStream(conversationId, '0');
+  return created.conversationId;
+}
 
+function submitTurn(conversationId: string, prompt: string): Promise<globalThis.Response> {
+  return fetch(`/api/v1/conversations/${conversationId}/turns`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      prompt,
+      mode: currentMode,
+    }),
+  });
+}
+
+/**
+ * Submits one turn and waits for its terminal event.
+ *
+ * Nothing here draws the turn: the user echo, the assistant shell and every
+ * delta arrive on the conversation stream, in the journal's order, exactly
+ * once — the page is a subscriber like any other (docs/roadmap.md §2.4.1).
+ * The POST only answers 202; the turn is no longer this connection's child,
+ * which is also why closing the page no longer cancels it.
+ */
 async function sendPrompt(prompt: string): Promise<void> {
-  if (busy) {
+  if (sendBusy || streamTurnRunning) {
     return;
   }
-  busy = true;
-  sendButton.disabled = true;
-  input.disabled = true;
-
-  const userTurn = buildUserTurn(prompt);
-  stream.append(userTurn);
-  appendTurnAnchor(userTurn, prompt);
-  const turn = buildAssistantTurn();
-  stream.append(turn.article);
-  scrollToBottom();
-
-  let answer = '';
-  let pendingTool: HTMLLIElement | null = null;
+  sendBusy = true;
+  syncComposer();
 
   try {
-    const conversationId = body.dataset.conversationId ?? '';
-    const response = await fetch('/api/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        prompt,
-        mode: currentMode,
-        conversationId: conversationId.length > 0 ? Number(conversationId) : null,
-      }),
-    });
-
+    let conversationId = body.dataset.conversationId ?? '';
+    if (conversationId.length === 0) {
+      conversationId = String(await createConversation(prompt));
+    }
+    let response = await submitTurn(conversationId, prompt);
+    if (response.status === 404) {
+      // The conversation went away since the page was painted (another tab
+      // deleted it). Recreate and retry once; the prompt was never stored.
+      conversationId = String(await createConversation(prompt));
+      response = await submitTurn(conversationId, prompt);
+    }
     if (!response.ok) {
-      throw new Error(`请求失败（HTTP ${response.status}）`);
+      const detail = (await response.json().catch(() => ({}))) as { message?: unknown };
+      showTurnError(
+        typeof detail.message === 'string' && detail.message.length > 0
+          ? detail.message
+          : `提交失败（HTTP ${response.status}）`,
+      );
+      return;
     }
 
-    for await (const frame of readSseFrames(response)) {
-      switch (frame.event) {
-        case 'connected': {
-          const id = readNumber(frame.data, 'conversationId');
-          if (Number.isFinite(id)) {
-            const isNew = body.dataset.conversationId !== String(id);
-            body.dataset.conversationId = String(id);
-            if (isNew) {
-              // Keep the address bar in sync so a reload restores this conversation.
-              window.history.replaceState(null, '', `${window.location.pathname}?c=${id}`);
-              void refreshConversationList();
-              // Long-running jobs push their results here, not on this turn stream.
-              openConversationStream(String(id));
-            }
-          }
-          break;
-        }
-
-        case 'reasoning': {
-          turn.reasoningBody.append(readString(frame.data, 'delta'));
-          break;
-        }
-
-        case 'text': {
-          answer += readString(frame.data, 'delta');
-          turn.content.innerHTML = marked.parse(answer, { async: false });
-          break;
-        }
-
-        case 'tool_call': {
-          const name = readString(frame.data, 'name');
-          pendingTool = appendToolCall(turn.toolList, name);
-          break;
-        }
-
-        case 'tool_result': {
-          const summary = readString(frame.data, 'summary');
-          if (pendingTool !== null) {
-            const name = pendingTool.textContent?.replace(' 执行中…', '') ?? '';
-            pendingTool.textContent = `${name} — ${summary}`;
-            pendingTool = null;
-          }
-          break;
-        }
-
-        case 'asset': {
-          appendAsset(
-            turn.assetList,
-            readString(frame.data, 'url'),
-            readString(frame.data, 'kind'),
-          );
-          break;
-        }
-
-        case 'error': {
-          const message = readString(frame.data, 'message');
-          const error = document.createElement('p');
-          error.className = 'turn-error';
-          error.textContent = message;
-          turn.article.append(error);
-          break;
-        }
-
-        default:
-          break;
-      }
-      scrollToBottom();
-    }
+    const created = (await response.json()) as { conversationId: number; messageId: number };
+    // The stream may already have carried the terminal event (its frames race
+    // the POST response); waitForTurn settles in that case too.
+    await waitForTurn(String(created.messageId));
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    const paragraph = document.createElement('p');
-    paragraph.className = 'turn-error';
-    paragraph.textContent = message;
-    turn.article.append(paragraph);
+    showTurnError(error instanceof Error ? error.message : String(error));
   } finally {
-    if (turn.reasoningBody.textContent === '') {
-      turn.reasoningSection.remove();
-    } else {
-      turn.reasoningSection.open = false;
-    }
-    if (turn.content.textContent === '') {
-      turn.content.remove();
-    }
-    busy = false;
-    sendButton.disabled = false;
-    input.disabled = false;
+    sendBusy = false;
+    syncComposer();
     input.focus();
     scrollToBottom();
   }
@@ -920,7 +1047,12 @@ function resetToNewConversation(): void {
   stream.replaceChildren();
   closeConversationStream();
   renderedMessageIds.clear();
+  liveTurns.clear();
+  finishedTurns.clear();
+  turnWaiters.clear();
+  streamTurnRunning = false;
   clearTurnAnchors();
+  syncComposer();
   // Drop ?c=<id>, otherwise a reload re-renders the conversation we just left.
   window.history.replaceState(null, '', window.location.pathname);
   void refreshConversationList();
@@ -1170,7 +1302,10 @@ updateActiveAnchor();
 
 const initialConversationId = body.dataset.conversationId;
 if (initialConversationId !== undefined && initialConversationId.length > 0) {
-  openConversationStream(initialConversationId);
+  // The server painted this page from the rows up to startSeq; the stream
+  // continues from exactly there — before a still-running turn's first event,
+  // or at the newest one if nothing is in flight.
+  openConversationStream(initialConversationId, body.dataset.startSeq ?? null);
 }
 
 input.focus();

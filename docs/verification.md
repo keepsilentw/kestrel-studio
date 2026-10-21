@@ -394,3 +394,44 @@ Input audio buffer exceeded maximum duration (30s). Please commit or clear the b
 收到 error 后本次按住不再送音频；中继在上游拒绝后不再往缓冲区里灌，且一次失败只往页面发一行。
 对真实端点复测（故意推送 35 秒不提交）：**页面只收到 1 条 error**（改前是数百条），
 服务端日志写下 `Voice turn failed: Input audio buffer exceeded maximum …`。
+
+## 8. 二期：提交与订阅分开、对话级事件流续传实测（2026-10-21）
+
+环境：开发机本地，独立烟测进程（`PORT=8899`，scratch 目录里的独立 DB 与 storage，
+不碰常驻实例与真实库），凭据走 cc-switch 解析链，**供应商是活的**。
+
+### 8.1 链路事实（`mode=chat` 一轮，真实 LLM）
+
+| 步骤 | 实测结果 |
+|---|---|
+| `POST /api/v1/conversations` | `201 {conversationId:1}` |
+| `POST /api/v1/conversations/1/turns` | `202 {conversationId:1, messageId:2}`——响应不带任何流 |
+| 同一会话立刻二次提交 | `409 {message:"该会话已有轮次在进行中"}` |
+| 事件日志终态（直查 SQLite） | `[(1,user_message),(2,turn_started),(3,text),(4,text),(5,text),(6,turn_done)]`；assistant 行已收尾为非空正文 |
+| 完成后 `GET .../stream?from=0` | 首帧 `connected`（**无 id**），随后 `id: 1` 的 `user_message`——落库部分的日志重放，跨进程重启也能放 |
+| 重连带 `Last-Event-ID: 2` | 第一条业务帧是 `id: 3` 的 `text`——续传游标生效 |
+| SSR 契约 | 轮次进行中的页面带 `data-conversation-id="1"` `data-start-seq="1"`：追及游标恰落在那一轮 `turn_started` 之前，未完的助手占位行不画（由流重建） |
+
+结论：§4.2（architecture）描述的「先落日志再扇出、seq 会话内自增、
+Last-Event-ID 重放、无游标连接按未完轮次定位」全部按设计工作。
+
+### 8.2 质量门与覆盖面
+
+- `make typecheck`（三份 tsconfig）+ `make test`：**30 个文件 510 个用例全绿**。
+- 新增/重写的测试面：事件日志服务（seq/重放/断档/裁剪/跨会话隔离）、HTTP 面
+  （202/409/404 写规则、流的重放与 resync、追及游标、启动恢复）、SSR 契约
+  （`data-start-seq`、未完占位行不画、`/api/v1` 资产 URL）、客户端脚本（轮次不
+  本地拼装、按 messageId 键控渲染、锁/解锁、resync 触发重载、新建会话以 from=0
+  先开流再提交）。
+
+### 8.3 本轮未覆盖（诚实边界）
+
+- **图片/视频资产事件未经真实供应商端到端**：`asset` 事件在流上的行为由单元与
+  HTTP 测试覆盖，§2（2026-09-20）的出图实测证据仍写于旧轮次流形态，引用者注意。
+- **浏览器控制台未复查**：本轮无 Chrome DevTools MCP 可用；客户端行为由 jsdom
+  帧序列测试覆盖（教训使然，见 implementation-notes §8），但控制台零噪音契约
+  待下次人工在浏览器里过一遍。
+- **重启进程后的续传**未经真机演练（烟测里流在日志落库后新开连接即重放，等价
+  于跨进程读表）；`resync` 真实触发依赖 2000 条保留窗口，由测试模拟。
+- 语义变化确认：**断开连接不再中止轮次**（设计如此），旧的 `req.close → abort`
+  路径随 POST 流退役。

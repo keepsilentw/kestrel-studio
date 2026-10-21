@@ -320,7 +320,7 @@ describe('ConversationService 资产', () => {
     const view = harness.service.views(conversationId).find((m) => m.assets.length > 0);
 
     expect(view?.assets).toEqual([
-      { id: assetId, kind: 'image', url: `/api/assets/${assetId}/download`, mime: 'image/png', bytes: 2048 },
+      { id: assetId, kind: 'image', url: `/api/v1/assets/${assetId}/download`, mime: 'image/png', bytes: 2048 },
     ]);
   });
 
@@ -514,10 +514,16 @@ describe('ConversationService.deleteConversations', () => {
       .run(conversationId, Date.now(), Date.now());
   }
 
-  it('删掉会话、消息、资产、任务与磁盘文件', async () => {
+  it('删掉会话、消息、资产、任务、事件日志与磁盘文件', async () => {
     const userId = harness.seedUser('u1');
     const { conversationId, filePath } = seedConversationWithAsset(userId, 'gone.png');
     seedTask(conversationId);
+    harness.raw
+      .prepare(
+        `INSERT INTO conversation_events (conversation_id, seq, message_id, type, payload, created_at)
+         VALUES (?, 1, NULL, 'turn_done', '{}', ?)`,
+      )
+      .run(conversationId, Date.now());
 
     await expect(harness.service.deleteConversations([conversationId])).resolves.toEqual({
       conversations: 1,
@@ -532,10 +538,11 @@ describe('ConversationService.deleteConversations', () => {
         .prepare(
           `SELECT (SELECT COUNT(*) FROM messages) AS m,
                   (SELECT COUNT(*) FROM assets) AS a,
-                  (SELECT COUNT(*) FROM generation_tasks) AS t`,
+                  (SELECT COUNT(*) FROM generation_tasks) AS t,
+                  (SELECT COUNT(*) FROM conversation_events) AS e`,
         )
         .get(),
-    ).toEqual({ m: 0, a: 0, t: 0 });
+    ).toEqual({ m: 0, a: 0, t: 0, e: 0 });
   });
 
   it('只动列出来的会话，其它会话与文件原样', async () => {
@@ -561,6 +568,58 @@ describe('ConversationService.deleteConversations', () => {
       assets: 0,
     });
     expect(harness.service.listByUser(userId).map((item) => item.id)).toEqual([conversationId]);
+  });
+});
+
+/**
+ * The unfinished-turn probes the stream's catch-up cursor and the boot
+ * recovery read. Both key off the same fact — an assistant row whose content
+ * is still the empty placeholder — so they live together with the rows.
+ */
+describe('ConversationService 未完轮次探针', () => {
+  function seededTurn(): { conversationId: number; messageId: number } {
+    const userId = harness.seedUser('u1');
+    const conversationId = harness.service.create(userId, 'q');
+    harness.service.appendUserMessage(conversationId, '正在问', 'image');
+    const messageId = harness.service.createAssistantPlaceholder(conversationId, 'image');
+    return { conversationId, messageId };
+  }
+
+  it('unfinishedAssistant 认出新起的占位行，完成或用户行都不算', () => {
+    const { conversationId, messageId } = seededTurn();
+    expect(harness.service.unfinishedAssistant(conversationId)).toBe(messageId);
+
+    harness.service.finalizeAssistant(messageId, {
+      content: '画好了',
+      reasoning: null,
+      toolCalls: null,
+    });
+    expect(harness.service.unfinishedAssistant(conversationId)).toBeNull();
+  });
+
+  it('跨会话不串：探针只看这条会话', () => {
+    const { conversationId } = seededTurn();
+    const other = harness.seedUser('u2');
+    const otherConversation = harness.service.create(other, 'q2');
+    expect(harness.service.unfinishedAssistant(otherConversation)).toBeNull();
+    expect(harness.service.unfinishedAssistant(conversationId) !== null).toBe(true);
+  });
+
+  it('abandonStalePlaceholders 收尾空占位，返回条数，不碰别的', () => {
+    const { conversationId, messageId } = seededTurn();
+    const done = harness.service.appendAssistantMessage(conversationId, '好的', 'chat');
+
+    expect(harness.service.abandonStalePlaceholders()).toBe(1);
+
+    const staleView = harness.service.messageView(messageId);
+    expect(staleView?.content.length).toBeGreaterThan(0);
+    // The text matters beyond non-emptiness: buildInputItems skips empty
+    // content, and skipping this row would orphan the user message (the
+    // double-paid-video hazard, docs/architecture.md).
+    expect(staleView?.content).toContain('本轮处理失败');
+    expect(harness.service.messageView(done)?.content).toBe('好的');
+    // Idempotent: a second boot finds nothing left to end.
+    expect(harness.service.abandonStalePlaceholders()).toBe(0);
   });
 });
 

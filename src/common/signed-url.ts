@@ -19,7 +19,7 @@ export function buildSignedFrameUrl(assetId: number, now: number = Date.now()): 
   const { publicBaseUrl, sessionSecret } = loadConfig();
   const expiresAt = now + FRAME_TTL_MS;
   const sig = signature(assetId, expiresAt, sessionSecret);
-  return `${publicBaseUrl}/api/assets/${assetId}/frame?exp=${expiresAt}&sig=${sig}`;
+  return `${publicBaseUrl}/api/v1/assets/${assetId}/frame?exp=${expiresAt}&sig=${sig}`;
 }
 
 export function verifySignedFrame(

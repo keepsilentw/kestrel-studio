@@ -13,7 +13,7 @@ import { ConversationService } from '@/conversation/conversation.service';
  * guarded — an HMAC over the asset id plus an expiry, which cannot be replayed
  * or edited into a different asset.
  */
-@Controller('api')
+@Controller('api/v1')
 export class AssetFrameController {
   constructor(private readonly conversations: ConversationService) {}
 

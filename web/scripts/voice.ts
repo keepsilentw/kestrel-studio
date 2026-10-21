@@ -407,7 +407,7 @@ function handleFrame(raw: string): void {
  */
 function openEventStream(id: number): void {
   events?.close();
-  const source = new EventSource(`/api/conversations/${id}/events`);
+  const source = new EventSource(`/api/v1/conversations/${id}/stream`);
   source.addEventListener('message_added', (event) => {
     const payload: unknown = JSON.parse((event as MessageEvent<string>).data);
     if (!isRecord(payload)) {

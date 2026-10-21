@@ -121,10 +121,25 @@ describe('SseWriter.send', () => {
     writer.open();
     writer.send('reasoning', { delta: 'a' });
     writer.send('text', { delta: 'b' });
-    writer.send('done', { messageId: 1 });
+    writer.send('turn_done', { messageId: 1 });
 
     const frames = await framesFrom(rec.written.join(''));
-    expect(frames.map((frame) => frame.event)).toEqual(['reasoning', 'text', 'done']);
+    expect(frames.map((frame) => frame.event)).toEqual(['reasoning', 'text', 'turn_done']);
+  });
+
+  it('带 seq 的事件帧有 id 行；不带的没有', async () => {
+    // The id line is what EventSource replays as Last-Event-ID. A frame
+    // without one (connected, resync) must not move the client's cursor.
+    const { res, rec } = recordingResponse();
+    const writer = new SseWriter(res);
+    writer.open();
+    writer.send('connected', { conversationId: 3 });
+    writer.send('text', { type: 'text', messageId: 9, delta: '好' }, 12);
+
+    expect(rec.written[0]).toBe('event: connected\ndata: {"conversationId":3}\n\n');
+    expect(rec.written[1]).toBe(
+      'id: 12\nevent: text\ndata: {"type":"text","messageId":9,"delta":"好"}\n\n',
+    );
   });
 });
 

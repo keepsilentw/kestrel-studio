@@ -22,7 +22,7 @@
 | 服务端 | NestJS 12 + Express | 指定 |
 | 渲染 | hbs (Handlebars) | 单进程 SSR，无独立前端服务，8G 机器内存友好 |
 | 前端 | 原生 TS + Vite 打包 | 无框架，Vite 只做 TS/CSS 打包，产物由 Nest 静态托管 |
-| 传输 | SSE over POST | 单向流式，比 WebSocket 简单；手写解析以支持 POST 与 abort |
+| 传输 | 对话级 SSE（GET + EventSource）+ 持久事件日志 | 提交与订阅分开；seq 续传见 §4.2。轮次事件曾挂在 POST 响应上，已改 |
 | 实时语音 | 裸 `ws` + 短时效票据鉴权 | 见 §11。只要裸 WS 的帧控制，不引入 socket.io 及其自有协议 |
 | 数据库 | SQLite + drizzle-orm + better-sqlite3 | 轻量、类型安全、无 Prisma 的引擎二进制开销 |
 | 登录 | express-session + passport-local + bcrypt | SSR 下 session cookie 比 JWT 自然 |
@@ -35,8 +35,9 @@
 flowchart TB
   subgraph Browser["浏览器"]
     SSR["GET /<br/>hbs 首屏骨架"]
-    CHAT["POST /api/chat<br/>fetch + ReadableStream"]
-    MISC["GET /api/conversations<br/>GET /api/assets/:id/download"]
+    SUB["POST /api/v1/conversations/:id/turns<br/>202 即返回"]
+    EV["GET /api/v1/conversations/:id/stream<br/>EventSource，seq 续传"]
+    MISC["GET /api/v1/conversations<br/>GET /api/v1/assets/:id/download"]
   end
 
   subgraph Nest["NestJS 单进程"]
@@ -57,7 +58,8 @@ flowchart TB
   end
 
   SSR --> View
-  CHAT --> Loop
+  SUB --> Loop
+  EV --> Loop
   MISC --> Conv
   MISC --> Media
   View --> Auth
@@ -68,6 +70,7 @@ flowchart TB
   Conv --> DB
   Media --> DB
   Media --> Files
+  Loop -.->|每条事件先落日志再扇出| DB
   Llm -.->|HTTP SSE| Bailian["百炼 Token Plan<br/>/compatible-mode/v1"]
   Media -.->|HTTP| Bailian
 ```
@@ -80,21 +83,49 @@ hbs 只负责渲染首屏骨架：登录态判断、历史会话侧栏、页面�
 **主体区域从第一个 token 起就全部由客户端 JS 拼 DOM**，服务端不流式吐 HTML 片段。
 这条边界必须在实现时守住，否则容易出现「服务端模板里塞了流式占位逻辑」的拧巴写法。
 
-### 4.2 用 fetch + ReadableStream 读 SSE，不用 EventSource
+### 4.2 提交与订阅分开：一条对话级事件流
 
-`EventSource` 只支持 GET、不能带自定义 header，而发消息需要 POST 一段 JSON。
-因此前端用 `fetch` + `ReadableStream` 手动按 `\n\n` 切分 SSE 帧。
-附带好处：可主动 `abort()`、可携带 CSRF token。
+轮次不再挂在发起它的 POST 上。产品 API（`/api/v1`，为 App / 小程序预留同一张
+边界，docs/roadmap.md §2.3）只有一个流式端点：
 
-Nest 侧用 `@Res()` 裸写 `text/event-stream` 响应，不使用 `@Sse()` 装饰器（它只支持 GET）。
+| 调用 | 语义 |
+|---|---|
+| `POST /api/v1/conversations` | 建会话，返回 `{conversationId}` |
+| `POST /api/v1/conversations/:id/turns` | 提交一轮，立即 `202 {conversationId, messageId}` |
+| `GET /api/v1/conversations/:id/stream` | 对话级事件流，事件带会话内自增 `seq`，支持 `Last-Event-ID` 断线续传 |
+
+要点的取舍：
+
+- **轮次在服务端跑（`TurnRunner`），客户端断开不再取消轮次。** 移动端断网、
+  切后台是日常，付费生成不能是连接的殉葬品——这正是二期的目的。代价是旧的
+  「断开即中止」语义没了；防跑偏靠既有的 `MAX_TOOL_ROUNDS` 与单次工具 120s
+  超时，不再有连接可拆。
+- **一个会话同时只跑一轮**，第二次提交吃 `409`。以前「一条连接」本身就是锁，
+  分开之后必须显式记账——防的是重复计费。
+- 每条事件（思考增量、工具调用、资产、后台任务进度、追加的消息）先写进
+  `conversation_events` 表（`seq` 会话内自增）再扇出到连接，SSE 的 `id:` 字段
+  就是它。重连时从表里重放 `seq > 游标` 的事件；**新连接（无游标）也自动定位**：
+  会话有未完轮次时游标回退到该轮第一件事之前——首屏 SSR 刻意不画未完成的
+  助手占位行，页面与流因此能无缝接上。`?from=` 参数是客户端已知游标的入口
+  （首屏 stamp 在 `body[data-start-seq]`；新建会话传 0）。
+- **游标低于保留窗口时只发一帧 `resync`**，客户端从落库的行重建（重载页面）。
+  日志只补「尚未在别处落定」的部分——正文、思考、工具记录、资产始终以
+  `messages` / `assets` 为真源，所以宁可重建，不给半个回放。
+- 流是纯 GET + 同源 cookie，浏览器直接用最自然的 `EventSource`：自动重连、
+  自动带 `Last-Event-ID`。手写 fetch+ReadableStream 帧读取器随它伺候的 POST
+  流一起退役。服务端仍用 `@Res()` 裸写（`common/sse.ts` 的 `SseWriter`），
+  `@Sse()` 装饰器带不了心跳注释帧与自定义头。
+- 轮次事件的 `messageId` 就是该轮助手行的 id（roadmap 草案里的 `turnId`）：
+  不另造一个只有服务端认识的标识符。
 
 ### 4.3 心跳与超时
 
 文生图单次耗时几十秒，期间没有任何数据帧，长连接会被中间层或浏览器判定为空闲而掐断。
 
 - **心跳**：每 15s 发一个 `: ping` 注释帧（SSE 规范中以 `:` 开头的行为注释，客户端会忽略）。
-- **工具超时**：单次工具执行设上限（文生图 120s）。超时不挂死连接，而是推
-  `tool_result {ok: false}` 把失败事实回灌给 LLM，由它决定重试还是换 prompt。
+  会话事件流是常态长连接，这条比旧的轮次流更要靠它。
+- **工具超时**：单次工具执行设上限（文生图 120s）。超时不挂死连接，而是把
+  `tool_result {ok: false}` 回灌给 LLM 并进日志，由它决定重试还是换 prompt。
 
 ### 4.4 reasoning 实测可用
 
@@ -113,13 +144,19 @@ Nest 侧用 `@Res()` 裸写 `text/event-stream` 响应，不使用 `@Sse()` 装�
 | `users` | id, username, password_hash, role, created_at |
 | `sessions` | sid, sess, expire —— 由 better-sqlite3-session-store 独占管理，不纳入 drizzle schema |
 | `conversations` | id, user_id, title, deleted_at, created_at, updated_at |
-| `messages` | id, conversation_id, role, content, reasoning, tool_calls, created_at |
+| `messages` | id, conversation_id, role, content, reasoning, tool_calls, mode, created_at |
 | `assets` | id, message_id, kind, file_path, source_url, mime, bytes, created_at |
+| `generation_tasks` | 异步生成任务（视频）：提交即落库、后台轮询、成功即镜像落盘并追加一条 assistant 消息 |
+| `conversation_events` | id, conversation_id, seq, message_id, type, payload, created_at —— 流日志，见 §4.2 |
 
 设计要点：
 
 - 登录会话由 better-sqlite3-session-store 独占写入 `sessions` 表。drizzle schema 故意不建模它，
   避免两个写入方共管同一张表。
+- **`conversation_events.seq` 是会话内计数，不是全局 id**：全局 id 会把「新会话的
+  第一条事件」与「重放窗口已被裁剪」混淆（前者该重放，后者该 resync）。
+  保留窗口每会话最新 2000 条，轮次结束时裁剪；会话硬删除时随会话级联。
+  日志行是派生数据，不是第二个真源——可从 `messages` 重建的事实都在那里。
 - **用户侧的"删除会话"是软删除**：只写 `conversations.deleted_at`，消息、资产与磁盘文件一律不动，
   于是超管那边整段历史仍可读（见 §12）。真要抹掉数据的是**删除账号**那条路径，它走硬级联。
   两者的实现分别是 `softDeleteConversations()` 与 `deleteConversations()`，同一个 service 里并存，
@@ -140,48 +177,60 @@ Nest 侧用 `@Res()` 裸写 `text/event-stream` 响应，不使用 `@Sse()` 装�
 ```mermaid
 sequenceDiagram
   participant U as 浏览器
-  participant N as Nest (AgentLoop)
+  participant N as Nest (TurnRunner + AgentLoop)
+  participant J as 事件日志 (conversation_events)
   participant L as 百炼 LLM
-  participant T as 文生图工具
 
-  U->>N: POST /api/chat {conversationId, prompt}
-  N->>N: 存用户消息
-  N-->>U: SSE connected
+  U->>N: POST /api/v1/conversations/:id/turns {prompt, mode}
+  N->>N: 存用户消息 + 助手占位行
+  N->>J: user_message, turn_started
+  N-->>U: 202 {conversationId, messageId}（轮次继续后台跑）
+  U->>N: GET /api/v1/conversations/:id/stream
+  N-->>U: 重放 seq>游标 的事件，随后追活流
   loop 最多 5 轮
     N->>L: 组装上下文 + 工具声明，stream=true
     loop 流式接收
       L-->>N: reasoning / text delta
-      N-->>U: event: reasoning / text
+      N->>J: 逐条落日志
+      J-->>U: event: reasoning / text（带 id: seq）
     end
     alt LLM 请求调工具
-      N-->>U: event: tool_call
-      N->>T: 执行 generate_image
-      T-->>N: 图片路径
-      N-->>U: event: tool_result / asset
+      J-->>U: event: tool_call
+      N->>N: 执行工具（120s 上限）
+      J-->>U: event: tool_result / asset
       N->>L: 回灌工具结果
     else LLM 直接作答
-      N-->>U: event: text
+      J-->>U: event: text
     end
   end
-  N->>N: 存助手消息 + 资产元数据
-  N-->>U: event: done {messageId}
+  N->>N: 收尾助手行（finally 必执行）
+  N->>J: turn_done（或 turn_error），裁剪旧窗口
+  J-->>U: event: turn_done {messageId}
 ```
 
-一轮最多 5 次 LLM 往返，防止工具调用死循环。
-每轮的工具结果都以 `tool_result` 事件同步推给前端，用户能看到「思考 → 调工具 → 拿结果 → 再思考」的全过程。
+一轮最多 5 次 LLM 往返，防止工具调用死循环。事件先落日志再扇出，顺序因此
+只有一个定义；正在跑的会话不接收第二个轮次（409）。
 
 ### SSE 事件表
 
-| event | data | 说明 |
-|---|---|---|
-| `connected` | `{conversationId}` | 流已建立；新会话时前端据此更新会话与侧栏 |
-| `reasoning` | `{delta}` | 模型思考增量 |
-| `text` | `{delta}` | 助手正文增量 |
-| `tool_call` | `{name, arguments, status}` | 开始调用工具 |
-| `tool_result` | `{name, ok, summary}` | 工具执行结果 |
-| `asset` | `{id, kind, url, mime, bytes}` | 生成出的图片 |
-| `done` | `{conversationId, messageId}` | 本轮结束 |
-| `error` | `{message}` | 出错 |
+真源是 `src/common/sse.ts` 的闭合联合类型（轮次与会话事件都在内）。
+带 `id` 的事件都进了日志，可按游标重放；连接级事件不带 id，不得移动客户端游标。
+
+| event | id | data | 说明 |
+|---|---|---|---|
+| `connected` | — | `{conversationId}` | 这条连接已就绪（连接级，不落日志） |
+| `resync` | — | `{conversationId, cursor}` | 游标低于保留窗口：客户端应从落库行重建 |
+| `user_message` | seq | `{message}` | 用户那句话的完整行（提交方也从流里看到它） |
+| `turn_started` | seq | `{messageId, mode}` | 助手占位行建立，一轮开始 |
+| `reasoning` | seq | `{messageId, delta}` | 模型思考增量 |
+| `text` | seq | `{messageId, delta}` | 助手正文增量 |
+| `tool_call` | seq | `{messageId, name, arguments, status}` | 开始调用工具 |
+| `tool_result` | seq | `{messageId, name, ok, summary}` | 工具执行结果 |
+| `asset` | seq | `{messageId, id, kind, url, mime, bytes}` | 生成出的图片/视频 |
+| `turn_done` | seq | `{messageId}` | 该轮结束（助手行已收尾落库） |
+| `turn_error` | seq | `{messageId, message}` | 该轮失败（同样已收尾） |
+| `task_updated` | seq | `{taskId, kind, status, error}` | 后台任务进度（视频渲染） |
+| `message_added` | seq | `{message}` | 无请求在飞时追加的消息（任务结果） |
 
 ## 7. 工具集
 
@@ -197,10 +246,10 @@ sequenceDiagram
 
 | 文件 | 页面 | 职责 |
 |---|---|---|
-| `web/scripts/main.ts` | `GET /` | 发送、SSE 帧解析、增量渲染 DOM、图片预览（原生 `<dialog>`）、下载弹窗。约 1030 行，单文件 |
+| `web/scripts/main.ts` | `GET /` | 提交轮次、订阅会话事件流并按事件绘制 DOM、图片预览（原生 `<dialog>`）、下载弹窗。单文件 |
 | `web/scripts/voice.ts` | `GET /voice` | 麦克风采集（AudioWorklet）、WS 客户端、音频播放、会话事件流订阅 |
 | `web/styles/main.css` | 两者共用 | 布局与主题，按 `:root` 变量 + 章节横幅组织 |
-| `web/scripts/test-setup.ts` | — | 测试用，补 jsdom 缺失的 `scrollIntoView` 与 `<dialog>` 的 `showModal`/`close` |
+| `__tests__/web/test-setup.ts` | — | 测试用，补 jsdom 缺失的 `scrollIntoView` 与 `<dialog>` 的 `showModal`/`close` |
 | （无） | `/admin` 各页 | 管理页刻意不引客户端脚本：纯表单 + 302，见 §12 |
 
 **助手**的最终文本用 `marked` 渲染成 HTML；用户自己那句话是**纯文本**——服务端转义后直接输出，
@@ -252,12 +301,12 @@ kestrel-studio/
     database/            drizzle 连接、schema、建表 DDL、admin seed
     bailian/             凭据解析、Responses API 流式客户端
     auth/                本地登录、session 序列化、守卫
-    conversation/        会话、消息与资产的 CRUD 与投影
-    agent/               AgentLoop、模式表、工具注册表
+    conversation/        会话、消息与资产的 CRUD 与投影；事件日志（conversation_events，扇出+重放+裁剪）
+    agent/               AgentLoop、轮次登记与提交（TurnRunner）、模式表、工具注册表
     media/               文生图 / 视频任务提交、文件落盘
-    task/                异步任务：任务表、事件扇出、后台轮询 worker
+    task/                异步任务：任务表、后台轮询 worker（事件经 conversation/ 的日志扇出）
     voice/               语音：协议、上游 WS 客户端、编排、网关、票据
-    chat/                SSE 端点、图片下载端点、签名帧端点
+    chat/                产品 API（/api/v1）：轮次提交、会话事件流、下载与签名帧端点
     admin/               账号管理：超管守卫、账号 CRUD、管理页控制器
     view/                hbs 控制器与共用的模板预处理（render.ts）
       views/             chat.hbs / voice.hbs / login.hbs / admin*.hbs / partials/turn.hbs
@@ -265,11 +314,14 @@ kestrel-studio/
     types/               .d.ts 声明（express / session store）
   web/                   前端源码
     public/logo.svg      静态资源，由 Vite 复制
-    scripts/main.ts      对话页：SSE 解析、流式渲染、图片预览
+    scripts/main.ts      对话页：提交轮次、事件流绘制、图片预览
     scripts/voice.ts     语音页：采集、WS、播放
     styles/main.css      两页共用
     vite-env.d.ts
   public/                Vite 产物 + logo（构建生成，gitignore）
+  __tests__/             单元测试（约定：不随源码目录存放）
+    server/              node 环境，按 src 的模块结构镜像
+    web/                 jsdom 环境：main.test.ts / voice.test.ts / test-setup.ts
   data/                  sqlite 文件（gitignore）
   storage/               生成的图片与视频（gitignore）
 ```
@@ -359,7 +411,7 @@ WebSocket 的 upgrade 不经过 Express，所以 `AuthenticatedGuard` 对它无�
   历史与 UI 回放（所以 `MessageView.mode` 是 `Mode | null`，`mode` 列本就可空）。语音**不把历史
   回放给模型**：上游会话自带上下文，落库不参与模型输入。
 - **图片走语音 socket 推**：语音会话没有轮次 SSE 流，而图片要在通话中立刻看到。
-- **视频走现有的会话事件流**（`GET /api/conversations/:id/events`）：一次渲染几分钟，届时通话早已
+- **视频走现有的会话事件流**（`GET /api/v1/conversations/:id/stream`）：一次渲染几分钟，届时通话早已
   结束，`task.worker` 会把结果作为新消息追加并推送——与文本路径完全一致。**注意现有的会话事件流
   不承载图片资产**（文本路径的图片走的是轮次流），所以两条渠道各司其职，不能只留一条。
 
@@ -387,7 +439,7 @@ WebSocket 的 upgrade 不经过 Express，所以 `AuthenticatedGuard` 对它无�
 
 两条规则值得单独说明：
 
-- **可见性只放宽"读"。** 写路径（`POST /api/chat` 的发轮次、语音建会话）始终要求 `isOwnedBy`：
+- **可见性只放宽"读"。** 写路径（`POST /api/v1/conversations/:id/turns` 的发轮次、语音建会话）始终要求 `isOwnedBy`：
   超管能看别人的会话，但发不进消息——否则一个手滑的 conversationId 就会污染别人的历史。
   规则在 `ConversationService` 里落成两个方法：`canRead()`（读，含资产下载）与 `isOwnedBy()`（写），
   两者的 SQL 条件由同一个私有的 `readableBy(viewer)` 生成。
@@ -417,11 +469,11 @@ WebSocket 的 upgrade 不经过 Express，所以 `AuthenticatedGuard` 对它无�
 
 ### 12.1 用户侧的删除是"隐藏"，不是"抹掉"
 
-历史会话下拉里的删除（`POST /api/conversations/:id/delete`）只写 `deleted_at`：
+历史会话下拉里的删除（`POST /api/v1/conversations/:id/delete`）只写 `deleted_at`：
 
 | 谁 | 结果 |
 |---|---|
-| 会话属主（普通账号） | 从侧栏、`/api/conversations`、消息回放、资产下载里全部消失；`?c=` 指过去会退回最近一个会话 |
+| 会话属主（普通账号） | 从侧栏、`/api/v1/conversations`、消息回放、资产下载里全部消失；`?c=` 指过去会退回最近一个会话 |
 | 超级管理员 | 在 `/admin/conversations` 里照旧看到，带「已删除 · 时间」标记；只读回放整段仍在，图片能打开 |
 
 - **二次确认是一个原生 `<dialog>`**：第一次点「删除」只是 `showModal()` 问一次，点「删除」按钮

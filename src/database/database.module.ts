@@ -55,6 +55,16 @@ CREATE TABLE IF NOT EXISTS assets (
   created_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS conversation_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  conversation_id INTEGER NOT NULL REFERENCES conversations(id),
+  seq INTEGER NOT NULL,
+  message_id INTEGER,
+  type TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS generation_tasks (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   conversation_id INTEGER NOT NULL REFERENCES conversations(id),
@@ -79,6 +89,7 @@ CREATE INDEX IF NOT EXISTS idx_messages_conversation ON messages(conversation_id
 CREATE INDEX IF NOT EXISTS idx_assets_message ON assets(message_id);
 CREATE INDEX IF NOT EXISTS idx_tasks_active ON generation_tasks(status, updated_at);
 CREATE INDEX IF NOT EXISTS idx_tasks_conversation ON generation_tasks(conversation_id, id);
+CREATE INDEX IF NOT EXISTS idx_events_conversation ON conversation_events(conversation_id, seq);
 `;
 
 /**
