@@ -695,15 +695,8 @@ pub async fn connect(base_url: &str, model: &str, api_key: &str) -> Result<Upstr
             .map_err(|error| UpstreamError::Rejected(format!("TLS with {host}: {error}")))?;
 
         let key = client_key();
-        tls.write_all(&build_handshake_request(&path_and_query, &host, &key, api_key))
-            .await
-            .map_err(|error| UpstreamError::Malformed(format!("sending the handshake: {error}")))?;
-        tls.flush().await.ok();
-
+        handshake(&mut tls, &host, &path_and_query, &key, api_key).await?;
         let (reader, writer) = tokio::io::split(tls);
-        let mut reader = reader;
-        let head = read_response_head(&mut reader).await?;
-        parse_handshake_response(&head, &key)?;
         // The halves stay split: each one is owned by exactly one pump task, which
         // is the shape `relay::pump_in` and `relay::pump_out` already take.
         Ok::<_, UpstreamError>(UpstreamSocket { reader, writer })
@@ -712,6 +705,25 @@ pub async fn connect(base_url: &str, model: &str, api_key: &str) -> Result<Upstr
     .map_err(|_| UpstreamError::Rejected("语音会话建立超时".to_string()))??;
 
     Ok(opened)
+}
+
+/// The WebSocket upgrade exchange over an already-secure stream.
+///
+/// Split from [`connect`] because the TLS dial cannot be exercised in this
+/// environment - no outbound network, and the sandbox denies binding even a
+/// loopback port - while this half is only bytes: a test hands it a duplex stream
+/// with a scripted server and checks the request we send and how we treat the
+/// reply. That leaves the dial itself the only unverified step on the upstream leg.
+pub async fn handshake<I>(io: &mut I, host: &str, path_and_query: &str, key: &str, api_key: &str) -> Result<(), UpstreamError>
+where
+    I: AsyncReadExt + AsyncWriteExt + Unpin,
+{
+    io.write_all(&build_handshake_request(path_and_query, host, key, api_key))
+        .await
+        .map_err(|error| UpstreamError::Malformed(format!("sending the handshake: {error}")))?;
+    io.flush().await.ok();
+    let head = read_response_head(io).await?;
+    parse_handshake_response(&head, key)
 }
 
 /// The trust anchors. `webpki-roots` rather than the platform store: the container
@@ -734,8 +746,87 @@ pub struct UpstreamSocket {
 
 #[cfg(test)]
 mod dial_pieces {
-    use super::{endpoint, parse_handshake_response, read_response_head, UpstreamError};
+    use super::{
+        accept_key, endpoint, handshake, parse_handshake_response, read_response_head,
+        UpstreamError,
+    };
     use tokio::io::AsyncWriteExt;
+
+    #[tokio::test]
+    async fn the_upgrade_exchange_sends_our_key_and_accepts_only_its_signature() {
+        // The TLS dial cannot be reached from here, but the exchange that follows it
+        // is only bytes: a scripted server on the other end of a duplex stream pins
+        // what we write and what we agree to.
+        let key = "dGVzdA==";
+        let accept = accept_key(key).expect("accept");
+        let (client, mut server) = tokio::io::duplex(4 << 10);
+        let mut client = client;
+        let exchanged = tokio::spawn(async move {
+            handshake(&mut client, "provider.test", "/api-ws/v1/realtime?model=m", key, "sk-test").await
+        });
+
+        let head = read_response_head(&mut server).await.expect("our request");
+        assert!(
+            head.starts_with("GET /api-ws/v1/realtime?model=m HTTP/1.1\r\n"),
+            "{head:?}"
+        );
+        assert!(head.contains(&format!("Sec-WebSocket-Key: {key}\r\n")), "{head}");
+        assert!(head.contains("Authorization: Bearer sk-test\r\n"), "{head}");
+        assert!(head.contains("Upgrade: websocket\r\n"), "{head}");
+        assert!(head.ends_with("\r\n\r\n"), "the request must terminate: {head:?}");
+
+        server
+            .write_all(
+                format!(
+                    "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: {accept}\r\n\r\n"
+                )
+                .as_bytes(),
+            )
+            .await
+            .expect("the 101");
+        exchanged.await.expect("join").expect("a matching signature completes the upgrade");
+    }
+
+    #[tokio::test]
+    async fn a_plain_answer_a_foreign_signature_and_a_hangup_are_all_refused() {
+        for (name, reply, closing, expected) in [
+            (
+                "200 instead of 101",
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n",
+                false,
+                "Rejected",
+            ),
+            (
+                "signature of a key we never sent",
+                "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: aW52YWxpZA==\r\n\r\n",
+                false,
+                "BadAccept",
+            ),
+            ("hangs up mid head", "HTTP/1.1 101 Switching", true, "Malformed"),
+        ] {
+            let (mut client, mut server) = tokio::io::duplex(4 << 10);
+            let reply = reply.to_string();
+            let scripted = tokio::spawn(async move {
+                // Answer only after the request arrives, as a real server would.
+                let _ = read_response_head(&mut server).await;
+                server.write_all(reply.as_bytes()).await.ok();
+                if closing {
+                    drop(server);
+                } else {
+                    server.flush().await.ok();
+                    // Keep the socket open long enough for the client to read.
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                }
+            });
+            let error = handshake(&mut client, "provider.test", "/x", "dGVzdA==", "sk")
+                .await
+                .expect_err(name);
+            assert!(format!("{error:?}").contains(expected), "{name}: {error:?}");
+            scripted.abort();
+        }
+    }
+
+    use std::time::Duration;
 
     #[test]
     fn the_dial_target_keeps_the_host_tls_must_validate_against() {

@@ -105,6 +105,12 @@ impl Upstream {
 }
 
 /// The frame for one command, as the upstream expects it.
+///
+/// Note what is absent from `Configure`: the Nest source's comment above that
+/// `send` claims the voice is pinned to `longanqian`, yet the object it builds has
+/// no such field (`grep -rn longanqian src/voice/` hits the comment alone). Copied
+/// as-is deliberately - adding the "missing" field would be a behaviour change
+/// dressed up as a port.
 pub fn command_frame(command: &Command) -> Frame {
     match command {
         Command::Configure(payload) => Frame::Text(payload.to_string()),
