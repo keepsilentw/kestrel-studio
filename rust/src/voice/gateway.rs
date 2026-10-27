@@ -22,10 +22,6 @@ use crate::state::AppState;
 /// because `web/scripts/voice.ts` builds the URL with it and is unchanged.
 pub const TICKET_QUERY: &str = "ticket";
 
-/// The transport works; the provider relay is not wired up on it yet. 1013 is the
-/// "try again later" status, which is exactly what it is.
-pub const CLOSE_TRY_LATER: u16 = 1013;
-
 #[derive(Debug, PartialEq, Eq)]
 pub enum Reject {
     NotAnUpgrade,
