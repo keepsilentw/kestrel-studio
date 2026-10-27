@@ -5,7 +5,7 @@
 //! response parser is what decides whether a connection is actually usable. What
 //! is left over is the TLS dial itself, which cannot be tested here at all.
 
-use tokio::io::{AsyncReadExt, AsyncWrite, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use base64::Engine;
 
 use crate::config::random_bytes;

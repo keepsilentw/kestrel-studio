@@ -4,7 +4,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use hyper_util::rt::TokioIo;
 
-use crate::net::ws::{accept_key, encode, Frame};
+use crate::net::ws::{accept_key};
 use crate::state::AppState;
 
 

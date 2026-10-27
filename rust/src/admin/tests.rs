@@ -22,7 +22,7 @@ async fn boss(state: &AppState) -> (String, i64) {
 async fn only_a_super_admin_gets_through_and_a_rejected_post_says_403() {
     let (app, state) = app().await;
     let (user_cookie, _) = account(&state, "walker", Role::User).await;
-    let (admin_cookie, admin_id) = boss(&state).await;
+    let (admin_cookie, _admin_id) = boss(&state).await;
 
     // Anonymous: to the login page, like every other HTML route.
     let anonymous = app.clone().oneshot(get("/admin", None)).await.expect("anonymous");
@@ -72,7 +72,7 @@ async fn only_a_super_admin_gets_through_and_a_rejected_post_says_403() {
 #[tokio::test]
 async fn the_create_form_validates_then_lands_the_account_as_a_plain_user() {
     let (app, state) = app().await;
-    let (admin_cookie, admin_id) = boss(&state).await;
+    let (admin_cookie, _admin_id) = boss(&state).await;
 
     for (username, password, expected) in [
         ("ab", "hunter2", "invalid"),
@@ -108,7 +108,7 @@ async fn the_create_form_validates_then_lands_the_account_as_a_plain_user() {
 #[tokio::test]
 async fn the_password_form_shows_the_account_it_belongs_to() {
     let (app, state) = app().await;
-    let (admin_cookie, admin_id) = boss(&state).await;
+    let (admin_cookie, _admin_id) = boss(&state).await;
     let (_target_cookie, target_id) = account(&state, "walker", Role::User).await;
 
     let page = text_body(
@@ -142,7 +142,7 @@ async fn the_password_form_shows_the_account_it_belongs_to() {
 #[tokio::test]
 async fn resetting_a_password_rehashes_only_the_target_account() {
     let (app, state) = app().await;
-    let (admin_cookie, admin_id) = boss(&state).await;
+    let (admin_cookie, _admin_id) = boss(&state).await;
     let (_target_cookie, target_id) = account(&state, "walker", Role::User).await;
     let before = stored_hash(&state, "walker").await;
 
@@ -314,7 +314,7 @@ async fn removing_an_account_takes_its_rows_and_its_files() {
 #[tokio::test]
 async fn the_site_wide_conversation_view_is_read_only() {
     let (app, state) = app().await;
-    let (admin_cookie, admin_id) = boss(&state).await;
+    let (admin_cookie, _admin_id) = boss(&state).await;
     let (_, walker_id) = account(&state, "walker", Role::User).await;
 
     let conversation_id = state.conversations.create(walker_id, "红隼俯冲").await.expect("conversation");

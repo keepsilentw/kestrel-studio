@@ -867,7 +867,7 @@ mod tests {
     #[tokio::test]
     async fn a_placeholder_is_not_a_finished_turn_but_a_stale_one_is_abandoned_at_boot() {
         let (service, _) = seeded().await;
-        let user = service
+        let _user = service
             .append_user_message(10, "画一只红隼", Some(Mode::Image))
             .await
             .expect("user");
