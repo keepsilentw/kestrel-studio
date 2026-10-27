@@ -435,3 +435,75 @@ Last-Event-ID 重放、无游标连接按未完轮次定位」全部按设计工
   于跨进程读表）；`resync` 真实触发依赖 2000 条保留窗口，由测试模拟。
 - 语义变化确认：**断开连接不再中止轮次**（设计如此），旧的 `req.close → abort`
   路径随 POST 流退役。
+
+## 9. Rust 实现（`rust/`）的离线验证（2026-10-27）
+
+这一节的证据全部来自**离线、无服务**的环境：本机无出站网络，沙箱禁止 bind
+套接字（`PermissionDenied`），因此路由层测试用 `tower::ServiceExt::oneshot` 驱动
+路由表而不是起真 HTTP 服务，帧层测试用 `tokio::io::duplex` 在进程内跑真字节流。
+引用时注意它与 §1–§8 的差别：那些是**活的端点**，这里是**移植等价性**。
+
+### 9.1 计数
+
+- `cargo test`：**157 passed / 0 failed / 2 ignored**（ignored 的两条是 §9.2 的跨实现
+  校验，一条依赖本地 `data/kestrel-studio.db`，一条依赖 `node` + `bcryptjs`）。
+- `cargo check --tests`：无 error。release 构建**未跑过**（`make rust-build` 只做
+  了 `make -n` 解析验证）。
+- 迁移提交：`ac6abe4` 主体 → `a653d54` 语音传输 → `7ec90a0` 通话状态机 →
+  `0cf86e7` 去占位 → `5b075e5` 派发测试 + 工具名顺序 → `bc8a3c5` 清未用导入 →
+  `d0d71eb` 忽略 `rust/target/`。
+
+### 9.2 口令：与两套独立实现对照
+
+`bcrypt` 不在离线 registry 里，手写实现（`auth/bcrypt.rs`）的正确性用**两个无关实现**
+判：仓库自带的 `bcryptjs`（写入库里哈希的那个）与 `/usr/sbin/htpasswd`（Apache
+crypt_blowfish，产出 `$2y$`）。
+
+```bash
+node -e "const b=require('bcryptjs');console.log(b.hashSync('hunter2',5))"
+/usr/sbin/htpasswd -nbB t1 'hunter2'
+```
+
+8 条向量（含空口令、非 ASCII、恰 72 字节与 80 字节、`$2$` 旧版、`$2y$`）全部通过。
+反向也验：Rust 写的哈希交给 `bcryptjs.compareSync` → `true`，错口令 → `false`，
+故 Nest 与 Rust 可共用一个库。**本地库两个真实账号**（`admin`、超管 `tww316`）以
+只读连接验证仍可登录，且库文件 mtime 未变。
+
+一处值得记下的口径：口令超过 72 字节时两个实现都把 72 之后的字节**忽略**（每个
+key pass 恰好消耗 18 个字 = 72 字节且偏移复位）。`'x'×72` 与 `'x'×80` 同哈希、
+`'x'×71` 不同——由 `bcryptjs` 实测确认，不是推断。
+
+### 9.3 握手签名：以 `openssl` 为参照
+
+`Sec-WebSocket-Accept` 的公式（`base64(SHA1(key + 258EAFA5-…B11))`）用系统
+`openssl` 现算对照，避免凭记忆写 RFC 样例：
+
+```bash
+printf '%s' 'x3JJHMbDL1EzLkh9GBhXDw==258EAFA5-E914-47DA-95CA-C5AB0DC85B11' \
+  | openssl dgst -sha1 -binary | base64      # HSmrc0sMlYUkAGmm5OPpG2HaGWk=
+```
+
+（我先前按记忆写下的 `dGhlIHNhbXBsZSBub25jYXQ=` 对应值是**错的**，实测为
+`C0iGEECXJdPQ1Dfevh4d/wLzuZw=`；测试已改用 openssl 生成的对照值并附命令。）
+
+### 9.4 等价性被测试钉住的语义
+
+- 事件流：`from=0` 重放、`Last-Event-ID` 优先于 `?from=`、断档时 `resync` 先于
+  `connected` 且不填充缺失、**重放帧的 `data:` 与库中 `payload` 逐字节相同**。
+- 可见性：属主/他人/超管三角矩阵；软删除对属主不可读、对超管仍可读、行与文件
+  都在；`can_read` 与 `is_owned_by` 的宽窄差异。
+- 语音：帧泵在 duplex 上验（掩码强制、半帧缓冲、EOF 视作关闭、下行不掩码、
+  控制帧不分片、超限早拒）；工具轮次验 `tool_output → create_response` 的先后与
+  5 轮上限。
+- 模板：页面必含 id 是**从 `web/scripts/main.ts` 解析 `requireElement` 得到**的，
+  不是手抄清单（17 个），改客户端会红。
+
+### 9.5 本轮未覆盖（诚实边界）
+
+- **无端到端**：不起服务，`GET /`、`/api/v1`、语音的真机链路一次都没走过；
+  浏览器控制台零错误零警告这条全局契约未复查。
+- **`hyper::upgrade::on` 接管与 `tokio-rustls` 真拨号未验证**：构件各有测试，
+  组合处没有。语音现在能完成 101 并接管，但上游未接时以 `Close` 结束。
+- **`dispatch_pending` 只用"未知工具"路径驱动**：真实出图/出视频的派发依赖活供应商。
+- **release 构建未跑过**；`Dockerfile` 无 Rust 阶段，服务器零下载前提下如何喂 crate
+  尚未解决。

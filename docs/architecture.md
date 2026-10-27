@@ -20,6 +20,7 @@
 | 层 | 选型 | 理由 |
 |---|---|---|
 | 服务端 | NestJS 12 + Express | 指定 |
+| 服务端（第二实现） | Rust：axum 0.8 + sqlx + tokio | 与 Nest 版并行的同端实现，见 §13；尚未接管构建与部署 |
 | 渲染 | hbs (Handlebars) | 单进程 SSR，无独立前端服务，8G 机器内存友好 |
 | 前端 | 原生 TS + Vite 打包 | 无框架，Vite 只做 TS/CSS 打包，产物由 Nest 静态托管 |
 | 传输 | 对话级 SSE（GET + EventSource）+ 持久事件日志 | 提交与订阅分开；seq 续传见 §4.2。轮次事件曾挂在 POST 响应上，已改 |
@@ -286,6 +287,8 @@ kestrel-studio/
   Dockerfile            服务器上零下载构建（见 deployment.md §1）
   docker-compose.yml
   scripts/              deploy.sh / bootstrap-host.sh
+  scripts/gen-blowfish-tables.mjs
+                        从 bcryptjs 抽 Blowfish π 常量表，供 rust/src/auth 使用
   docs/
     README.md             文档索引与维护约定
     architecture.md       本文：系统设计与关键决策
@@ -302,6 +305,21 @@ kestrel-studio/
     bailian/             凭据解析、Responses API 流式客户端
     auth/                本地登录、session 序列化、守卫
     conversation/        会话、消息与资产的 CRUD 与投影；事件日志（conversation_events，扇出+重放+裁剪）
+  rust/                 同一服务端的 Rust 实现（见 §13）
+    Cargo.toml
+    src/
+      main.rs            装配：.env 叠加 → 配置 → 建表/seed → 后台 worker → axum 路由
+      config/ db/ common/ sse.rs state.rs
+      auth/              bcrypt（手写）、签名 cookie 会话表、两级角色、守卫
+      conversation/      仓储与可见性规则、事件日志（同 seq/重放/断档/裁剪语义）
+      bailian/         凭据解析、Responses 流式客户端、realtime 上游握手
+      agent/             模式、工具注册表、轮次循环、turn-runner
+      media/ task/        文生图/视频与后台轮询落盘
+      http/              /api/v1、SSR 路由、静态资源、签名帧
+      view/              页面模板（无模板引擎，手写）+ Markdown 子集
+      admin/             超管面
+      net/ws.rs          RFC6455 帧编解码（无 tungstenite 可用）
+      voice/             票据、协议帧、字节泵、通话状态机、上游中继
     agent/               AgentLoop、轮次登记与提交（TurnRunner）、模式表、工具注册表
     media/               文生图 / 视频任务提交、文件落盘
     task/                异步任务：任务表、后台轮询 worker（事件经 conversation/ 的日志扇出）
@@ -493,7 +511,50 @@ WebSocket 的 upgrade 不经过 Express，所以 `AuthenticatedGuard` 对它无�
 实测证据（浏览器里的两次点击、超管侧的标记与回放、库里的行数）见
 [verification.md](verification.md) §6。
 
-## 13. 相关文档
+## 13. Rust 实现（`rust/`）
+
+同一服务端的第二套实现，语言从 NestJS 换成 Rust。它**不是重写决策的结论**，
+而是一次语言迁移：端点、事件语义、数据模型与权限规则都以上面各节描述的 Nest
+版为契约源，逐条对照移植，`src/` 保持原样未改动，两条管线可共存于同一个 SQLite
+库（口令格式、会话表、事件日志双向兼容，见 §13.2）。
+
+### 13.1 为什么若干层是自己写的
+
+开发机无出站网络，只能使用本地 cargo registry 已缓存的 crate。以下常用件缺失，
+因此在本仓库内实现，而不是换用等价库：
+
+| 缺失件 | 本仓库的替代 | 位置 |
+|---|---|---|
+| `bcrypt` | 手写 Blowfish + EksBlowfish，常量表由脚本从 `bcryptjs` 抽取 | `auth/bcrypt.rs`、`auth/blowfish_tables.rs` |
+| `tokio-tungstenite` / `axum` 的 `ws` 特性 | 手写 RFC6455 帧编解码；升级不走 ws 抽象，用 `hyper::upgrade::on`（它对 body 类型泛型，因此 axum handler 内即可接管连接） | `net/ws.rs`、`voice/gateway.rs` |
+| `handlebars` / `tera` / `minijinja` | 页面即函数；模板逐元素对齐 `src/view/views/*.hbs`，Markdown 取子集 | `view/templates.rs`、`view/html.rs` |
+| `tower-sessions` / `cookie` | `connect.sid` 签名 cookie + `sessions` 表（JSON 形状与 passport 一致） | `auth/session.rs` |
+| `tower-http` 的 `fs` 特性 | 自带静态托管（ETag / If-None-Match / 穿越防护） | `http/static_files.rs` |
+| rustls 默认 crypto provider（`aws-lc-rs`） | 显式选 `ring`（`tokio-rustls` 关默认特性） | `Cargo.toml` |
+
+### 13.2 与 Nest 版的互操作点
+
+- **口令**：默认写 bcrypt `$2b$` cost 10，与 `bcryptjs` 一致；同时接受
+  `$pbkdf2-sha256$`（迁移期一度作为默认写入的格式）。两侧服务对同一行都能验签。
+- **会话**：cookie 名与值前缀沿用 `connect.sid` / `s:`，存储表 `sessions(sid, sess, expire)`
+  的 `sess` 里 principal 键名沿用 passport 的 `user`。签名算法不同，因此切换时旧
+  cookie 是**被拒绝**而非被误信（表现为重新登录）。
+- **数据模型与事件**：DDL 与 `ADDED_COLUMNS` 逐条照搬；事件日志仍是"先插 `seq`
+  再扇出"，重放帧直接吐库里的 `payload` 原文，不重新序列化，故与实时帧逐字节相同。
+
+### 13.3 现状与未做的部分
+
+已实现并通过单元测试（清单见 [verification.md](verification.md) §9）：配置与环境叠加、
+建表与 seed、会话与角色、会话仓储与事件日志、Responses 流式客户端、agent 轮次与三
+工具、媒体与后台任务、`/api/v1` + 可续传 SSE + 签名帧 + 下载、SSR 页面与模板/客户端
+契约测试、admin 面、语音的票据/协议/帧泵/状态机/上游握手。
+
+尚未完成：**未接管构建与部署**（`Dockerfile` 仍是 Nest 管线；`make rust-*` 只做本地
+构建与检查）；**没有端到端实测**（开发环境禁止启动服务）；语音的 `connect()` 真拨号
+与 101 接管未上机验证；上游工具派发轮次在循环内 `await`，与 Nest 的 promise 链串形
+式不同（后果是一次工具调用期间 `stop` 会被延后）。
+
+## 14. 相关文档
 
 全部文档的索引、各自负责的范围与维护约定见 [docs/README.md](./README.md)。
 索引只此一处，避免多份清单互相漂移。

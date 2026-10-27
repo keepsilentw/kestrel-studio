@@ -152,3 +152,64 @@ console.log(el.constructor.name, typeof el.showModal, typeof el.close, 'open' in
 
 **教训**：测试环境缺的是**能力**不是**版本**。用到一个新 DOM 接口前，先确认 jsdom 有没有它，
 比等一个未捕获异常把整个文件带走便宜得多。
+
+## 10. 离线 registry：不是"少一个库"，是少一串
+
+**症状**：`cargo check --offline` 在换依赖时报
+`no matching package named \`axum-macros\` found … note: offline mode (via \`--offline\`) can
+sometimes cause surprising resolution failures`；`tokio-rustls` 则能解析但**运行时**没有
+可用 crypto provider。
+
+**根因**：本地 registry 只有历史项目下载过的 crate。缺的不止 `bcrypt`，还有
+`tungstenite` / `tokio-tungstenite`、模板引擎（`handlebars`/`tera`/`minijinja`）、
+`tower-sessions`、`tower-http` 的 `fs` 特性所需的 `http-range-header`、`axum` 的
+`macros` 特性所需的 `axum-macros`，以及 rustls 默认 provider `aws-lc-rs`。
+
+**处理**：缺件在本仓库内实现（对照表见 architecture.md §13.1）；两处必须显式写死
+的非直觉配置：
+
+```toml
+axum = "0.8"                       # 不带 features = ["macros"]，否则离线解析失败
+tokio-rustls = { version = "0.26", default-features = false,
+                 features = ["ring", "tls12", "logging"] }   # aws-lc-rs 不在缓存
+```
+
+顺带两条推论：axum 的 `ws` 特性依赖 `tokio-tungstenite`，所以**升级不能走框架
+抽象**；但 `hyper::upgrade::CanUpgrade` 是 `impl<B> for http::Request<B>`，对 body
+泛型，因此在 axum handler 里就能接管裸 socket——先前"没有 tungstenite 就做不了
+WebSocket"的结论是错的，错在把框架的便利层当成了唯一入口。
+
+## 11. 漏设 `CARGO_TARGET_DIR`，524 MB 构建产物差点进公开仓库
+
+**症状**：`git status --porcelain -uall` 突然多出 2111 个未跟踪文件；`du -sh -S rust/target`
+约 524 MB。`git add rust && git push` 会把它连同提交推进**公开**仓库，历史只能靠
+force push 抹。
+
+**根因**：一个清理警告的脚本里用 `subprocess.run(["cargo","check",…])` 调 cargo，
+**没有带 `CARGO_TARGET_DIR`**——我这一整个会话其余时候都指到 `/tmp`，唯独这里漏了。
+`.gitignore` 当时也还没有 `rust/target/` 这一行。
+
+**处理**：删目录；`.gitignore` 加 `rust/target/`（注意这是目录型模式，路径不存在时
+`git check-ignore rust/target` 不命中，其内部路径才命中，别被这个"没生效"的假象骗）；
+Makefile 的 `rust-*` 目标统一用 `--manifest-path`，不靠 `cd`。提交时改用
+`git add -u <path>`，只暂存已跟踪文件。
+
+**同批教训**：那个脚本还一度"看起来成功"——它读的是 `subprocess.run(...).stdout`，
+而 **cargo 的诊断在 stderr**，于是解析不到任何目标、循环空转；紧接着
+`grep -c "^warning"` 读到的是缓存构建的汇总行，报出"只剩 1 条告警"。两处假信号
+叠在一起，差点让我把"什么都没做"写成"清理完成"。**退出码 0 不等于目标达成**：
+验证要看被改的东西真的变了（`git diff`），不要看命令有没有报错。
+
+## 12. 按编译器给的行号改源码，三次踩同一个坑
+
+`cargo` 报 `unused imports: A and B` 时给的行号指向**整条 `use` 语句**，而不是那两
+个名字。三次后果：
+
+1. 直接删该行 → 同一花括号里**仍在用**的 `TaskKind` 被删掉，编译失败。
+2. 改正则后 `use axum::http{X};` → 因为 `(.+?)::\{` 把 `::` 留在捕获组外，
+   重组时丢了分隔符；再补时又用 `(use [\w:]*?)\{` 不判存在，产出 `::::`。
+3. 更早一次用 `rstrip('}')` 收尾一段补丁，把 `mod tests` 的闭合括号也削掉。
+
+**处理**：改源码以 `apply_patch` 为先；必须脚本化时，操作单位是**标识符**（在名字
+集合上删），并在每次改动后跑一次编译确认；`apply_patch` 对被外部写过的文件会失配
+（报"找不到行"而磁盘上那行原样存在），此时先重读文件再改。

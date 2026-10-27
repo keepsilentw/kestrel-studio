@@ -17,6 +17,7 @@
 | 三 | 异步任务子系统 + 视频能力 | 独立子系统，与内核决策解耦 | **已落地**，见 `src/task/`（提交即返回、后台轮询、成功即镜像、追加消息并推送）；端到端未记录 |
 | 四 | **语音会话**（独立入口 + 工具调用） | 与内核决策无关，走 §2.4.1 之外的一条独立通路。设计已迁至 [architecture.md](./architecture.md) §11 | **已落地**，本地与线上端到端实测均通过（[verification.md](verification.md) §4） |
 | 五 | 内核选型落地（保持 TS 增强 / 引入 Rust sidecar） | 前面各期完成后，内核的真实收益才有可比基准 | 未开始 |
+| 六 | **语言迁移**：服务端改用 Rust（`rust/`） | 与第五期无关的独立变量：先换宿主语言，内核选型才有对照物 | **代码已落地**（2026-10-27），见 [architecture.md](./architecture.md) §13；**未接管构建与部署、未端到端实测**（verification.md §9） |
 
 二期至四期无论内核如何选型都不会白做。
 
@@ -207,3 +208,8 @@ openai 面须置 compat 位 `stream_include_usage = true`，否则全程 `usage:
   [deployment.md](deployment.md) §8）。`role` 补列与超管账号的创建都发生在**进程启动时**，
   所以本机那个常驻的 pm2 实例要等重启才会出现 `/admin` 与超管账号。
 - 后端链路与前端控制台均已实测，本地与线上均通过，详见 [verification.md](verification.md)。
+- **Rust 实现（`rust/`）未接管任何交付路径**：线上仍是 Nest 容器；`make rust-*`
+  只做本地 check/test/build，`Dockerfile` 未加 Rust 阶段——离线 registry 缺件要在
+  服务器上重现，先把 crate 缓存问题解掉再说。
+- **Rust 侧没有端到端**：开发环境禁止启动服务，因此 §13.3 列的三处（真拨号、101
+  接管、浏览器控制台零噪音）仍是未知；一次真机运行即可消掉。

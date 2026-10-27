@@ -29,6 +29,9 @@ Web 生成式媒体 Agent：用户在网页给一句话，LLM 流式思考、调
 | `make test` | 单元测试（`vitest run`），纯模块，无 DI |
 | `make test-watch` | 单元测试 watch 模式 |
 | `make clean` | 清 `dist/` 与 `public/`，保留 `data/` `storage/` |
+| `make rust-check` / `rust-test` | Rust 实现（`rust/`）的类型检查与单元测试 |
+| `make rust-build` / `rust-run` | 构建 release 二进制 / 本机前台运行（不走 pm2） |
+| `make rust-clean` | 清 `rust/target/` |
 | `make deploy*` | 部署到 lavo-test（见下） |
 
 要点：
@@ -39,6 +42,15 @@ Web 生成式媒体 Agent：用户在网页给一句话，LLM 流式思考、调
   `SUPER_ADMIN_USERNAME` / `SUPER_ADMIN_PASSWORD`，**仓库里没有内置超管口令**，
   两个变量缺任一个就不建超管、`/admin` 不可达。这条约束存在的原因是仓库要公开：
   内置凭据等于给线上实例发可用登录。
+- **Rust 实现（`rust/`）是并行的第二套服务端**，质量门是 `make rust-check` +
+  `make rust-test`。它**未接管构建与部署**：线上仍是 Nest 容器，`src/` 一行未改。
+  离线 registry 缺 `bcrypt` / `tungstenite` / 模板引擎等件，相关自研与原因见
+  `docs/architecture.md` §13，踩坑台账见 `docs/implementation-notes.md` §10-§12。
+- **无端到端证据**：开发环境禁止启动服务，`hyper::upgrade` 接管与 `tokio-rustls`
+  真拨号、浏览器控制台零噪音这三处仍是未知，勿当作已验证。
+- **cargo 的产物在仓库外**：手工调 cargo（尤其脚本里）务必带
+  `CARGO_TARGET_DIR=/tmp/...`；`.gitignore` 虽已覆盖 `rust/target/`，但提交一律用
+  `git add -u <path>` 而不是 `git add <path>`，避免未跟踪产物被顺手带进公开仓库。
 - **pm2 与 watch 模式争 8848 端口**：跑 `make dev` 前先 `make stop`；`make dev` 会自己检测并警告。
 - **质量门是 `make typecheck` + `make test`**。测试用 vitest，分两个 project（见 `vitest.config.mts`）：
   - `server`（node 环境）—— `__tests__/server/**`，按 src 的模块结构镜像存放（测试文件不进 `src/`，这是约定）。走 **SWC** 而非默认的 esbuild，因为 esbuild 不实现 `emitDecoratorMetadata`，而应用有约 19 处构造参数依赖它；没有 SWC 就起不了 `Test.createTestingModule()`。这也是当初不用 ts-jest 的原因：ts-jest 要 TS 的 programmatic compiler API，而 TS 7 已移除（本项目钉在 TS 6.0.3 正是同一根因）。
