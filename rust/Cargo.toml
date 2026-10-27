@@ -1,0 +1,53 @@
+[package]
+name = "kestrel-studio"
+version = "0.1.0"
+edition = "2021"
+description = "Web generative-media agent over Bailian Token Plan (Rust server)"
+license = "MIT"
+
+# Offline constraint: this build only uses crates already in the local cargo
+# registry (no outbound network on the dev box). Crates that exist on crates.io
+# but are NOT vendored here and are therefore hand-written in this tree:
+#   tokio-tungstenite  -> ws codec (voice phase)
+#   bcrypt             -> legacy password verification (see auth::password)
+#   handlebars / tera  -> SSR templates (view phase)
+#   tower-http "fs"    -> static file handler (needs http-range-header)
+#   tower-sessions     -> signed-cookie session store below
+
+[dependencies]
+axum = "0.8"
+hyper = { version = "1", features = ["http1", "server"] }
+hyper-util = { version = "0.1", features = ["tokio", "server", "http1", "service"] }
+tokio = { version = "1", features = ["full"] }
+tokio-stream = "0.1"
+tokio-util = { version = "0.7", features = ["io-util"] }
+tower = { version = "0.5", features = ["util"] }
+tower-http = { version = "0.6", features = ["trace"] }
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "sqlite", "chrono", "macros"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "rustls-tls"] }
+futures-util = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
+chrono = { version = "0.4", features = ["serde"] }
+thiserror = "2"
+anyhow = "1"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+base64 = "0.22"
+sha1 = "0.10"
+sha2 = "0.10"
+hmac = "0.12"
+pbkdf2 = "0.12"
+rand = "0.8"
+mime_guess = "2"
+url = "2"
+async-trait = "0.1"
+# The upstream voice leg needs TLS. `aws-lc-rs`, rustls' usual default provider, is
+# not in the local registry, so the ring provider is selected explicitly and the
+# default features are dropped.
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"] }
+webpki-roots = "0.26"
+
+[profile.dev]
+opt-level = 0
