@@ -189,6 +189,12 @@ impl ToolRegistry {
     /// on the timeout or on the shape of a failure handed back to the model.
     pub async fn execute(&self, name: &str, args: &Value, context: ToolContext) -> ToolOutcome {
         let state = self.state.clone();
+        // Unknown first, credentials second: a mistyped name is a bug in the call,
+        // and answering it with "no API key" would send whoever reads the tool
+        // result looking in the wrong place.
+        if !TOOL_NAMES.contains(&name) {
+            return ToolOutcome::failure(format!("Unknown tool: {name}"));
+        }
         let api_key = match state.require_key().await {
             Ok(key) => key,
             Err(error) => return ToolOutcome::failure(format!("Tool failed: {}", error.describe())),

@@ -3,7 +3,6 @@ use axum::http::header::{HeaderValue, CONNECTION, SEC_WEBSOCKET_ACCEPT, SEC_WEBS
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use hyper_util::rt::TokioIo;
-use tokio::io::AsyncWriteExt;
 
 use crate::net::ws::{accept_key, encode, Frame};
 use crate::state::AppState;

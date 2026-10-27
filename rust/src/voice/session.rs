@@ -705,4 +705,158 @@ mod tests {
         assert!(out_rx.try_recv().is_err(), "nothing to report yet");
         bare.close().await;
     }
+
+    /// Reads commands as they arrive, answering the way the endpoint would: a tool
+    /// result gets its acknowledgement immediately, so the dispatch path is not
+    /// waiting on its `ACK_TIMEOUT` to prove the ordering.
+    fn commands_in_order(mut rx: mpsc::Receiver<Command>) -> mpsc::UnboundedReceiver<String> {
+        let (tx, labels) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            while let Some(command) = rx.recv().await {
+                let label = match command {
+                    Command::ToolOutput { ack, .. } => {
+                        let _ = ack.send(());
+                        "tool_output"
+                    }
+                    Command::CreateResponse => "create_response",
+                    Command::Commit => "commit",
+                    Command::AppendAudio(_) => "append_audio",
+                    Command::Configure(_) => "configure",
+                    Command::Pong(_) => "pong",
+                    Command::Close => "close",
+                };
+                let _ = tx.send(label.to_string());
+            }
+        });
+        labels
+    }
+
+    /// Waits for the next command label, so the assertions cannot win or lose a
+    /// race against the resolver task forwarding them.
+    async fn next_label(rx: &mut mpsc::UnboundedReceiver<String>) -> String {
+        tokio::time::timeout(Duration::from_secs(2), rx.recv())
+            .await
+            .ok()
+            .flatten()
+            .unwrap_or_else(|| "<none>".to_string())
+    }
+
+    /// The quiet check: nothing further should arrive.
+    async fn no_more_labels(rx: &mut mpsc::UnboundedReceiver<String>) -> bool {
+        tokio::time::timeout(Duration::from_millis(150), rx.recv())
+            .await
+            .is_err()
+    }
+
+    /// Drives a tool round with a name the registry does not know, which is the
+    /// only round that needs no provider. Everything else about the round - the
+    /// running/done frames, the acknowledgement before the next response, the
+    /// persisted trail - is the part worth pinning.
+    #[tokio::test]
+    async fn a_tool_round_asks_before_the_next_response_and_keeps_the_trail() {
+        let (mut call, commands, _events, mut out, state) = fixture().await;
+        let mut labels = commands_in_order(commands);
+        let conversation_id = call.conversation_id.expect("conversation");
+        call.assistant_message_id = Some(
+            state
+                .conversations
+                .create_assistant_placeholder(conversation_id, None)
+                .await
+                .expect("placeholder"),
+        );
+
+        call.on_realtime(RealtimeEvent::FunctionCall {
+            call_id: "c1".into(),
+            name: "no_such_tool".into(),
+            arguments: "{\"prompt\":\"红隼\"}".into(),
+        })
+        .await;
+        assert!(
+            frames(&mut out)
+                .iter()
+                .any(|frame| frame.contains("\"status\":\"running\"")),
+            "the browser sees the call start"
+        );
+
+        call.on_realtime(RealtimeEvent::ResponseDone).await;
+
+        let first = next_label(&mut labels).await;
+        let second = next_label(&mut labels).await;
+        assert_eq!(
+            (first.as_str(), second.as_str()),
+            ("tool_output", "create_response"),
+            "the result goes back and only then is the next response asked for"
+        );
+        assert!(
+            frames(&mut out)
+                .iter()
+                .any(|frame| frame.contains("\"status\":\"failed\"")),
+            "an unknown tool is a failed result, not a silent one"
+        );
+
+        // A response with nothing pending now closes the turn, and the trail is
+        // written down even though the assistant said nothing.
+        call.on_realtime(RealtimeEvent::ResponseDone).await;
+        let views = state.conversations.views(conversation_id).await.expect("views");
+        let assistant = views.last().expect("assistant");
+        assert_eq!(assistant.content, "", "a tools-only turn has no speech to store");
+        let records = assistant.tool_calls.as_ref().expect("trail");
+        assert_eq!(records.len(), 1);
+        assert_eq!(records[0].name, "no_such_tool");
+        assert!(!records[0].ok);
+        assert!(
+            records[0].summary.contains("Unknown tool"),
+            "{}",
+            records[0].summary
+        );
+    }
+
+    #[tokio::test]
+    async fn the_round_cap_stops_a_loop_that_never_converges() {
+        let (mut call, commands, _events, mut out, state) = fixture().await;
+        let mut labels = commands_in_order(commands);
+        let conversation_id = call.conversation_id.expect("conversation");
+        call.assistant_message_id = Some(
+            state
+                .conversations
+                .create_assistant_placeholder(conversation_id, None)
+                .await
+                .expect("placeholder"),
+        );
+
+        let mut asked = 0usize;
+        for round in 0..MAX_TOOL_ROUNDS {
+            call.on_realtime(RealtimeEvent::FunctionCall {
+                call_id: format!("c{round}"),
+                name: "no_such_tool".into(),
+                arguments: "{}".into(),
+            })
+            .await;
+            call.on_realtime(RealtimeEvent::ResponseDone).await;
+            assert_eq!(next_label(&mut labels).await, "tool_output", "round {round}");
+            if round + 1 < MAX_TOOL_ROUNDS {
+                assert_eq!(next_label(&mut labels).await, "create_response", "round {round}");
+                asked += 1;
+            } else {
+                assert!(
+                    no_more_labels(&mut labels).await,
+                    "the capped round must not ask for another response"
+                );
+            }
+        }
+
+        assert_eq!(call.tool_rounds, MAX_TOOL_ROUNDS);
+        assert_eq!(asked, MAX_TOOL_ROUNDS - 1, "the last round asks for nothing");
+        let sent = frames(&mut out);
+        assert!(
+            sent.iter()
+                .any(|frame| frame.contains("工具调用轮次过多，已停止")),
+            "{sent:?}"
+        );
+        assert!(
+            sent.iter().any(|frame| frame.contains("\"type\":\"done\"")),
+            "the turn is closed rather than left disabled: {sent:?}"
+        );
+        assert!(call.assistant_message_id.is_none());
+    }
 }
