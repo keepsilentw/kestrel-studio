@@ -7,6 +7,13 @@ PNPM := pnpm
 PM2  := pm2
 APP  := kestrel-studio
 
+CARGO ?= cargo
+# The Rust tree (rust/) is a parallel implementation of the same server. Nothing
+# in `start`/`deploy` uses it yet; these targets exist so it can be built and
+# checked without leaving the Makefile entry point that everything else uses.
+RUST_DIR ?= $(CURDIR)/rust
+CARGO_ARGS := --manifest-path $(RUST_DIR)/Cargo.toml
+
 # Local port the app listens on. Keep in sync with src/config/configuration.ts.
 PORT ?= 8848
 
@@ -32,6 +39,7 @@ endef
 .PHONY: typecheck test test-watch
 .PHONY: clean
 .PHONY: deploy deploy-status deploy-logs deploy-restart deploy-down
+.PHONY: rust-check rust-test rust-build rust-run rust-clean
 
 help:
 	@echo "kestrel-studio — 可用命令:"
@@ -62,6 +70,13 @@ help:
 	@echo ""
 	@echo "  清理"
 	@echo "    make clean                  清理构建产物（保留 data/ 与 storage/）"
+	@echo ""
+	@echo "  Rust 实现（rust/，与上面的 Nest 管线并行）"
+	@echo "    make rust-check             类型检查（cargo check，含测试代码）"
+	@echo "    make rust-test              运行 Rust 单元测试（cargo test）"
+	@echo "    make rust-build             构建 release 二进制"
+	@echo "    make rust-run               本机前台运行 Rust 服务（占用 $(PORT)）"
+	@echo "    make rust-clean             清理 rust/target"
 	@echo ""
 	@echo "  部署"
 	@echo "    make deploy                 一键部署到 $(DEPLOY_HOST)"
@@ -181,6 +196,29 @@ test-watch:
 
 clean:
 	rm -rf dist public
+
+# ===== Rust 实现 =====
+
+# `--manifest-path` rather than `cd`: the working directory persists between
+# shell calls, so a relative path in the next command would silently aim at the
+# wrong tree.
+rust-check:
+	$(CARGO) check $(CARGO_ARGS) --tests
+
+rust-test:
+	$(CARGO) test $(CARGO_ARGS)
+
+rust-build:
+	$(CARGO) build $(CARGO_ARGS) --release
+	@echo "    二进制      $(RUST_DIR)/target/release/kestrel-studio"
+
+# Foreground on purpose: the pm2 entry stays the Nest process, so this cannot
+# take over what `make status` and the health probe describe.
+rust-run:
+	PORT=$(PORT) $(CARGO) run $(CARGO_ARGS) --release
+
+rust-clean:
+	$(CARGO) clean $(CARGO_ARGS)
 
 # ===== 部署 =====
 
