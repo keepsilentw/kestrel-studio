@@ -46,7 +46,9 @@ impl Reject {
             )
                 .into_response(),
             Self::MissingKey => (StatusCode::BAD_REQUEST, "missing Sec-WebSocket-Key").into_response(),
-            Self::Unauthorized => (StatusCode::FORBIDDEN, "票据无效或已过期").into_response(),
+            // 401, as in the Nest gateway: the socket is refused before it exists,
+            // so this is authentication, not authorisation.
+            Self::Unauthorized => (StatusCode::UNAUTHORIZED, "票据无效或已过期").into_response(),
         }
     }
 }
@@ -119,11 +121,8 @@ pub async fn handle(
     else {
         return Reject::Unauthorized.into_response();
     };
-    tracing::info!(user = user_id, "voice socket accepted");
-
-    // Hand the now-owned connection to the relay. Until the provider leg exists,
-    // the transport answers the handshake and closes with 1013: the alternative
-    // is a socket that hangs open with nothing on it.
+    // Both halves of the upgraded socket get a pump of their own, and the call
+    // state machine owns the ordering between them.
     tokio::spawn(async move {
         let upgraded = match hyper::upgrade::on(request).await {
             Ok(io) => TokioIo::new(io),
@@ -132,12 +131,24 @@ pub async fn handle(
                 return;
             }
         };
-        let mut io = upgraded;
-        let frame = encode(&Frame::Close(Some(CLOSE_TRY_LATER)), false);
-        if let Err(error) = io.write_all(&frame).await {
-            tracing::debug!(%error, "could not close the voice socket");
-        }
-        let _ = io.shutdown().await;
+        let (reader, writer) = tokio::io::split(upgraded);
+        // Bounded but roomy: a stalled call must not grow memory without limit,
+        // while 256 queued frames is more than the browser can have in flight.
+        let (inbound_tx, inbound_rx) = tokio::sync::mpsc::channel(256);
+        let (outbound_tx, mut outbound_rx) = tokio::sync::mpsc::channel(64);
+
+        let reader_task = tokio::spawn(async move {
+            crate::voice::relay::pump_in(&mut { reader }, &inbound_tx).await.ok();
+        });
+        let writer_task = tokio::spawn(async move {
+            crate::voice::relay::pump_out(&mut { writer }, &mut outbound_rx).await.ok();
+        });
+
+        let call = crate::voice::session::VoiceCall::new(state, user_id, outbound_tx);
+        call.run(inbound_rx).await;
+
+        reader_task.abort();
+        writer_task.abort();
     });
 
     switch_to_websocket(&accept)

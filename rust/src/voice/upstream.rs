@@ -41,12 +41,47 @@ pub enum Command {
 /// which is why they share this rather than each keeping their own list.
 type AckQueue = std::sync::Arc<std::sync::Mutex<Vec<oneshot::Sender<()>>>>;
 
+impl std::fmt::Debug for Command {
+    /// Hand-written because the acknowledgement sender inside `ToolOutput` cannot
+    /// derive anything useful; a log line wants the shape, not a channel id.
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Configure(payload) => formatter
+                .debug_struct("Configure")
+                .field("type", &payload.get("type"))
+                .finish(),
+            Self::AppendAudio(pcm) => write!(formatter, "AppendAudio({} bytes b64)", pcm.len()),
+            Self::Commit => formatter.write_str("Commit"),
+            Self::CreateResponse => formatter.write_str("CreateResponse"),
+            Self::ToolOutput { call_id, output, .. } => formatter
+                .debug_struct("ToolOutput")
+                .field("call_id", call_id)
+                .field("output_len", &output.len())
+                .finish(),
+            Self::Pong(payload) => write!(formatter, "Pong({} bytes)", payload.len()),
+            Self::Close => formatter.write_str("Close"),
+        }
+    }
+}
+
 pub struct Upstream {
     pub commands: mpsc::Sender<Command>,
     pub events: mpsc::UnboundedReceiver<RealtimeEvent>,
 }
 
 impl Upstream {
+    /// Wraps a command queue and an event stream.
+    ///
+    /// The dial is not the only way to get one: a test drives the state machine
+    /// with a fixture that reads commands and pushes events, which is the reason
+    /// this handle is channels rather than a socket trait.
+    pub fn from_channels(
+        commands: mpsc::Sender<Command>,
+        events: mpsc::UnboundedReceiver<RealtimeEvent>,
+    ) -> Self {
+        Self { commands, events }
+    }
+
     /// Hands a tool result back and waits for its acknowledgement.
     ///
     /// The wait is bounded on purpose: an endpoint that never acknowledges must
