@@ -857,6 +857,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "kestrel-proto"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "kestrel-studio"
 version = "0.1.0"
 dependencies = [
@@ -869,6 +877,7 @@ dependencies = [
  "hmac",
  "hyper",
  "hyper-util",
+ "kestrel-proto",
  "mime_guess",
  "pbkdf2",
  "rand 0.8.8",

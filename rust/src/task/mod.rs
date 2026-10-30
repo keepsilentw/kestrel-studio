@@ -3,26 +3,10 @@ pub mod worker;
 
 use serde::{Deserialize, Serialize};
 
-/// Async provider jobs (video today). A video render takes minutes, which does
-/// not fit inside an SSE turn: the tool submits, returns immediately, and the
-/// background worker polls the provider, mirrors the bytes at the moment of
-/// success (provider URLs expire) and appends the result as a new assistant
-/// message.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TaskKind {
-    Image,
-    Video,
-}
-
-impl TaskKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Image => "image",
-            Self::Video => "video",
-        }
-    }
-}
+// The kind tag lives in `kestrel-proto` because the asset frame carries it to
+// the browser, and the client now compiles the same type. Everything in this
+// tree keeps importing `crate::task::TaskKind`.
+pub use kestrel_proto::TaskKind;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
