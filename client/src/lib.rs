@@ -1,0 +1,21 @@
+//! The browser side of kestrel-studio, in Rust.
+//!
+//! Layout rule: anything that can be decided without a DOM lives in a plain
+//! module (`voice_core`) so `cargo test` can assert it on the host target. The
+//! WASM-only modules (DOM, sockets, audio) are gated behind
+//! `cfg(target_arch = "wasm32")` and stay thin: they translate browser events
+//! into core calls and core effects into browser calls.
+//!
+//! Why the split is load-bearing: the jsdom suite this replaces (`__tests__/web/`)
+//! exists because of a production bug it would have caught — the client opened
+//! the socket and never sent the `start` frame, so the page sat on "正在连接…"
+//! with a healthy socket, a silent server and a clean console. That bug lives in
+//! the ordering of frames, not in the DOM, and the ordering is now asserted
+//! without a browser at all.
+
+pub mod voice_core;
+
+// The exports exist only where they can be called: on the host target the same
+// module would drag wasm-bindgen into `cargo test` for no reason.
+#[cfg(target_arch = "wasm32")]
+pub mod wasm;
