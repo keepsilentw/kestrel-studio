@@ -223,12 +223,16 @@ openai 面须置 compat 位 `stream_include_usage = true`，否则全程 `usage:
 Web 客户端由 TypeScript + Vite 改为 **Rust→WASM**（选型 B），markdown 改由
 `pulldown-cmark` 承担。
 
-选 B 明确接受的两项代价（数字见 [verification.md](verification.md) §10）：
+选 B 接受的代价，其中第一条在实测后被**推翻**（数字见 [verification.md](verification.md) §11.5）：
 
-| 代价 | 数值 | 说明 |
+| 代价 | 结论 | 说明 |
 |---|---|---|
-| 首屏载荷 | 约 24 KB gz → 200 KB gz 量级 | 探针未经 `wasm-opt`、未按页面拆模块、feature 未裁剪；可缓解但方向是 10 倍 |
-| JS 地板 | 约 20 行 | `AudioWorkletProcessor` 子类必须在 worklet 全局作用域 `registerProcessor`，那里跑不了 wasm 宿主。语音采集那小段 JS **删不掉**，只能作为静态资源入库 |
+| ~~首屏载荷涨 10 倍~~ | **不成立** | 实测 wasm-opt 后的固定地板约 **9 KB gz**；此前引用的 303 KB / 95 KB 里 **91% 是 `pulldown-cmark`**。markdown 改走"服务端与客户端共享 `html.rs` 手写子集"或"服务端吐 HTML"，体积就不构成反对理由 |
+| JS 地板 | 约 20 行，**删不掉** | `AudioWorkletProcessor` 子类必须在 worklet 全局作用域 `registerProcessor`，那里跑不了 wasm 宿主。语音采集那小段 JS 只能作为静态资源入库（`public/capture.js`） |
+
+真实代价改记为两条：一是**客户端从此没有类型检查与 jsdom 测试之外的运行时护栏**，
+`cargo test` 只能覆盖与 DOM 无关的逻辑（这正是 `voice_core` 被拆成纯状态机的原因）；
+二是 markdown 若走共享子集，**那个手写子集需要补齐语法**（表格、删除线等 `marked` 默认支持的）。
 
 顺带修掉的一个长期风险：markdown 目前有**三处**渲染口径——Nest 服务端 SSR
 （`src/view/render.ts` 用 `marked`）、Nest 客户端（`web/scripts/main.ts` 同一个 `marked`，

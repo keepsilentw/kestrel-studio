@@ -648,26 +648,40 @@ test result: ok. 13 passed; 0 failed
 **未验证**：`client/` 还没有 DOM 层——`web/scripts/voice.ts` 的 socket / 音频 / UI 那部分
 尚未移植，WASM 产物也还没生成过。
 
-### 11.5 WASM 产物的第一个真实数字（同日补）
+### 11.5 WASM 产物的体积：markdown 引擎才是那面墙（同日补，含一次自我更正）
 
 `client/` 加了三个**真导出**（不是桩）：`renderMarkdown`（`pulldown-cmark`，取代 `marked`）、
-`hasMicrophone`（`navigator.mediaDevices` 是否存在）、`buildInfo`。用 wasm-pack 构建：
+`hasMicrophone`、`buildInfo`。
 
-```
-$ wasm-pack build --release --target web
-kestrel_client.wasm   1,213,520 bytes raw   310,126 bytes gz（gzip -9）
-```
+**先记一条被我引用错过的数字**：本节初稿写的是"303 KB gz"，那是 §10 那个 90-feature 探针
+**未经 `wasm-opt`** 的体积，被我在会话里当作客户端地板引用了。实测（`wasm-pack build
+--release --target web`，含 wasm-opt）比它低得多：
 
-口径要说清：**未经 `wasm-opt`、不含 JS glue**，而代码量只有上面那三个函数（web-sys 约 50 个
-feature）。也就是说 300 KB gz 里几乎全是**固定地板**（panic 机制 + `pulldown-cmark` + 绑定层），
-不是业务逻辑的体积。对照现客户端合计约 24 KB gz，B 方案的定价由此坐实：
-**首屏载荷是 10 倍量级的交换，且这个下限压不到 JS 的水平**。可缓解项（按页拆模块、
-裁 feature、`wasm-opt -O`、markdown 改由服务端吐 HTML 从而把 `pulldown-cmark` 从客户端拿掉）
-都在 roadmap.md §4.1 记着。
+| 产物 | raw | gzip |
+|---|---|---|
+| `kestrel_client_bg.wasm` | 222,694 B | **95,243 B** |
+| `kestrel_client.js`（glue） | 10,193 B | 3,014 B |
 
-本仓库不留 CI 配置（CLAUDE.md），所以这个数字**每次改动后要手工重测**：
-`cd client && wasm-pack build --release --target web --out-dir /tmp/...`（这是构建，
-不是起服务，因此在本机允许）。
+然后把 `render_markdown` 与 `markdown_options` 两个函数连同 `pulldown-cmark` 依赖一起删掉，
+在 `/tmp` 的副本上重编（仓库未改）：
+
+| 同一个模块，无 markdown 引擎 | raw | gzip |
+|---|---|---|
+| `kestrel_client_bg.wasm` | 19,357 B | **8,672 B** |
+
+**结论与 §4.1 的原判断相反**：那 95 KB gz 里 **约 87 KB（91%）是 `pulldown-cmark`**，
+不是"panic 机制 + 绑定层"这种不可压缩的 WASM 固定开销。也就是说 B 方案的首屏载荷代价
+**不是 10 倍量级**，只要 markdown 不在客户端编：
+
+| 方案 | 客户端 markdown 成本（gz） | 备注 |
+|---|---|---|
+| `pulldown-cmark` 进客户端 | +87 KB | 与 Nest 时代的 `marked` 等价，但比 `marked` 的 18 KB 贵得多 |
+| **共享 `rust/src/view/html.rs` 那个手写子集** | 约 0（几万字节级） | 一次编译同时服务 SSR 与客户端，渲染口径天然一致；代价是子集要补齐表格/删除线等语法 |
+| markdown 全部由服务端吐 HTML | 0 | 流式增量文本要额外一次渲染，改的是链路不是体积 |
+
+所以"WASM 首屏贵 10 倍"这句话从现在起作废，正确表述是：**固定地板约 9 KB gz，
+体积大小取决于 markdown 放在哪一侧**。真实 DOM 层写完后需要重测（本仓库不留 CI 配置，
+手工跑 `wasm-pack build` 即可，它是构建不是起服务）。
 
 ### 11.6 本机不可验证的部分，去处已定
 

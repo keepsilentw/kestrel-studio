@@ -292,6 +292,18 @@ find <target> -newermt '-3 minutes' -type f # .wasm 已产出则说明 cargo bui
 所以体积数字不必等 CLI 编完。要省时间可以先把 CLI 显式 `cargo install wasm-bindgen-cli
 --version 0.2.129` 装好，wasm-pack 就会直接用。
 
+两条后续事实（同日补）：
+
+1. 那次构建**总共 11m31s**，CLI 编译完接着默认跑了 `wasm-opt`，最终产物是 **222,694 B /
+   gz 95,243 B**。所以"1.2 MB / 303 KB gz"是 wasm-opt **之前**的中间产物，不能当交付体积引用
+   ——我第一轮就是这样误引了它（见 verification.md §11.5 的更正）。
+2. CLI 编好后缓存在 `~/Library/Caches/.wasm-pack/.wasm-bindgen-cargo-install-0.2.129/`，
+   之后同一版本的 `wasm-pack build` 只要 ~1 秒。
+
+还有一条**关于体积实验的做法**：要单测某个依赖的重量，别改仓库，`cp -R` 出
+`client/` 与 `proto/` 到 `/tmp` 后在副本上删依赖再构建——路径依赖 `../proto` 是按
+manifest 所在目录解析的，只拷 `client/` 会得到 `unable to update /private/tmp/proto`。
+
 另外记两条**环境层面的观测**（原因未知，只记现象与对策）：本轮出现过两次"写成功但文件不在"——
 `proto/` 整个目录在某一步消失（`apply_patch` 报成功、随后 `find` 查不到），以及
 brew 报 `wasm-pack ... 10 files, 6.4MB` 安装成功后 `/opt/homebrew/Cellar/wasm-pack/` 却是空的、
