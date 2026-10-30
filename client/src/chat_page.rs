@@ -18,6 +18,7 @@
 //! module compiles and is not yet referenced by any template.
 
 use std::cell::RefCell;
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -26,7 +27,8 @@ use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::{spawn_local, JsFuture};
 use web_sys::{
     Document, Element, EventSource, Headers, HtmlButtonElement, HtmlDialogElement, HtmlElement,
-    HtmlTextAreaElement, MessageEvent, Request, RequestInit, Response,
+    HtmlTextAreaElement, MessageEvent, Request, RequestInit, Response, ScrollBehavior,
+    ScrollIntoViewOptions, ScrollLogicalPosition,
 };
 
 use crate::chat_core::{Paint, Stream};
@@ -87,6 +89,11 @@ struct Page {
     dom: Dom,
     journal: Stream,
     live: HashMap<i64, Live>,
+    /// The right sidebar's rows, in conversation order: `(link, turn element)`.
+    anchors: Vec<(HtmlButtonElement, HtmlElement)>,
+    active_anchor: Option<usize>,
+    /// One recomputation per animation frame, however many scroll events fire.
+    scroll_scheduled: Cell<bool>,
     /// Pending-task chips by task id: `task_updated` arrives for a job that may
     /// have been submitted before this page was ever loaded.
     tasks: HashMap<i64, HtmlElement>,
@@ -134,12 +141,16 @@ pub fn init_chat() -> Result<(), JsValue> {
         pending_delete: None,
         turn_running: false,
         submitting: false,
+        anchors: Vec::new(),
+        active_anchor: None,
+        scroll_scheduled: Cell::new(false),
     }));
 
     seed_rendered(&document, &page);
     paint_modes(&dom, mode);
     sync_composer(&page);
     bind(&page, &dom)?;
+    bind_extras(&page);
 
     // An existing conversation is subscribed immediately: a turn still running on
     // the server must reach this page even if nobody presses send here.
@@ -346,6 +357,10 @@ fn bind(page: &Handle, dom: &Dom) -> Result<(), JsValue> {
         if let Some(button) = find_closest(&target, "[data-delete-choice]") {
             match button.dataset().get("delete-choice").as_deref() {
                 Some("cancel") => {
+                    // The question is dropped here, not in the `close` handler the
+                    // spec queues: one answer must not be able to fire the delete
+                    // request twice.
+                    scoped.borrow_mut().pending_delete = None;
                     let borrow = scoped.borrow();
                     borrow.dom.delete_dialog.close();
                 }
@@ -537,6 +552,13 @@ fn apply(page: &Handle, paint: Paint) {
             };
             let article = render_message(&document, &message);
             dom.stream.append_child(&article).ok();
+            // The sidebar indexes the conversation by what the user asked. Live user
+            // turns used to get their row at submit time, when the page was the only
+            // source of them; the stream is that source now, so any client that sees
+            // a `user_message` gets the row it would have painted itself.
+            if message.role == "user" {
+                append_anchor(page, &article, &message.content);
+            }
             scroll_bottom(&dom.stream);
         }
         Paint::OpenTurn { message_id, mode } => {
@@ -939,4 +961,244 @@ async fn post_empty(path: &str) -> Result<u16, String> {
         .map_err(|_| format!("{path} 请求失败"))?;
     let response: Response = value.dyn_into().map_err(|_| "malformed response".to_string())?;
     Ok(response.status())
+}
+
+/// The wiring that is not the composer or the stream: the sidebar's index, the
+/// scroll follower that keeps it honest, and dropping a delete question dismissed
+/// with Esc.
+fn bind_extras(page: &Handle) {
+    let (dom, document) = {
+        let borrow = page.borrow();
+        let document = borrow.dom.stream.owner_document();
+        (borrow.dom.clone(), document)
+    };
+    let Some(document) = document else { return };
+
+    // Rows the shell already rendered, each pointing at a turn by message id.
+    if let Ok(links) = document.query_selector_all(".turn-index-link[data-target]") {
+        for index in 0..links.length() {
+            let Some(node) = links.item(index) else { continue };
+            let Some(link) = node.dyn_ref::<HtmlButtonElement>() else { continue };
+            let Some(target) = link.dataset().get("target") else { continue };
+            let Ok(Some(article)) = document.query_selector(&format!("[data-message-id=\"{target}\"]")) else {
+                continue;
+            };
+            let Ok(article) = article.dyn_into::<HtmlElement>() else {
+                // A row whose target is not an element cannot be followed or
+                // measured; binding it would light a row that does nothing.
+                continue;
+            };
+            // The clones are handles, not copies of the DOM: one is captured by the
+            // listener and one goes into the index that `update_active` measures.
+            // The listener owns its own clone of the handle; the row is registered
+            // through the caller's borrow, which must outlive this iteration.
+            let owner = Rc::clone(page);
+            let scoped = Rc::clone(page);
+            let bound = link.clone();
+            let jumped = article.clone();
+            let listener = Closure::<dyn FnMut()>::new(move || {
+                scroll_to(&owner, &bound, &jumped);
+            });
+            if link
+                .add_event_listener_with_callback("click", listener.as_ref().unchecked_ref())
+                .is_ok()
+            {
+                listener.forget();
+                scoped.borrow_mut().anchors.push((link.clone(), article));
+            }
+        }
+    }
+
+    // The highlighted row follows the reading position, not the last click.
+    let scoped = Rc::clone(page);
+    let on_scroll = Closure::<dyn FnMut()>::new(move || {
+        let already = { scoped.borrow().scroll_scheduled.get() };
+        if already {
+            return;
+        }
+        scoped.borrow_mut().scroll_scheduled.set(true);
+        let once = Rc::clone(&scoped);
+        let frame = Closure::<dyn FnMut(f64)>::new(move |_time: f64| {
+            once.borrow_mut().scroll_scheduled.set(false);
+            update_active(&once);
+        });
+        if let Some(window) = web_sys::window() {
+            match window.request_animation_frame(frame.as_ref().unchecked_ref()) {
+                Ok(_) => frame.forget(),
+                Err(_) => {
+                    scoped.borrow().scroll_scheduled.set(false);
+                    update_active(&scoped);
+                }
+            }
+        }
+    });
+    if dom
+        .stream
+        .add_event_listener_with_callback("scroll", on_scroll.as_ref().unchecked_ref())
+        .is_ok()
+    {
+        on_scroll.forget();
+    }
+
+    // Esc is a dismissal, not a confirmation: the pending question has to go with
+    // the dialog, or the next 删除 answers the wrong conversation.
+    let scoped = Rc::clone(page);
+    let on_close = Closure::<dyn FnMut()>::new(move || {
+        scoped.borrow_mut().pending_delete = None;
+    });
+    if dom
+        .delete_dialog
+        .add_event_listener_with_callback("close", on_close.as_ref().unchecked_ref())
+        .is_ok()
+    {
+        on_close.forget();
+    }
+
+    update_active(page);
+}
+
+/// The index's `<ol>`, built on first use: a conversation can start with no turns
+/// at all, in which case the shell renders no sidebar.
+fn ensure_turn_index_list(stream: &HtmlElement) -> Option<HtmlElement> {
+    let document = stream.owner_document()?;
+    if let Some(existing) = document.get_element_by_id("turn-index-list") {
+        return existing.dyn_into::<HtmlElement>().ok();
+    }
+    let nav = build(&document, "nav", "turn-index");
+    nav.set_attribute("aria-label", "会话节点").ok();
+    let title = build(&document, "p", "turn-index-title");
+    title.set_text_content(Some("会话节点"));
+    let list = build(&document, "ol", "turn-index-list");
+    nav.append_child(&title).ok();
+    nav.append_child(&list).ok();
+    // Same place the template puts it: right after the scroll container.
+    stream.insert_adjacent_element("afterend", &nav).ok();
+    Some(list)
+}
+
+/// Add the sidebar row for a user turn. An empty prompt gets no row: there would
+/// be nothing to read in it.
+fn append_anchor(page: &Handle, article: &HtmlElement, label: &str) {
+    let text = label.trim().to_string();
+    if text.is_empty() {
+        return;
+    }
+    let (stream, document) = {
+        let borrow = page.borrow();
+        (borrow.dom.stream.clone(), borrow.dom.stream.owner_document())
+    };
+    let Some(document) = document else { return };
+    let Some(list) = ensure_turn_index_list(&stream) else { return };
+
+    let item = build(&document, "li", "");
+    // `build` hands back an `HtmlElement`; the index row is a button, and the two
+    // types differ where the click listener is registered.
+    let link: HtmlButtonElement = match build(&document, "button", "turn-index-link").dyn_into() {
+        Ok(button) => button,
+        Err(_) => return,
+    };
+    link.set_attribute("type", "button").ok();
+    link.set_text_content(Some(&text));
+    link.set_attribute("title", &text).ok();
+    item.append_child(&link).ok();
+    list.append_child(&item).ok();
+
+    let index = {
+        let mut borrow = page.borrow_mut();
+        borrow.anchors.push((link.clone(), article.clone()));
+        borrow.anchors.len() - 1
+    };
+    let scoped = Rc::clone(page);
+    let target = article.clone();
+    let bound = link.clone();
+    let listener = Closure::<dyn FnMut()>::new(move || {
+        scroll_to(&scoped, &bound, &target);
+    });
+    if link.add_event_listener_with_callback("click", listener.as_ref().unchecked_ref()).is_ok() {
+        listener.forget();
+    }
+    let _ = index;
+    set_active(page, Some(index));
+    sync_index_visibility(page);
+}
+
+/// Jump to a turn and mark its row. Smooth and top-aligned because the row is a
+/// reading shortcut, not an anchor link.
+fn scroll_to(page: &Handle, link: &HtmlButtonElement, target: &HtmlElement) {
+    let options = ScrollIntoViewOptions::new();
+    options.set_behavior(ScrollBehavior::Smooth);
+    options.set_block(ScrollLogicalPosition::Start);
+    target.scroll_into_view_with_scroll_into_view_options(&options);
+    let index = {
+        let borrow = page.borrow();
+        borrow
+            .anchors
+            .iter()
+            .position(|(candidate, _)| candidate.is_same_node(Some(link.as_ref())))
+    };
+    set_active(page, index);
+}
+
+fn sync_index_visibility(page: &Handle) {
+    let (count, document) = {
+        let borrow = page.borrow();
+        (borrow.anchors.len(), borrow.dom.stream.owner_document())
+    };
+    if let Some(document) = document {
+        if let Some(nav) = document.get_element_by_id("turn-index") {
+            let empty = count == 0;
+            nav.dyn_ref::<HtmlElement>().map(|node| node.set_hidden(empty));
+        }
+    }
+}
+
+/// The last turn whose top has passed the top of the reading area. The tolerance
+/// stays above `.turn`'s `scroll-margin-top` (12 px in the stylesheet), or a turn
+/// just scrolled to sits below the threshold and the previous row stays lit.
+fn update_active(page: &Handle) {
+    let (stream, anchors) = {
+        let borrow = page.borrow();
+        (borrow.dom.stream.clone(), borrow.anchors.clone())
+    };
+    if anchors.is_empty() {
+        return;
+    }
+    // `getBoundingClientRect` cannot fail in a browser; the tolerance stays above
+    // `.turn`'s `scroll-margin-top` so a turn just scrolled to is the one lit.
+    let threshold = stream.get_bounding_client_rect().top() + 24.0;
+    let mut found = None;
+    for (index, (_, article)) in anchors.iter().enumerate() {
+        let top = article.get_bounding_client_rect().top();
+        if top > threshold {
+            break;
+        }
+        found = Some(index);
+    }
+    set_active(page, found.or(Some(0)));
+}
+
+fn set_active(page: &Handle, next: Option<usize>) {
+    let mut borrow = page.borrow_mut();
+    if borrow.active_anchor == next {
+        return;
+    }
+    if let Some(previous) = borrow.active_anchor {
+        if let Some((link, _)) = borrow.anchors.get(previous) {
+            let _ = link.class_list().remove_1("is-active");
+            link.remove_attribute("aria-current").ok();
+        }
+    }
+    borrow.active_anchor = next;
+    if let Some(index) = next {
+        if let Some((link, _)) = borrow.anchors.get(index) {
+            let _ = link.class_list().add_1("is-active");
+            link.set_attribute("aria-current", "true").ok();
+            // Keep the highlighted row inside the sidebar's own scroll window.
+            // Nearest, not start: the row should stop moving as soon as it is
+            // visible, instead of being dragged to the top of the sidebar.
+            let nearest = ScrollIntoViewOptions::new();
+            nearest.set_block(ScrollLogicalPosition::Nearest);
+            link.scroll_into_view_with_scroll_into_view_options(&nearest);
+        }
+    }
 }
