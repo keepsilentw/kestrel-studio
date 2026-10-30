@@ -162,7 +162,9 @@ fn dialog(document: &Document, id: &str) -> Result<HtmlDialogElement, JsValue> {
 }
 
 fn mode_buttons(document: &Document) -> Result<Vec<HtmlButtonElement>, JsValue> {
-    let found = document.query_selector_all("[data-mode]")?;
+    // `.mode-option`, not `[data-mode]`: the shell puts `data-mode` on the body
+    // too, and that selector would paint the whole page active.
+    let found = document.query_selector_all(".mode-option")?;
     let mut buttons = Vec::new();
     for index in 0..found.length() {
         if let Some(node) = found.item(index) {
@@ -211,7 +213,19 @@ fn paint_modes(dom: &Dom, active: Mode) {
     for button in &dom.modes {
         let name = button.dataset().get("mode").unwrap_or_default();
         let on = name == active.as_str();
-        button.set_class_name(if on { "mode-button mode-button-active" } else { "mode-button" });
+        // `set_class_name` would drop the class the shell already put there
+        // (`mode-option`), so the state is toggled on the token list. The state
+        // class is `is-active` and the group is `role="radio"` — that is how the
+        // shell and the stylesheet already spell it.
+        let classes = button.class_list();
+        if on {
+            let _ = classes.add_1("is-active");
+        } else {
+            let _ = classes.remove_1("is-active");
+        }
+        button
+            .set_attribute("aria-checked", if on { "true" } else { "false" })
+            .ok();
     }
 }
 
