@@ -76,6 +76,10 @@ struct Dom {
     modes: Vec<HtmlButtonElement>,
     preview: HtmlDialogElement,
     preview_image: HtmlElement,
+    /// The delete confirmation. Its two buttons are found by `[data-delete-choice]`
+    /// because the shell gives them classes, not ids.
+    delete_dialog: HtmlDialogElement,
+    delete_target: HtmlElement,
     body: HtmlElement,
 }
 
@@ -88,6 +92,8 @@ struct Page {
     tasks: HashMap<i64, HtmlElement>,
     events: Option<EventSource>,
     mode: Mode,
+    /// The conversation the open confirmation is about, if one is open.
+    pending_delete: Option<i64>,
     /// A turn is running for this conversation, so the composer waits: the server
     /// refuses a second concurrent turn with 409 on purpose.
     turn_running: bool,
@@ -112,6 +118,8 @@ pub fn init_chat() -> Result<(), JsValue> {
         modes: mode_buttons(&document)?,
         preview: dialog(&document, "preview")?,
         preview_image: element(&document, "preview-image")?,
+        delete_dialog: dialog(&document, "conversation-delete-dialog")?,
+        delete_target: element(&document, "conversation-delete-target")?,
         body,
     };
 
@@ -123,6 +131,7 @@ pub fn init_chat() -> Result<(), JsValue> {
         tasks: HashMap::new(),
         events: None,
         mode,
+        pending_delete: None,
         turn_running: false,
         submitting: false,
     }));
@@ -317,7 +326,137 @@ fn bind(page: &Handle, dom: &Dom) -> Result<(), JsValue> {
         .add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
     click.forget();
 
+    // One document-level listener covers the sidebar rows, which the shell renders
+    // and the client may later rebuild: a per-row listener would leak on refresh.
+    let scoped = Rc::clone(page);
+    let on_choice = Closure::<dyn FnMut(web_sys::MouseEvent)>::new(move |event: web_sys::MouseEvent| {
+        let Some(target) = event
+            .target()
+            .and_then(|value| value.dyn_into::<Element>().ok())
+        else {
+            return;
+        };
+        if let Some(button) = find_closest(&target, "[data-delete-conversation]") {
+            let Some(raw) = button.dataset().get("delete-conversation").and_then(|value| value.parse::<i64>().ok()) else {
+                return;
+            };
+            ask_delete(&scoped, raw);
+            return;
+        }
+        if let Some(button) = find_closest(&target, "[data-delete-choice]") {
+            match button.dataset().get("delete-choice").as_deref() {
+                Some("cancel") => {
+                    let borrow = scoped.borrow();
+                    borrow.dom.delete_dialog.close();
+                }
+                Some("confirm") => confirm_delete(&scoped),
+                _ => {}
+            }
+        }
+    });
+    if let Some(document) = dom.body.owner_document() {
+        document
+            .add_event_listener_with_callback("click", on_choice.as_ref().unchecked_ref())
+            .map_err(|_| "cannot listen for delete clicks")?;
+    }
+    on_choice.forget();
+
     Ok(())
+}
+
+/// Walk up from a click target to the first element matching `selector`.
+fn find_closest(target: &Element, selector: &str) -> Option<HtmlElement> {
+    target
+        .closest(selector)
+        .ok()
+        .flatten()
+        .and_then(|node| node.dyn_into::<HtmlElement>().ok())
+}
+
+/// Open the confirmation, naming the conversation it is about. Deleting is a
+/// soft delete of the row only (architecture.md §12.1), and the page says so.
+fn ask_delete(page: &Handle, id: i64) {
+    let title = {
+        let borrow = page.borrow();
+        borrow
+            .dom
+            .delete_target
+            .owner_document()
+            .and_then(|document| {
+                document
+                    .query_selector(&format!("[data-delete-conversation=\"{id}\"]"))
+                    .ok()
+                    .flatten()
+                    .and_then(|button| button.parent_element())
+                    .and_then(|row| row.query_selector(".conversation-link").ok().flatten())
+                    .and_then(|link| link.text_content())
+            })
+    };
+    {
+        let borrow = page.borrow();
+        borrow
+            .dom
+            .delete_target
+            .set_text_content(Some(&format!("《{}》", title.unwrap_or_default().trim())));
+    }
+    // The borrow is released before `show_modal`, which can dispatch.
+    let dialog = {
+        let mut borrow = page.borrow_mut();
+        borrow.pending_delete = Some(id);
+        borrow.dom.delete_dialog.clone()
+    };
+    if let Err(error) = dialog.show_modal() {
+        web_sys::console::error_1(&JsValue::from_str(&format!("cannot open the delete dialog: {error:?}")));
+    }
+}
+
+/// Delete for real. A failure is reported on the dialog rather than silently
+/// leaving the row looking deleted.
+fn confirm_delete(page: &Handle) {
+    let Some(id) = page.borrow().pending_delete else { return };
+    let (dom, current) = {
+        let borrow = page.borrow();
+        (borrow.dom.clone(), conversation_id(&borrow.dom.body).unwrap_or_default())
+    };
+    dom.delete_dialog.close();
+
+    let scoped = Rc::clone(page);
+    spawn_local(async move {
+        let status = match post_empty(&format!("/api/v1/conversations/{id}/delete")).await {
+            Ok(status) => status,
+            Err(message) => {
+                web_sys::console::error_1(&JsValue::from_str(&message));
+                return;
+            }
+        };
+        if !(200..300).contains(&status) {
+            let text = format!("删除失败（HTTP {status}）");
+            dom.delete_target.set_text_content(Some(&text));
+            web_sys::console::error_1(&JsValue::from_str(&text));
+            return;
+        }
+        if id.to_string() == current {
+            // Deleting what is on screen is the same state as 新会话: the shell
+            // decides what an empty stage looks like, so go get a fresh one.
+            if let Some(window) = web_sys::window() {
+                let _ = window.location().set_href("/");
+            }
+            return;
+        }
+        // Any other row is just a row going away.
+        if let Some(document) = dom.body.owner_document() {
+            if let Some(button) = document
+                .query_selector(&format!("[data-delete-conversation=\"{id}\"]"))
+                .ok()
+                .flatten()
+            {
+                if let Some(row) = button.parent_element() {
+                    row.remove();
+                }
+            }
+        }
+        let _ = scoped;
+    });
 }
 
 /// Subscribe to the conversation's event stream. `from` is the journal cursor the
@@ -785,4 +924,19 @@ async fn post_send(path: &str, body: &serde_json::Value) -> Result<Response, Str
         .await
         .map_err(|_| format!("{path} 请求失败"))?;
     value.dyn_into::<Response>().map_err(|_| "malformed response".to_string())
+}
+
+/// A POST with no body, for the endpoints that take nothing but the id in the
+/// path. It keeps the status code rather than throwing on 4xx, because the caller
+/// decides what a refusal means on screen.
+async fn post_empty(path: &str) -> Result<u16, String> {
+    let window = web_sys::window().ok_or("no window")?;
+    let init = RequestInit::new();
+    init.set_method("POST");
+    let request = Request::new_with_str_and_init(path, &init).map_err(|_| "cannot build the request")?;
+    let value = JsFuture::from(window.fetch_with_request(&request))
+        .await
+        .map_err(|_| format!("{path} 请求失败"))?;
+    let response: Response = value.dyn_into().map_err(|_| "malformed response".to_string())?;
+    Ok(response.status())
 }
