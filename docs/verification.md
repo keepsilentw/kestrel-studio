@@ -669,19 +669,36 @@ test result: ok. 13 passed; 0 failed
 |---|---|---|
 | `kestrel_client_bg.wasm` | 19,357 B | **8,672 B** |
 
-**结论与 §4.1 的原判断相反**：那 95 KB gz 里 **约 87 KB（91%）是 `pulldown-cmark`**，
-不是"panic 机制 + 绑定层"这种不可压缩的 WASM 固定开销。也就是说 B 方案的首屏载荷代价
-**不是 10 倍量级**，只要 markdown 不在客户端编：
+**结论与 §4.1 的原判断相反**：那 95 KB gz 里 **约 74 KB 是 `pulldown-cmark`**，不是
+"panic 机制 + 绑定层"这种不可压缩的 WASM 开销。据此把 markdown 换成**服务端已有的
+手写子集**（抽成 `md/` crate，SSR 与客户端编同一份，见 architecture.md §13.4），
+`pulldown-cmark` 从客户端依赖里删除，同日重测：
 
-| 方案 | 客户端 markdown 成本（gz） | 备注 |
+| 产物 | raw | gzip |
 |---|---|---|
-| `pulldown-cmark` 进客户端 | +87 KB | 与 Nest 时代的 `marked` 等价，但比 `marked` 的 18 KB 贵得多 |
-| **共享 `rust/src/view/html.rs` 那个手写子集** | 约 0（几万字节级） | 一次编译同时服务 SSR 与客户端，渲染口径天然一致；代价是子集要补齐表格/删除线等语法 |
-| markdown 全部由服务端吐 HTML | 0 | 流式增量文本要额外一次渲染，改的是链路不是体积 |
+| `kestrel_client_bg.wasm`（含共享 markdown + `voice_core` + serde_json） | 46,885 B | **21,133 B** |
+| `kestrel_client.js`（wasm-bindgen glue） | 10,711 B | 3,281 B |
+| **合计** | | **约 24.4 KB gz** |
+| 对照：现客户端 `main.js` + `voice.js` | 65,617 B | **20,999 B** |
 
-所以"WASM 首屏贵 10 倍"这句话从现在起作废，正确表述是：**固定地板约 9 KB gz，
-体积大小取决于 markdown 放在哪一侧**。真实 DOM 层写完后需要重测（本仓库不留 CI 配置，
-手工跑 `wasm-pack build` 即可，它是构建不是起服务）。
+即 **"WASM 首屏贵 10 倍"这句更正后的结论是：在当前已移植的范围内，B 的体积与 JS 持平**
+（24 KB gz vs 21 KB gz），差值来自 WASM 侧还要在浏览器外做一次 JSON 解析与状态机，
+而 `marked` 本身也占了 JS 里 18 KB gz 中的大头。
+
+**这条结论的边界，不要越过**：
+
+- 客户端的 **DOM 层还没写**，所以 21 KB gz 里不含任何 `document.createElement` /
+  `WebSocket` / `EventSource` / `fetch` 的代码。绑定层是按需生成的，真实增量**未测**，
+  估计在几十 KB raw 量级——但这是估计，不是数据。
+- `wasm-opt` 由 wasm-pack 默认执行；手工 `cargo build --target wasm32` 出来的数字要大 5 倍，
+  引用时务必区分（§11.5 初稿就误引过它）。
+- markdown 子集**不含 GFM 表格与删除线**，`marked` 是支持的。切换后助手若画表格，
+  会显示成竖线原文。这是产品可见的行为变化，需要决策（补子集语法，或接受），
+  记在 roadmap.md §4.1。
+
+复测方法（本机可做，属构建不属起服务）：
+`cd client && wasm-pack build --release --target web --out-dir /tmp/...`，
+对 `kestrel_client_bg.wasm` 与 `kestrel_client.js` 各跑一次 `gzip -9 | wc -c`。
 
 ### 11.6 本机不可验证的部分，去处已定
 

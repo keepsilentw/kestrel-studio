@@ -575,14 +575,22 @@ WebSocket 的 upgrade 不经过 Express，所以 `AuthenticatedGuard` 对它无�
   等于把未经证实的猜测写进唯一一条真·上行链路，因此不做；要做得先在真机上确认它
   有效，且不会让会话被另一端以协议错误关掉。
 
-### 13.4 `proto/` 与 `client/`：迁移期新增的两个 crate
+### 13.4 `proto/`、`md/` 与 `client/`：迁移期新增的三个 crate
 
-第七期（Nest/Node 退役，见 roadmap.md §4）在 `rust/` 之外立了两个新包：
+第七期（Nest/Node 退役，见 roadmap.md §4）在 `rust/` 之外立了三个新包：
 
 | crate | 职责 | 为什么存在 |
 |---|---|---|
 | `proto/`（`kestrel-proto`） | 语音帧 `ClientFrame` / `ServerFrame`、`parse_client_frame`、`TaskKind` | 类型从 `rust/src/voice/protocol.rs` 搬出，服务端与浏览器客户端**编译同一份定义**。原来那套形状在 TS 里是手抄的（服务端自己的注释就写着这一点），而手抄的形状正是语音 `start` 帧事故的温床（implementation-notes.md §8）。现在改字段名会在消费方编译失败 |
 | `client/`（`kestrel-client`） | 浏览器端，Rust→WASM | `voice_core` 是纯状态机：时钟与 socket 都由调用方注入，输出 `Effect` 值，因此**帧顺序断言能在宿主目标的 `cargo test` 里跑**，不需要浏览器。这是刻意保留 jsdom 套件那份保证的方式（它当年抓住了那次静默故障，见 verification.md §7） |
+
+`md/`（`kestrel-md`）是同批补的第三个：`rust/src/view/html.rs` 里的 `escape` 与 markdown
+子集整体搬过去，`html.rs` 只剩再导出，模板与测试仍按 `super::html::{escape, markdown}` 取。
+客户端用它而不是 `pulldown-cmark`——后者在浏览器侧实测 +74 KB gz
+（[verification.md](verification.md) §11.5）。而子集还带一个 `marked` 没有的性质：
+**子集之外的内容一律转义而非透传**，模型吐 `<script>` 不会被渲染
+（`rust/src/view/tests.rs` 钉着这条）。代价是语法面收窄——无表格、无删除线，
+见 [roadmap.md](roadmap.md) §4.1.1 的开放项。
 
 `rust/src/voice/protocol.rs` 仍在，内容只剩再导出与**线名测试**——测试钉的是 JSON 上的
 字段名（`conversationId` 这种），那才是浏览器真正依赖的契约，比类型共享更容易漂。

@@ -227,12 +227,19 @@ Web 客户端由 TypeScript + Vite 改为 **Rust→WASM**（选型 B），markdo
 
 | 代价 | 结论 | 说明 |
 |---|---|---|
-| ~~首屏载荷涨 10 倍~~ | **不成立** | 实测 wasm-opt 后的固定地板约 **9 KB gz**；此前引用的 303 KB / 95 KB 里 **91% 是 `pulldown-cmark`**。markdown 改走"服务端与客户端共享 `html.rs` 手写子集"或"服务端吐 HTML"，体积就不构成反对理由 |
+| ~~首屏载荷涨 10 倍~~ | **不成立，实测持平** | wasm-opt 后当前范围是 **24.4 KB gz**，现客户端是 **21.0 KB gz**。此前的 303 KB / 95 KB 两个数字都不作数：前者是 wasm-opt 之前的中间产物，后者 74 KB 来自 `pulldown-cmark`，已改为共享服务端的手写子集（`md/`）|
 | JS 地板 | 约 20 行，**删不掉** | `AudioWorkletProcessor` 子类必须在 worklet 全局作用域 `registerProcessor`，那里跑不了 wasm 宿主。语音采集那小段 JS 只能作为静态资源入库（`public/capture.js`） |
 
 真实代价改记为两条：一是**客户端从此没有类型检查与 jsdom 测试之外的运行时护栏**，
 `cargo test` 只能覆盖与 DOM 无关的逻辑（这正是 `voice_core` 被拆成纯状态机的原因）；
-二是 markdown 若走共享子集，**那个手写子集需要补齐语法**（表格、删除线等 `marked` 默认支持的）。
+二是 markdown 换成共享子集后**语法面收窄了**，见下面的开放项。
+
+### 4.1.1 两个开放项（需要决策，不是待办）
+
+| 项 | 现状 | 决策点 |
+|---|---|---|
+| GFM 表格与删除线 | `marked` 支持，`md/` 子集不支持。切换后助手画的表格会以竖线原文显示 | 要么给 `md/` 补语法（同时在 `rust/src/view/tests.rs` 加断言，两侧一起改），要么接受并观察助手是否真用表格。**没有第三选**：只在一侧补等于重新制造口径分裂 |
+| DOM 层的真实体积 | 未测（客户端还没有任何 DOM 代码） | 若 DOM 层使 gz 涨到不可接受，退路是"服务端吐 HTML、客户端不做 markdown"，那是链路改动而非引擎替换 |
 
 顺带修掉的一个长期风险：markdown 目前有**三处**渲染口径——Nest 服务端 SSR
 （`src/view/render.ts` 用 `marked`）、Nest 客户端（`web/scripts/main.ts` 同一个 `marked`，
