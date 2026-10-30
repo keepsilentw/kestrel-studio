@@ -14,6 +14,10 @@
 //! without a browser at all.
 
 pub mod voice_core;
+
+/// The conversation page's decisions: replay dedupe, the `resync` rule, the mode
+/// read back from storage, and the download re-encode maths.
+pub mod chat_core;
 pub mod pcm;
 
 // The exports exist only where they can be called: on the host target the same
