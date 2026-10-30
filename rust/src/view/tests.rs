@@ -262,3 +262,49 @@ fn the_markdown_subset_matches_what_the_assistant_actually_writes() {
         "code spans are protected from the emphasis pass"
     );
 }
+
+/// The ids the WASM voice page looks up, read out of **its own source** — the
+/// same device [`required_ids`] uses for the chat page and `web/scripts/main.ts`.
+/// A shell that stops carrying one is a hard failure in the browser, so it has to
+/// be a failing test first.
+fn voice_required_ids() -> Vec<String> {
+    let path = std::path::Path::new("../client/src/voice_page.rs");
+    let source = std::fs::read_to_string(path)
+        .unwrap_or_else(|error| panic!("{} must be readable: {error}", path.display()));
+
+    let mut ids = Vec::new();
+    // Split on the call form, then read the literal that follows it. The piece
+    // before the first hit is the file's header, which has no id in it.
+    let mut pieces = source.split("element(&document, \"");
+    pieces.next();
+    for after in pieces {
+        let Some(end) = after.find('"') else { continue };
+        let id = &after[..end];
+        // Only accept something that can actually be an element id. Without this,
+        // a sentence in a comment mentioning the call form is picked up as a
+        // fourth "element" and the test fails for the wrong reason.
+        let shaped = !id.is_empty()
+            && id
+                .chars()
+                .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+        if shaped && !ids.iter().any(|existing| existing == id) {
+            ids.push(id.to_string());
+        }
+    }
+    // The voice shell is exactly these three. A smaller count means the extractor
+    // stopped matching how the page looks elements up, which is the failure this
+    // function exists to catch.
+    assert_eq!(ids.len(), 3, "expected the page's three elements, found {ids:?}");
+    ids
+}
+
+#[test]
+fn the_voice_page_carries_every_element_the_wasm_client_requires() {
+    let rendered = super::templates::voice_page("tww316", true);
+    for id in voice_required_ids() {
+        assert!(
+            rendered.contains(&format!("id=\"{id}\"")),
+            "#{id} is looked up by client/src/voice_page.rs but is not in the /voice shell"
+        );
+    }
+}

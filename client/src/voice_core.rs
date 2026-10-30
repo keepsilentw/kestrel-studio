@@ -28,6 +28,11 @@ use kestrel_proto::{ClientFrame, ServerFrame};
 /// tail of a long sentence is never rejected.
 pub const MAX_HOLD_MS: u64 = 25_000;
 
+/// How often the page must call [`Session::tick`]. The cap is stored as an
+/// absolute deadline, so the interval only has to be short enough to notice it —
+/// 250 ms is well inside the 5 s of slack between 25 s and the endpoint's 30 s.
+pub const TICK_MS: i32 = 250;
+
 /// Status strings. Every one of them is also an assertion in the tests below,
 /// which is why they are named rather than inlined.
 pub const STATUS_IDLE: &str = "按住按钮开始说话";
@@ -315,6 +320,28 @@ impl<S: Transport> Session<S> {
         vec![Effect::ConversationStream(None)]
     }
 
+    /// End the hold **without** handing anything over: the microphone could not be
+    /// opened, so there is no utterance to commit.
+    ///
+    /// The Nest client did not have this path — its `press()` error handler called
+    /// `release()`, which queued a commit of an empty buffer, and the endpoint
+    /// answered "没有听清，请再说一次" for a failure that was the page's, not the
+    /// user's. A permission denial must not spend a turn.
+    pub fn abort(&mut self, message: &str) -> Vec<Effect> {
+        self.holding = false;
+        self.blocked = true;
+        self.busy = false;
+        self.pending_commit = false;
+        self.queued.clear();
+        self.hold_deadline = None;
+        vec![
+            Effect::AppendEntry { kind: "error", text: message.to_string() },
+            Effect::SetButtonActive(false),
+            Effect::SetButtonEnabled(true),
+            Effect::SetStatus(STATUS_IDLE),
+        ]
+    }
+
     fn on_ready(&mut self, conversation_id: i64, now_ms: u64) -> Vec<Effect> {
         self.phase = Phase::Ready;
         self.conversation_id = Some(conversation_id);
@@ -583,6 +610,39 @@ mod tests {
         session.on_socket_open();
         session.shutdown();
         assert_eq!(frames(&session).last(), Some(&ClientFrame::Stop));
+    }
+
+    /// A permission denial is the page's failure, not an empty utterance: the
+    /// Nest client committed anyway and the endpoint answered "没有听清，请再说一次".
+    #[test]
+    fn an_uncapturable_press_is_abandoned_without_committing() {
+        let mut session = session();
+        session.press(0);
+        session.on_socket_open();
+        session.on_server_frame(READY, 0);
+
+        let effects = session.abort("拿不到麦克风权限，无法说话");
+        assert_eq!(
+            frames(&session),
+            vec![ClientFrame::Start],
+            "no commit: there is nothing to hand over"
+        );
+        assert!(effects.contains(&Effect::SetStatus(STATUS_IDLE)));
+        assert!(effects.contains(&Effect::SetButtonEnabled(true)));
+
+        // The next press must work, which is the point of not leaving a commit
+        // queued behind a failure.
+        session.press(1_000);
+        session.audio_chunk("AAA=".to_string());
+        session.release();
+        assert_eq!(
+            frames(&session),
+            vec![
+                ClientFrame::Start,
+                ClientFrame::Audio { pcm: "AAA=".to_string() },
+                ClientFrame::Commit,
+            ]
+        );
     }
 
     /// The asset frame carries the kind the page keys its preview on.

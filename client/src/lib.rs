@@ -14,8 +14,22 @@
 //! without a browser at all.
 
 pub mod voice_core;
+pub mod pcm;
 
 // The exports exist only where they can be called: on the host target the same
 // module would drag wasm-bindgen into `cargo test` for no reason.
 #[cfg(target_arch = "wasm32")]
 pub mod wasm;
+
+/// The voice socket: ticket, upgrade, and the frames in and out.
+#[cfg(target_arch = "wasm32")]
+pub mod wire;
+
+/// The microphone and the playback queue. Nothing here is reachable from the
+/// host target, which is why the byte-level work sits in `pcm` instead.
+#[cfg(target_arch = "wasm32")]
+pub mod audio;
+
+/// The `/voice` page: DOM, hold wiring, and the effect interpreter.
+#[cfg(target_arch = "wasm32")]
+pub mod voice_page;

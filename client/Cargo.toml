@@ -31,6 +31,8 @@ web-sys = { version = "0.3", features = [
   "Navigator",
   "MediaDevices",
   "DomStringMap",
+  "BinaryType",
+  "console",
   "Document",
   "Element",
   "HtmlElement",
@@ -55,7 +57,6 @@ web-sys = { version = "0.3", features = [
   "Headers",
   "Request",
   "RequestInit",
-  "RequestCredentials",
   "Response",
   "AbortController",
   "AbortSignal",
@@ -76,8 +77,33 @@ web-sys = { version = "0.3", features = [
   "Touch",
   "TouchEvent",
   "AddEventListenerOptions",
+  # The voice page's audio graph: capture through the worklet, playback through
+  # a scheduled buffer source.
+  "AudioContext",
+  "AudioContextOptions",
+  "BaseAudioContext",
+  "AudioNode",
+  "AudioDestinationNode",
+  "AudioWorklet",
+  "AudioWorkletNode",
+  "AudioWorkletNodeOptions",
+  "AudioBuffer",
+  "AudioBufferSourceNode",
+  "ChannelCountMode",
+  "MediaStream",
+  "MediaStreamConstraints",
+  "MediaStreamTrack",
+  "MediaStreamAudioSourceNode",
+  "MessagePort",
+  # `button.class_list()` for the pressed state.
+  "DomTokenList",
 ] }
 
 [profile.release]
 opt-level = "s"
 lto = true
+# Tried for size: `abort` removes the landing pads a `panic = unwind` build emits
+# into every wasm import, and nothing here catches a panic — a trap in the client
+# takes the page's callback down either way, and the console line is the signal.
+panic = "abort"
+codegen-units = 1
