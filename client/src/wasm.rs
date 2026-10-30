@@ -23,22 +23,21 @@
 use js_sys::Array;
 use wasm_bindgen::prelude::*;
 
-/// Options shared with the server-side renderer. Kept narrow on purpose: the
-/// client used to get GFM tables and task lists from `marked`'s defaults, and
-/// whether the server produced the same HTML was never asserted.
-fn markdown_options() -> pulldown_cmark::Options {
-    pulldown_cmark::Options::ENABLE_TABLES | pulldown_cmark::Options::ENABLE_STRIKETHROUGH
-}
-
-/// Render assistant text to HTML. The caller inserts the result as `innerHTML`,
-/// so the markdown source is the only thing that can shape the output: no raw
-/// HTML passthrough, no `unsafe` extension.
+/// Render assistant text to HTML, with the server's own renderer.
+///
+/// `kestrel-md` is the subset the SSR path uses, so a turn that streamed past you
+/// as HTML and the same turn after a reload are produced by the same lines of
+/// code. It also escapes anything outside the subset instead of forwarding it,
+/// which is where `marked` (the client's old engine) differed: a model emitting
+/// raw `<script>` got it rendered.
+///
+/// Consequence to keep in mind: GFM tables and strikethrough are **not** in the
+/// subset, so a table now shows as literal pipe characters instead of markup. If
+/// the assistant starts writing tables, add them to the subset here and in the
+/// server's tests at once — never on one side only.
 #[wasm_bindgen(js_name = renderMarkdown)]
 pub fn render_markdown(source: &str) -> String {
-    let parser = pulldown_cmark::Parser::new_ext(source, markdown_options());
-    let mut html = String::with_capacity(source.len() + 32);
-    pulldown_cmark::html::push_html(&mut html, parser);
-    html
+    kestrel_md::markdown(source)
 }
 
 /// `navigator.mediaDevices` present, i.e. is push-to-talk possible at all on this

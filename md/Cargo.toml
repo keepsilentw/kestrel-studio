@@ -1,0 +1,11 @@
+[package]
+name = "kestrel-md"
+version = "0.1.0"
+edition = "2021"
+description = "The markdown subset and HTML escaping shared by the server and the WASM client"
+license = "MIT"
+
+# No dependencies: this compiles into the server binary and into the browser's
+# WASM module, and every byte here is shipped to users. `pulldown-cmark` measured
+# +87 KB gz in the client for a feature set the subset does not need
+# (docs/verification.md §11.5).
