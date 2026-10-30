@@ -31,8 +31,9 @@ Web 生成式媒体 Agent：用户在网页给一句话，LLM 流式思考、调
 | `make clean` | 清 `dist/` 与 `public/`，保留 `data/` `storage/` |
 | `make rust-check` / `rust-test` | Rust 实现（`rust/`）的类型检查与单元测试 |
 | `make rust-build` / `rust-run` | 构建 release 二进制 / 本机前台运行（不走 pm2） |
+| `make rust-build-linux` | 交叉编译 `x86_64-unknown-linux-musl` 静态二进制到 `/tmp/kestrel-studio-linux/`（`make deploy` 的输入；需 `zig` + `cargo-zigbuild`） |
 | `make rust-clean` | 清 `rust/target/` |
-| `make deploy*` | 部署到 lavo-test（见下） |
+| `make deploy*` | 部署到 lavo-test。**deploy 现在组装 Rust 静态二进制 + `public/`（`FROM scratch`），不再上传 node_modules**；它会先跑 `rust-build-linux` 与 `build-web`（见下） |
 
 要点：
 
@@ -46,8 +47,21 @@ Web 生成式媒体 Agent：用户在网页给一句话，LLM 流式思考、调
   `make rust-test`。它**未接管构建与部署**：线上仍是 Nest 容器，`src/` 一行未改。
   离线 registry 缺 `bcrypt` / `tungstenite` / 模板引擎等件，相关自研与原因见
   `docs/architecture.md` §13，踩坑台账见 `docs/implementation-notes.md` §10-§12。
+  **2026-10-30 两点更正与一条决策**：(1)「开发机无出站网络」是**执行环境的网络沙箱**
+  造成的误判，这台机器能正常拉 crates.io（`docs/verification.md` §10.1），真实约束只有
+  服务器侧零下载；(2) 已**决定退役 Nest/Node 技术栈**，Web 客户端改 Rust→WASM，分期与
+  判据见 `docs/roadmap.md` §4——**在 P1（Rust 真跑并端到端实测）通过前不删任何 Node 文件**；
+  (3) 客户端改 WASM 的踩坑（web-sys feature 门、CLI 版本配对、AudioWorklet 那 20 行
+  删不掉的 JS）见 `docs/implementation-notes.md` §13。
 - **无端到端证据**：开发环境禁止启动服务，`hyper::upgrade` 接管与 `tokio-rustls`
   真拨号、浏览器控制台零噪音这三处仍是未知，勿当作已验证。
+  **2026-10-30 明确并重申（覆盖此前任何相反的计划）**：**禁止在本机启动 Docker**，
+  **禁止在本机启动服务做测试**。这两条不是临时限制，也不因迁移任务而豁免。
+  本仓库**不保留任何 CI 配置**（2026-10-30 写过一份 GitHub Actions 烟测定义，
+  按要求删除，不要再重建）。因此 Rust 侧的运行时证据只有一个去处：**目标主机上的
+  灰度实例**，由用户逐次授权、人工执行。本机可做的验证上限是编译、单元测试与静态
+  产物（`cargo test` / `cargo check --target wasm32-unknown-unknown` /
+  `wasm-pack build`）。不要再提出"本机起个端口跑一下"或"交给 CI 验"这类方案。
 - **cargo 的产物在仓库外**：手工调 cargo（尤其脚本里）务必带
   `CARGO_TARGET_DIR=/tmp/...`；`.gitignore` 虽已覆盖 `rust/target/`，但提交一律用
   `git add -u <path>` 而不是 `git add <path>`，避免未跟踪产物被顺手带进公开仓库。

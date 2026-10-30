@@ -532,6 +532,17 @@ WebSocket 的 upgrade 不经过 Express，所以 `AuthenticatedGuard` 对它无�
 | `tower-http` 的 `fs` 特性 | 自带静态托管（ETag / If-None-Match / 穿越防护） | `http/static_files.rs` |
 | rustls 默认 crypto provider（`aws-lc-rs`） | 显式选 `ring`（`tokio-rustls` 关默认特性） | `Cargo.toml` |
 
+> **2026-10-30 更正本节前提**：上面那句「开发机无出站网络」不成立。实测
+> `cargo add tera --dry-run` 正常 `Updating crates.io index` 并解析到 tera 2.4.0，
+> `cargo check --target wasm32-unknown-unknown` 也成功拉取并编译了 web-sys 0.3.106
+> （命令与数字见 [verification.md](verification.md) §10）。当时看到的「离线」是
+> **执行环境的网络沙箱**，不是这台机器；缺件的真实原因是本地 registry 从未下载过它们
+> （实测 `~/.cargo/registry` 两个源 606 + 368 个 `.crate`，模板 / WebSocket / bcrypt
+> 类命中 0）。仍然成立的约束只剩一条：**服务器侧零下载**（[deployment.md](deployment.md) §1）。
+>
+> 这张表**不因更正而重做**：已写好的手写层各有测试钉住（bcrypt 对拍两套独立实现、
+> WS 有帧级测试），换成官方库只有 churn 没有收益。此后新增依赖可按需下载。
+
 ### 13.2 与 Nest 版的互操作点
 
 - **口令**：默认写 bcrypt `$2b$` cost 10，与 `bcryptjs` 一致；同时接受
@@ -563,6 +574,22 @@ WebSocket 的 upgrade 不经过 Express，所以 `AuthenticatedGuard` 对它无�
   据表明客户端 ping 帧会被计为活动**。在无法触达该端点的环境里加一个周期性 Ping，
   等于把未经证实的猜测写进唯一一条真·上行链路，因此不做；要做得先在真机上确认它
   有效，且不会让会话被另一端以协议错误关掉。
+
+### 13.4 `proto/` 与 `client/`：迁移期新增的两个 crate
+
+第七期（Nest/Node 退役，见 roadmap.md §4）在 `rust/` 之外立了两个新包：
+
+| crate | 职责 | 为什么存在 |
+|---|---|---|
+| `proto/`（`kestrel-proto`） | 语音帧 `ClientFrame` / `ServerFrame`、`parse_client_frame`、`TaskKind` | 类型从 `rust/src/voice/protocol.rs` 搬出，服务端与浏览器客户端**编译同一份定义**。原来那套形状在 TS 里是手抄的（服务端自己的注释就写着这一点），而手抄的形状正是语音 `start` 帧事故的温床（implementation-notes.md §8）。现在改字段名会在消费方编译失败 |
+| `client/`（`kestrel-client`） | 浏览器端，Rust→WASM | `voice_core` 是纯状态机：时钟与 socket 都由调用方注入，输出 `Effect` 值，因此**帧顺序断言能在宿主目标的 `cargo test` 里跑**，不需要浏览器。这是刻意保留 jsdom 套件那份保证的方式（它当年抓住了那次静默故障，见 verification.md §7） |
+
+`rust/src/voice/protocol.rs` 仍在，内容只剩再导出与**线名测试**——测试钉的是 JSON 上的
+字段名（`conversationId` 这种），那才是浏览器真正依赖的契约，比类型共享更容易漂。
+`rust/src/task/mod.rs` 同样改为再导出 `TaskKind`，全树引用路径不变。
+
+`client/` 的 DOM 层（socket、音频、页面渲染）尚未移植，`web/scripts/*.ts` 仍是线上跑
+的那一份；两者的切换点见 roadmap.md §4.3 的 P3/P4。
 
 ## 14. 相关文档
 

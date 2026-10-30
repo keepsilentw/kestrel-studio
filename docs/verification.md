@@ -507,3 +507,171 @@ printf '%s' 'x3JJHMbDL1EzLkh9GBhXDw==258EAFA5-E914-47DA-95CA-C5AB0DC85B11' \
 - **`dispatch_pending` 只用"未知工具"路径驱动**：真实出图/出视频的派发依赖活供应商。
 - **release 构建未跑过**；`Dockerfile` 无 Rust 阶段，服务器零下载前提下如何喂 crate
   尚未解决。
+
+## 10. 出站网络与 WASM 客户端可行性探测（2026-10-30）
+
+为「移除 Nest/Node 技术栈、全仓改 Rust」这个决策做的两项探测。都是在
+`/tmp` 的临时探针工程里跑的，未触碰 `src/` 与 `rust/`。
+
+### 10.1 开发机有出站网络（纠正 architecture.md §13.1 的前提）
+
+```bash
+$ cd /tmp/kestrel-net-probe && cargo add tera --dry-run
+    Updating crates.io index
+      Adding tera v2.4.0 to dependencies
+```
+
+本地 registry 缓存清点（只数命中数，不解析内容）：
+
+```bash
+$ ls ~/.cargo/registry/cache/*/ | wc -l        # 606 + 368
+$ ls ~/.cargo/registry/cache/*/ ~/.cargo/registry/src/*/ \
+    | grep -icE '^(tera|minijinja|handlebars|askama|maud|leptos|yew|dioxus|sailfish)'
+0
+```
+
+结论：**「离线 registry 缺件」是执行环境的网络沙箱所致，不是这台机器的属性**。
+§9 里那些手写层的动机描述需要按此理解，真实约束只剩服务器侧零下载（deployment.md §1）。
+
+### 10.2 Rust→WASM 客户端：能编，代价是体积
+
+`rustup target add wasm32-unknown-unknown` 成功（该 std 组件约 15 MB，本机对
+`static.rust-lang.org` 实测只有 ~50 KB/s，下载用了约 4 分钟，需按此预估等待）。
+探针依赖：`wasm-bindgen 0.2.129` / `js-sys 0.3.106` / `web-sys 0.3.106`（90 个
+feature）/ `wasm-bindgen-futures 0.4` / `pulldown-cmark 0.13`。
+`cargo check --target wasm32-unknown-unknown` 全部依赖编译通过，探针本身 0 error。
+
+本项目客户端真正需要的 API，实测在 web-sys 里都有**类型化绑定**（不是只能 Reflect）：
+
+| API | web-sys 绑定 | 备注 |
+|---|---|---|
+| `EventSource` + message | `EventSource::new` / `add_event_listener_with_callback` | 现客户端订会话事件流的主干 |
+| `WebSocket`（语音） | `WebSocket::new` / `send_with_str` | |
+| `getUserMedia` | `Navigator::media_devices()` → **返回 `Result`**（非安全上下文会抛） | `MediaTrackConstraints::set_channel_count(&JsValue)`，联合类型走 `JsValue` |
+| `AudioContext` / `AudioWorklet` | `AudioContext::new` / `audio_worklet()` / `add_module(&str) -> Promise` | **但 worklet 内的 `AudioWorkletProcessor` 子类必须是 JS**：worklet 全局作用域不挂 DOM/wasm 宿主，`registerProcessor` 只能由 JS 调 |
+| `dataset`（`data-conversation-id` 等交接面） | `HtmlElement::dataset()` | **必须开 `DomStringMap` feature**，否则报 no method |
+| canvas `toBlob`、`URL.createObjectURL`、`localStorage`、`history` | 均有绑定 | 下载弹窗那条重编码路径可用 |
+
+体积账（同一台机、同一 gzip 口径）：
+
+| 产物 | raw | gzip |
+|---|---|---|
+| 探针 `main.wasm`（含 90 个 web-sys feature + pulldown-cmark，未经 `wasm-opt`） | 1.4 MB | **338 KB** |
+| 现 `public/assets/main.js`（内含 marked） | 59 KB | 18 KB |
+| 现 `public/assets/voice.js` | 6.5 KB | 3 KB |
+| 现 `public/assets/main.css` | 16 KB | 3.5 KB |
+
+即客户端从约 24 KB gz 涨到 200 KB gz 量级（未 `wasm-opt`、未裁剪 feature、未按页面
+拆模块）。可缓解，但**方向上是一次 10 倍的首屏载荷交换**，这是选型 B 的定价。
+
+### 10.3 工具链现状
+
+```bash
+$ brew info wasm-pack wasm-bindgen        # 二者均"available"，本机都未安装
+```
+
+`wasm-bindgen` formula 停在 0.2.111（且 homebrew 已标注 deprecated、改用 wasm-pack），
+而 crate 解析到 0.2.129——**wasm-bindgen CLI 与 crate 版本必须配对**，因此不能拿
+brew 那个 CLI 用；要么装 `wasm-pack`（它按 `Cargo.lock` 里的版本自取匹配 CLI），
+要么 `cargo install wasm-bindgen-cli --version 0.2.129`。
+
+同日更新：`wasm-pack 0.15.0` 已装好（brew bottle 只有 2.5 MB）。但 **wasm 的 JS glue
+产物与 `wasm-opt` 后体积仍未实测**——`client/` 还没有可导出的 `#[wasm_bindgen]` 接口
+（DOM 层未移植），所以还没有东西可以交给 wasm-pack 生成。
+
+## 11. P2 交叉编译与 P3 客户端核心（2026-10-30）
+
+### 11.1 目标机事实
+
+`ssh lavo-test` 只读查询：
+
+```
+x86_64
+CentOS Linux release 7.9.2009 (Core)
+Docker version 26.1.4
+Mem: 3645 MB total / 2382 MB available      df: / 99G used 45G avail 50G
+```
+
+架构与发行版共同决定交叉编译的目标三元组：`x86_64-unknown-linux-musl`——CentOS 7
+只有 glibc 2.17，动态链接的新二进制在宿主机上跑不了，静态 musl 不依赖 libc。
+
+### 11.2 静态二进制：已产出
+
+```bash
+$ make rust-build-linux
+$ file -b /tmp/kestrel-studio-linux/kestrel-studio
+ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statically linked, stripped
+```
+
+- 体积 **9.2 MB**。deploy 归档因此从旧管线的约 300 MB（node_modules）降到几 MB。
+- 过程与两次链接失败的根因见 [implementation-notes.md](implementation-notes.md) §14：
+  C 侧（`ring` 的 C/asm、`libsqlite3-sys` 的 bundled SQLite）经 zig 编译是通过的，
+  失败在链接的方言与启动文件归属。
+- **未验证**：这个二进制**从未运行过**（本机 arm64/darwin 跑不了 x86-64 ELF），
+  `FROM scratch` 镜像也**没有构建过**——本机 Docker daemon（colima）未启动，
+  启动服务不在本次授权范围内；线上部署同样未执行。
+- 已知副作用（设计如此，architecture.md §13.2）：`connect.sid` 的签名算法两侧不同，
+  旧 cookie 被拒绝 → **切流时在线用户重新登录一次**。
+
+### 11.3 协议单一来源：`proto/` 已落地
+
+语音帧类型从 `rust/src/voice/protocol.rs` 移到新 crate `kestrel-proto`，服务端与客户端
+编译同一份定义；`protocol.rs` 保留**线名测试**（钉住 `conversationId` 这类浏览器实际
+监听的名字），`TaskKind` 一并迁入，`rust/src/task/mod.rs` 改为
+`pub use kestrel_proto::TaskKind`，全树仍按 `crate::task::TaskKind` 引用。
+
+```bash
+$ cargo test --manifest-path rust/Cargo.toml
+test result: ok. 159 passed; 0 failed; 2 ignored
+```
+
+比 §9.1 记的 157 多 2 条，来自语音升级交换那条后补的测试（提交 `21da143`），不是本次
+改动带来的。警告数 **34，与改动前一致**（中途引入的一条 unused import 已修掉）。
+
+### 11.4 客户端核心状态机：13 条测试在宿主目标通过
+
+新 crate `client/`（`kestrel-client`）。`voice_core` 是 push-to-talk 的纯状态机：不碰
+时钟、不碰 socket；输入是 `now_ms` 与 `kestrel_proto` 的帧，输出是 `Effect` 值。
+
+```bash
+$ cargo test --manifest-path client/Cargo.toml
+test result: ok. 13 passed; 0 failed
+```
+
+覆盖的正是 jsdom 套件当年承担的顺序断言（§7 那次故障的形状）：开机首帧必须是 `start`；
+`ready` 前的音频排队、`ready` 后按序补发；`ready` 前松手时 `commit` 排在补发之后；
+25 s 上限在 `ready` 才起算；到点自动 `commit` 且此后不再灌音频；`error` 帧封锁本次按住
+剩余音频、松手不再二次 `commit`；非法与未知帧被忽略而非 panic；`busy` 期间拒绝第二次
+按下；`ready` 订上会话事件流、断开时退订并提示"再按一次继续"；离开页面发 `stop`；
+`asset` 帧转成预览。
+
+**未验证**：`client/` 还没有 DOM 层——`web/scripts/voice.ts` 的 socket / 音频 / UI 那部分
+尚未移植，WASM 产物也还没生成过。
+
+### 11.5 WASM 产物的第一个真实数字（同日补）
+
+`client/` 加了三个**真导出**（不是桩）：`renderMarkdown`（`pulldown-cmark`，取代 `marked`）、
+`hasMicrophone`（`navigator.mediaDevices` 是否存在）、`buildInfo`。用 wasm-pack 构建：
+
+```
+$ wasm-pack build --release --target web
+kestrel_client.wasm   1,213,520 bytes raw   310,126 bytes gz（gzip -9）
+```
+
+口径要说清：**未经 `wasm-opt`、不含 JS glue**，而代码量只有上面那三个函数（web-sys 约 50 个
+feature）。也就是说 300 KB gz 里几乎全是**固定地板**（panic 机制 + `pulldown-cmark` + 绑定层），
+不是业务逻辑的体积。对照现客户端合计约 24 KB gz，B 方案的定价由此坐实：
+**首屏载荷是 10 倍量级的交换，且这个下限压不到 JS 的水平**。可缓解项（按页拆模块、
+裁 feature、`wasm-opt -O`、markdown 改由服务端吐 HTML 从而把 `pulldown-cmark` 从客户端拿掉）
+都在 roadmap.md §4.1 记着。
+
+本仓库不留 CI 配置（CLAUDE.md），所以这个数字**每次改动后要手工重测**：
+`cd client && wasm-pack build --release --target web --out-dir /tmp/...`（这是构建，
+不是起服务，因此在本机允许）。
+
+### 11.6 本机不可验证的部分，去处已定
+
+本机禁止启动 Docker、禁止为本机起服务做测试（CLAUDE.md），因此上面这些**运行时的真相**
+（容器能否起、`/login` 是否 200、SSE 首帧、静态资源 ETag）不在本机取得。
+唯一去处是**目标主机上的灰度实例**，由用户授权后人工执行。曾写过一份远端 CI 烟测定义，
+按要求删除，且删除前从未运行过——**不要把它当作已存在的验证手段**。

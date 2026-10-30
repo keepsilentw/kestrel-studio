@@ -10,20 +10,34 @@
 而入站约 **5 MB/s**——相差 77 倍。因此任何需要服务器下载的方案都不可行，
 包括 `apt install` 编译工具链、`pnpm install`、以及在本机建 VM 做交叉构建。
 
-最终方案：镜像在服务器上构建，但**服务器不下载任何东西**。
+最终方案：镜像在服务器上**组装**，但服务器不下载任何东西。
+
+**2026-10-30 起这条管线换成 Rust**（roadmap.md §4 的 P2），形态比 Node 时代更简单：
 
 | 需要的东西 | 来源 |
 |---|---|
-| gcc / g++ / make / python3 | `golang:1.24` 镜像（基于 buildpack-deps，自带工具链） |
-| Node 运行时 | `node:24-bookworm-slim` 镜像，多阶段 `COPY --from` 复制 |
-| node_modules | 开发机打包上传（5 MB/s） |
+| 服务端可执行文件 | 开发机交叉编译的 **x86_64-unknown-linux-musl 静态二进制**（`make rust-build-linux`），随构建上下文上传 |
+| 运行时基础镜像 | `scratch`——Docker 对它有特殊处理、**永远不需要拉取**，所以服务器上没有任何要缓存的镜像 |
+| 前端资源 | 开发机构建的 `public/`（P3 换成 WASM 产物） |
+| TLS 根证书 | 编进二进制的 `webpki-roots`（scratch 里没有 `/etc/ssl/certs`） |
+| `/tmp` | compose 的 `tmpfs`：scratch 没有 `/tmp`，而 SQLite 需要临时 b-tree 时会去那里写文件 |
+| C 交叉编译工具链 | 开发机上的 `zig`（自带 musl sysroot）；`ring` 的 C/asm 与 `libsqlite3-sys` 的 bundled SQLite 都靠它 |
 
-两个基础镜像都是 Debian 12 (bookworm)，glibc 一致，Node 二进制可直接跨镜像复制。
-`node-gyp` 用 `npm_config_nodedir=/usr/local` 指向复制过来的头文件，避免下载 headers
-（这是唯一还会触发网络的一步）。
+静态链接是这里的承重选择：宿主机是 CentOS 7（glibc 2.17），动态链接的二进制在宿主机上
+会撞 `GLIBC_2.27 not found`；musl 静态二进制连 libc 都不需要，`scratch` 就能跑。上传体积
+从 node_modules 的约 300 MB 降到几 MB，服务器侧不再有编译步骤（原来那一步是用 golang 镜像
+里的工具链重编 better-sqlite3，因为上传的 node_modules 来自 macOS，二进制是 darwin-arm64）。
 
-上传的 node_modules 来自 macOS，其中的 better-sqlite3 是 darwin-arm64 的二进制，
-因此在镜像构建时用服务器侧工具链重新编译一次。
+`scripts/cross/` 下的四个垫片是交叉编译的一部分：`cc` crate 与 rustc 会按 Rust 三元组
+去寻 `x86_64-linux-musl-gcc` 这类名字，垫片把它们转给 `zig cc`，并把 Rust 风格的
+`--target=x86_64-unknown-linux-musl` 换成 zig 认识的 `x86_64-linux-musl`。
+
+### 1.1 回滚到 Node 管线
+
+P4 之前 Nest 代码仍在仓库里。回滚 = 把 `Dockerfile` / `docker-compose.yml` /
+`scripts/deploy.sh` 退回切换前的提交，并跑一次
+`NEST_BASE_IMAGES=1 scripts/bootstrap-host.sh`。旧管线的两个基础镜像
+（node:24-bookworm-slim、golang:1.24）在 lavo-test 上**已经缓存过**，只有全新机器才需要拉。
 
 ### 相关约束
 

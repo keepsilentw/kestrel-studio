@@ -213,3 +213,89 @@ Makefile 的 `rust-*` 目标统一用 `--manifest-path`，不靠 `cd`。提交�
 **处理**：改源码以 `apply_patch` 为先；必须脚本化时，操作单位是**标识符**（在名字
 集合上删），并在每次改动后跑一次编译确认；`apply_patch` 对被外部写过的文件会失配
 （报"找不到行"而磁盘上那行原样存在），此时先重读文件再改。
+
+## 13. web-sys 的 feature 门与 CLI 版本配对（2026-10-30，WASM 探测）
+
+把客户端改成 Rust→WASM 时撞到的三类"不是缺能力、是缺开关"的坑：
+
+1. **`element.dataset()` 报 no method**。DOM 里 dataset 挂在 HTMLElement 上，
+   但 web-sys 把返回类型 `DomStringMap` 放在同名 feature 后面——不加
+   `features = ["DomStringMap"]` 就没有这个方法。同理 `Navigator`、`MediaDevices`、
+   `AudioWorklet` 都要逐个显式开。**没有编译错误提示告诉你该开哪个 feature**，
+   只会报 no method，容易误判成 web-sys 不支持。
+2. **`media_devices()` 返回 `Result` 而不是 `Option`**（非安全上下文会抛），
+   写 `.ok_or_else()` 直接编译失败。WebIDL 的可抛接口在 web-sys 里一律是 `Result`，
+   不可抛的才是 `Option`——按签名读，别按直觉写。
+3. **联合类型参数走 `JsValue`**：`MediaTrackConstraints::set_channel_count(&JsValue)`
+   收 `&JsValue`，`MediaStreamConstraints::audio()` 已废弃、改用 `set_audio(&JsValue)`
+   （返回 `&mut Self`，不能再当表达式链式赋值，否则 E0308）。
+
+另外一条工具链账：**wasm-bindgen 的 CLI 与 crate 版本必须配对**。homebrew 的
+`wasm-bindgen` formula 停在 0.2.111 且已标 deprecated，而 `Cargo.lock` 解析到
+0.2.129，用 brew 那个 CLI 生成 glue 会在版本检查上失败。正解是装 `wasm-pack`
+（按 `Cargo.lock` 自取匹配 CLI）或 `cargo install wasm-bindgen-cli --version <锁定值>`。
+
+还有一条**去不掉的 JS**：`AudioWorkletProcessor` 子类必须在 worklet 全局作用域里
+`registerProcessor`，那里没有 DOM、也拿不到 wasm 宿主，所以语音采集那 20 行 JS
+是硬地板（详见 verification.md §10.2）。要"仓库里零 JS 源码"只能放弃 AudioWorklet，
+改回已废弃的 `ScriptProcessorNode`——那也是 JS。
+
+## 14. 手写 zig 垫片交叉编译 musl：C 编得动，链接过不去（2026-10-30）
+
+`make rust-build-linux` 的第一版实现是四个 `scripts/cross/x86_64-linux-musl-*` 垫片，
+把 `cc` crate 与 rustc 找的编译器名转给 `zig cc`。C 侧确实通了（`ring` 的 C/asm、
+`libsqlite3-sys` 的 bundled SQLite 全过），死在最后一步链接，两个独立原因叠加：
+
+1. **rustc 在 macOS 主机上默认拿 `cc` 当链接器**，于是走 Apple 的 ld：
+   `ld: unknown options: --as-needed -Bstatic -Bdynamic --eh-frame-hdr -z --gc-sections --strip-debug`。
+   musl 的链接步骤吐的是 GNU 风格参数，Apple ld 一个都不认。
+2. 用 `CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER` 指名垫片之后，改成
+   **两套 musl 启动文件同时进链**：`multiple definition: _start_c` ——
+   zig 的驱动按自己的 sysroot 塞了 `crt1.o`，rustc 的 self-contained 目录又塞了
+   `rcrt1.o`。rustc 传的 `-nostartfiles` 没能拦住 zig 那一份。
+
+**处理**：删掉垫片，改用 `cargo zigbuild`（它做的正是这层翻译，含启动文件的取舍）。
+一次通过：`ELF 64-bit LSB executable, x86-64, statically linked, stripped`，9.2 MB。
+
+教训：`cc` crate 只吃"换个编译器名"，链接器吃的是**参数方言与 sysroot 归属**——
+这两件事不是一个抽象层，垫片只能覆盖前者。手写版本可以止步于"C 编译通过"，
+但它给不出能跑的产物。
+
+## 15. 工具链下载的两条实测账（2026-10-30）
+
+| 源 | 实测 |
+|---|---|
+| ghcr.io（brew bottle 默认源） | **~8 KB/s**：zig 的 37 MB 跑了 20 分钟没完 |
+| 清华 `HOMEBREW_BOTTLE_DOMAIN` | 分片测得 **~480 KB/s**，整包安装 8m36s 完成（含 lld@22 依赖） |
+| `static.rust-lang.org`（rustup 组件） | ~50 KB/s：wasm32 std 15 MB 用了约 4 分钟 |
+| rsproxy.cn（`RUSTUP_DIST_SERVER`） | musl std 十几秒 |
+| crates.io（稀疏索引 + .crate） | 可用：`cargo add tera --dry-run` 秒级；web-sys 3 MB 级依赖约 40 秒 |
+
+`brew install cargo-zigbuild` 会拖 `llvm@22` + `lld@22`（数百 MB 量级），在 ghcr 那个
+速度下不可行；`cargo install cargo-zigbuild --locked` 源码编译 6m44s，只依赖已装好的 zig。
+
+另：brew 的 `wasm-bindgen` formula 停在 0.2.111 且已标 deprecated，而 `Cargo.lock`
+解析到 0.2.129——CLI 与 crate 版本必须配对，别用 brew 那个（见 §13 末与 verification.md §10.3）。
+
+## 16. wasm-pack 会静默 cargo-install 它的 CLI（2026-10-30）
+
+`wasm-pack build` 第一次跑时不下载预编译 CLI，而是**当场 `cargo install wasm-bindgen-cli
+--version <锁定值>`** 到 `~/Library/Caches/.wasm-pack/.wasm-bindgen-cargo-install-0.2.129/`。
+在这台机上 13 分钟没结束，而且**全程没有任何输出**——看起来像卡死。判据：
+
+```bash
+ls ~/Library/Caches/.wasm-pack/            # 出现 .wasm-bindgen-cargo-install-<版本> 即在建 CLI
+find <target> -newermt '-3 minutes' -type f # .wasm 已产出则说明 cargo build 段已完成
+```
+
+`--release` 的 `.wasm` 在 CLI 之前就已生成（1.2 MB / gz 303 KB，见 verification.md §11.5），
+所以体积数字不必等 CLI 编完。要省时间可以先把 CLI 显式 `cargo install wasm-bindgen-cli
+--version 0.2.129` 装好，wasm-pack 就会直接用。
+
+另外记两条**环境层面的观测**（原因未知，只记现象与对策）：本轮出现过两次"写成功但文件不在"——
+`proto/` 整个目录在某一步消失（`apply_patch` 报成功、随后 `find` 查不到），以及
+brew 报 `wasm-pack ... 10 files, 6.4MB` 安装成功后 `/opt/homebrew/Cellar/wasm-pack/` 却是空的、
+`/opt/homebrew/bin/wasm-pack` 成断链。两处都不是脚本删的（无 rm 记录），也没有并发进程在动这些路径。
+对策很笨但有效：**新建文件或装完工具后立刻独立验一次**（`find` / `--version`），
+别把工具的退出码当存在性证明；`cargo test` 报 "failed to load source ... No such file"
+就是这种消失的第一个信号。
