@@ -8,11 +8,20 @@ PM2  := pm2
 APP  := kestrel-studio
 
 CARGO ?= cargo
-# The Rust tree (rust/) is a parallel implementation of the same server. Nothing
-# in `start`/`deploy` uses it yet; these targets exist so it can be built and
-# checked without leaving the Makefile entry point that everything else uses.
+# The Rust tree (rust/) is what `make deploy` ships now. `make start` (pm2 + the
+# Nest process) is still the Nest pipeline until the WASM client lands; the two
+# are separate paths and neither one silently takes the other's port.
 RUST_DIR ?= $(CURDIR)/rust
 CARGO_ARGS := --manifest-path $(RUST_DIR)/Cargo.toml
+
+# The deploy binary is cross-compiled, never built on the host: a static musl
+# ELF needs no glibc there and no toolchain there.
+RUST_LINUX_TARGET ?= x86_64-unknown-linux-musl
+# Outside the working tree, twice over: the cargo target dir and the final
+# binary. Both are reachable by deploy.sh, which assembles the docker context
+# under /tmp rather than next to source files.
+LINUX_TARGET_DIR ?= /tmp/kestrel-studio-linux-target
+LINUX_BINARY     ?= /tmp/kestrel-studio-linux/kestrel-studio
 
 # Local port the app listens on. Keep in sync with src/config/configuration.ts.
 PORT ?= 8848
@@ -40,6 +49,7 @@ endef
 .PHONY: clean
 .PHONY: deploy deploy-status deploy-logs deploy-restart deploy-down
 .PHONY: rust-check rust-test rust-build rust-run rust-clean
+.PHONY: rust-build-linux
 
 help:
 	@echo "kestrel-studio — 可用命令:"
@@ -71,10 +81,11 @@ help:
 	@echo "  清理"
 	@echo "    make clean                  清理构建产物（保留 data/ 与 storage/）"
 	@echo ""
-	@echo "  Rust 实现（rust/，与上面的 Nest 管线并行）"
+	@echo "  Rust 实现（rust/）—— make deploy 走这条管线"
 	@echo "    make rust-check             类型检查（cargo check，含测试代码）"
 	@echo "    make rust-test              运行 Rust 单元测试（cargo test）"
 	@echo "    make rust-build             构建 release 二进制"
+	@echo "    make rust-build-linux       交叉编译静态 musl 二进制到 $(LINUX_BINARY)（需 zig）"
 	@echo "    make rust-run               本机前台运行 Rust 服务（占用 $(PORT)）"
 	@echo "    make rust-clean             清理 rust/target"
 	@echo ""
@@ -220,9 +231,32 @@ rust-run:
 rust-clean:
 	$(CARGO) clean $(CARGO_ARGS)
 
+# zig carries a musl sysroot, so `ring`'s C/asm and the bundled SQLite compile
+# without installing a cross gcc. cargo-zigbuild does the flag translation between
+# Rust's triples and zig's spelling, and links without fighting the startup files
+# (see docs/implementation-notes.md §14 for why the hand-rolled shim version of
+# this failed). Both are brew installs; zig's bottle is ~37 MB and ghcr.io crawls
+# from here, so set HOMEBREW_BOTTLE_DOMAIN to a mirror when installing.
+rust-build-linux:
+	@command -v zig >/dev/null 2>&1 \
+		|| { echo "缺 zig —— 它是 x86_64-linux-musl 的 C 交叉编译器。装法：brew install zig"; exit 1; }
+	@command -v cargo-zigbuild >/dev/null 2>&1 \
+		|| { echo "缺 cargo-zigbuild —— 装法：cargo install cargo-zigbuild --locked"; exit 1; }
+	@rustup target list --installed 2>/dev/null | grep -qx $(RUST_LINUX_TARGET) \
+		|| { echo "缺编译目标：rustup target add $(RUST_LINUX_TARGET)"; exit 1; }
+	CARGO_TARGET_DIR=$(LINUX_TARGET_DIR) $(CARGO) zigbuild $(CARGO_ARGS) \
+		--release --target $(RUST_LINUX_TARGET)
+	@mkdir -p "$$(dirname $(LINUX_BINARY))"
+	cp $(LINUX_TARGET_DIR)/$(RUST_LINUX_TARGET)/release/kestrel-studio $(LINUX_BINARY)
+	@echo "    静态二进制  $(LINUX_BINARY)"
+	@echo "    校验        file -b 应显示 'statically linked'（scratch 镜像靠它）"
+
 # ===== 部署 =====
 
-deploy:
+# Deploy inputs are produced on this machine, never on the host: the static
+# binary and the client assets. `build-web` is still the Vite build — it drops
+# out of this chain when the WASM client replaces it (roadmap.md §4, P3/P4).
+deploy: rust-build-linux build-web
 	./scripts/deploy.sh
 
 deploy-status:

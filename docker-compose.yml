@@ -20,6 +20,12 @@ services:
     # `environment` takes precedence over `env_file`.
     environment:
       - PORT=${HOST_PORT:-8848}
+    # The runtime base is `scratch`, which has no /tmp. SQLite creates temporary
+    # files there whenever a query needs a temp b-tree, so the absence would only
+    # show up as a rare "unable to open temporary file" under load. A tmpfs keeps
+    # that off the mounted volume and off the image.
+    tmpfs:
+      - /tmp
     volumes:
       - ./data:/app/data
       - ./storage:/app/storage

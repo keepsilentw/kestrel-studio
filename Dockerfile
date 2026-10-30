@@ -1,40 +1,37 @@
-# Builds on the target host with ZERO network access.
+# Nothing is downloaded and nothing is compiled here.
 #
-# Both base images are already cached on that host, and the host's outbound
-# bandwidth is ~65 KB/s — so anything that needs downloading there is a
-# non-starter. What makes this work:
+# The host has ~65 KB/s of outbound bandwidth and cannot reach the Docker Hub
+# registry, so the image is assembled from artifacts the dev machine already
+# produced: a statically linked Linux binary (see `make rust-build-linux`) plus
+# the client assets in `public/`. `scratch` is an empty base that Docker never
+# pulls, which is what keeps the zero-download property total — there is no
+# base image to cache on the host at all.
 #
-#   * golang's official image is built on buildpack-deps, so it already carries
-#     gcc / g++ / make / python3 — exactly the toolchain node-gyp needs to
-#     compile better-sqlite3. No apt install required.
-#   * node:24-bookworm-slim supplies the runtime. Both images are Debian 12
-#     (bookworm), so the Node binary copied across is libc- and ABI-compatible.
-#   * node_modules arrives inside the build context, shipped from the dev
-#     machine where the network is fast. Installing them here would take ~25
-#     minutes at 65 KB/s.
+# Static linking is the load-bearing choice. The binary is built for
+# x86_64-unknown-linux-musl, where rustc links the C runtime statically by
+# default, so there is no glibc to match against (the host is CentOS 7 with
+# glibc 2.17, which is also why the Node runtime never worked outside a
+# container). TLS trust comes from `webpki-roots` compiled into the binary, so
+# the absence of /etc/ssl/certs here is not a problem.
+#
+# No USER directive: `data/` and `storage/` are host-mounted volumes that the
+# previous container wrote as root, and `scratch` has no /etc/passwd to map a
+# name against. Changing the ownership is a migration step of its own, not a
+# side effect of this switch.
+FROM scratch
 
-FROM dockerproxy.net/library/node:24-bookworm-slim AS nodedist
-
-FROM golang:1.24
-
-COPY --from=nodedist /usr/local/ /usr/local/
+COPY .build/linux-x86_64/kestrel-studio /app/kestrel-studio
+COPY public /app/public
 
 WORKDIR /app
 
-COPY . .
-
-# node_modules was installed on macOS, so the better-sqlite3 binary in it is
-# darwin-arm64. Rebuild it against the linux toolchain in this image.
-#
-# npm_config_nodedir points node-gyp at the headers that came with the copied
-# Node install (/usr/local/include/node); without it, node-gyp downloads a
-# matching header tarball from nodejs.org, which is the one thing that would
-# still need the network.
-RUN cd "$(ls -d node_modules/.pnpm/better-sqlite3@*/node_modules/better-sqlite3 | head -1)" \
-    && npm_config_nodedir=/usr/local /app/node_modules/.bin/node-gyp rebuild
-
+# Relative to WORKDIR unless overridden; spelled out so a layout change fails
+# loudly instead of serving 404s for every asset.
+ENV STATIC_DIR=/app/public
+ENV DATABASE_FILE=data/kestrel-studio.db
+ENV STORAGE_DIR=storage
 ENV NODE_ENV=production
 ENV PORT=8848
 EXPOSE 8848
 
-CMD ["node", "dist/main.js"]
+ENTRYPOINT ["/app/kestrel-studio"]
