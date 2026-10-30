@@ -700,6 +700,44 @@ test result: ok. 13 passed; 0 failed
 `cd client && wasm-pack build --release --target web --out-dir /tmp/...`，
 对 `kestrel_client_bg.wasm` 与 `kestrel_client.js` 各跑一次 `gzip -9 | wc -c`。
 
+## 12. 语音页 WASM 客户端落地（2026-10-30）
+
+一句话更正前面的载荷结论：桩量的"持平"不成立，真实语音页把模块推到约 85 KB gz
+（整站现客户端 21 KB gz）。**这条到此为止，不再作为决策输入**——按用户判断，体积不是这个
+迁移该纠结的量。已保留 `panic = "abort"` + `codegen-units = 1`（顺手省 1.7 KB gz）。
+
+### 12.2 代码到位到哪一步（重要：运行时一次都没验过）
+
+已落地并通过的：
+
+- `client/src/wire.rs`：票据换取 + WebSocket + 帧进出。**`open()` 在装 handler 之前
+  就把 socket 放进 slot**，因为 core 收到 `Opened` 后立刻要发 `start`；
+- `client/src/audio.rs`：`AudioContext(24kHz)` + worklet + 采集/播放队列。
+  **没有任何 `RefCell` 借用跨过 `await`**——松手时权限框还挂着是常态，
+  带着借用去 `getUserMedia` 会在回来时 panic；
+- `client/src/voice_page.rs`：元素查找、按住/松开、250 ms tick、Effects 解释器；
+- `web/public/capture.js`：worklet 处理器，就是 §4.1 说的那块删不掉的 JS 地板
+  （`Vite` 的 publicDir 会拷到 `public/capture.js`，`make build-web` 之后出现）；
+- `client/src/pcm.rs`：base64 与 PCM16 小端的纯函数，**7 条宿主测试**。
+  写测试时我把 32767 当成 `0x3FFF` 拼错过一次，是测试把我抓住的（见 §13）；
+- 契约测试新增 1 条：`rust/src/view/tests.rs::the_voice_page_carries_every_element_the_wasm_client_requires`
+  从 `client/src/voice_page.rs` 源码里读出页面查找的 id，断言 `/voice` 骨架逐个带着——
+  这是原来"从 `web/scripts/main.ts` 解析 `requireElement`"那条机制的 Rust 版本。
+
+```
+$ cargo test --manifest-path rust/Cargo.toml      # 160 passed / 0 failed / 2 ignored（警告 34，与基线一致）
+$ cargo test --manifest-path client/Cargo.toml    # 21 passed / 0 failed
+$ cargo check --target wasm32-unknown-unknown --manifest-path client/Cargo.toml   # 0 error 0 warning
+```
+
+**未验证的，说清**：
+
+1. `initVoice` 导出了但**没有任何地方调用**——`/voice` 骨架仍然引 `/assets/voice.js`
+   （`rust/src/view/templates.rs` 未改）。切换点是 P4 的事，P1 未通过前不动。
+2. 语音页在浏览器里的行为**一次都没跑过**：本机不启动服务、不启动 Docker（CLAUDE.md），
+   所以采集、播放、松手提交、25 s 截断、断线重连提示，全部只有编译与纯逻辑两层保证。
+3. 麦克风真机验证仍是从 Nest 时代起就挂着的那一条（roadmap.md §3）。
+
 ### 11.6 本机不可验证的部分，去处已定
 
 本机禁止启动 Docker、禁止为本机起服务做测试（CLAUDE.md），因此上面这些**运行时的真相**
