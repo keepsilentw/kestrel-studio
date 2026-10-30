@@ -5,7 +5,7 @@ use crate::common::args::parse_tool_arguments;
 use crate::conversation::{asset_url, ConversationEvent, ToolCallRecord};
 use crate::state::AppState;
 
-use super::mode::Mode;
+use super::mode::{Mode, ModePrompt};
 use super::tools::{describe_outcome, ToolContext, ToolRegistry};
 
 /// Guards against a tool loop that never converges.

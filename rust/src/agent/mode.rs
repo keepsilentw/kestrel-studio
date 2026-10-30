@@ -1,45 +1,31 @@
-use serde::{Deserialize, Serialize};
+//! The mode's agent-side behaviour. The type itself is in `kestrel_proto::event`.
+//!
+//! Split that way because the browser needs the mode's name and label — nothing
+//! else. Which tools a mode advertises, and the system prompt it builds, are this
+//! server's business; putting them in the shared crate would ship the prompt to
+//! the client as dead code and invite the page to depend on it.
+//!
+//! Rust does not allow inherent methods on a foreign type, so these two live
+//! behind a trait. Call sites read `mode.tool_names()` / `mode.build_instructions()`
+//! exactly as before, with `ModePrompt` in scope.
 
-/// A turn's capability mode. The selector is per turn, not per conversation:
-/// one conversation can chat, then draw, then animate, and each turn is stored
-/// with the mode it ran in so history renders correctly.
-///
-/// `auto` exposes every tool and lets the model route itself; the explicit modes
-/// narrow the tool set so a turn cannot silently spend money on a generation the
-/// user did not ask for.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Mode {
-    Auto,
-    Chat,
-    Image,
-    Video,
+pub use kestrel_proto::event::Mode;
+
+// `DEFAULT_MODE` and `MODES` are deliberately **not** re-exported: nothing in this
+// tree reads them (they only matter to `Mode::parse`, which lives with the type),
+// and a re-export nobody uses is a second place a name can drift.
+
+pub trait ModePrompt {
+    /// Tool names advertised to the model per mode. `chat` deliberately has none.
+    fn tool_names(self) -> &'static [&'static str];
+
+    /// The instructions for a turn in this mode: the base rules plus the
+    /// fragment that tells the model what it may and may not offer.
+    fn build_instructions(self) -> String;
 }
 
-pub const DEFAULT_MODE: Mode = Mode::Auto;
-pub const MODES: [Mode; 4] = [Mode::Auto, Mode::Chat, Mode::Image, Mode::Video];
-
-impl Mode {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Auto => "auto",
-            Self::Chat => "chat",
-            Self::Image => "image",
-            Self::Video => "video",
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Auto => "智能",
-            Self::Chat => "对话",
-            Self::Image => "图片",
-            Self::Video => "视频",
-        }
-    }
-
-    /// Tool names advertised to the model per mode. `chat` deliberately has none.
-    pub fn tool_names(self) -> &'static [&'static str] {
+impl ModePrompt for Mode {
+    fn tool_names(self) -> &'static [&'static str] {
         match self {
             Self::Auto => &["generate_image", "generate_video", "get_video_task"],
             Self::Chat => &[],
@@ -48,28 +34,7 @@ impl Mode {
         }
     }
 
-    /// `mode` is nullable because a voice turn runs in none of the four modes —
-    /// voice is a separate surface, not a fifth mode (docs/architecture.md §11).
-    pub fn parse(value: Option<&str>) -> Mode {
-        let Some(raw) = value else {
-            return DEFAULT_MODE;
-        };
-        let normalized = raw.trim().to_lowercase();
-        MODES
-            .into_iter()
-            .find(|mode| mode.as_str() == normalized)
-            .unwrap_or(DEFAULT_MODE)
-    }
-
-    /// Reading the `mode` column back. Unlike `parse` there is no default: null
-    /// means "no mode" (a voice turn), and a value this build does not know must
-    /// not be relabelled as one it does.
-    pub fn from_storage(raw: Option<&str>) -> Option<Mode> {
-        let raw = raw?;
-        MODES.into_iter().find(|mode| mode.as_str() == raw)
-    }
-
-    pub fn build_instructions(self) -> String {
+    fn build_instructions(self) -> String {
         const BASE: [&str; 7] = [
             "你是一个生成式媒体助手，运行在一个网页应用里。",
             "",

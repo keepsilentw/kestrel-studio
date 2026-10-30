@@ -1,133 +1,22 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
-use serde::{Deserialize, Serialize};
 use sqlx::{Row, SqlitePool};
 use tokio::sync::broadcast;
 
-use super::repo::MessageView;
-use crate::agent::mode::Mode;
 use crate::error::AppError;
-use crate::task::{TaskKind, TaskStatus};
+
+// The event itself is a wire type and lives in `kestrel-proto` with the payload
+// structs it carries, so the browser parses exactly what is journalled.
+// `PublishedEvent` below stays here: it is the journal row's envelope, not part of
+// the contract.
+pub use kestrel_proto::event::{ConversationEvent, MessageView};
 
 /// How many recent events a conversation's journal keeps. Sized above the delta
 /// count of one ordinary turn (docs/verification.md §1: `high` reasoning effort
 /// produced >1300 deltas), so a brief disconnect replays seamlessly and only
 /// long-stale cursors fall back to `resync`.
 const RETAINED_EVENTS: i64 = 2000;
-
-/// One journaled event on a conversation stream. The `type` discriminant is the
-/// same name the SSE frame carries, and the whole object is what the frame's
-/// `data:` holds — stored verbatim so a replayed frame is byte-equivalent to the
-/// live one. (Names: `src/sse.rs`.)
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(tag = "type")]
-pub enum ConversationEvent {
-    #[serde(rename = "user_message")]
-    UserMessage { message: MessageView },
-    #[serde(rename = "turn_started")]
-    TurnStarted {
-        #[serde(rename = "messageId")]
-        message_id: i64,
-        mode: Option<Mode>,
-    },
-    #[serde(rename = "reasoning")]
-    Reasoning {
-        #[serde(rename = "messageId")]
-        message_id: i64,
-        delta: String,
-    },
-    #[serde(rename = "text")]
-    Text {
-        #[serde(rename = "messageId")]
-        message_id: i64,
-        delta: String,
-    },
-    #[serde(rename = "tool_call")]
-    ToolCall {
-        #[serde(rename = "messageId")]
-        message_id: i64,
-        name: String,
-        arguments: serde_json::Value,
-        status: String,
-    },
-    #[serde(rename = "tool_result")]
-    ToolResult {
-        #[serde(rename = "messageId")]
-        message_id: i64,
-        name: String,
-        ok: bool,
-        summary: String,
-    },
-    #[serde(rename = "asset")]
-    Asset {
-        #[serde(rename = "messageId")]
-        message_id: i64,
-        // Flat, exactly as `AssetView` serialises: an internally tagged enum
-        // cannot carry a flattened struct inside its variant.
-        id: i64,
-        kind: TaskKind,
-        url: String,
-        mime: String,
-        bytes: i64,
-    },
-    #[serde(rename = "turn_done")]
-    TurnDone {
-        #[serde(rename = "messageId")]
-        message_id: i64,
-    },
-    #[serde(rename = "turn_error")]
-    TurnError {
-        #[serde(rename = "messageId")]
-        message_id: i64,
-        message: String,
-    },
-    #[serde(rename = "task_updated")]
-    TaskUpdated {
-        #[serde(rename = "taskId")]
-        task_id: i64,
-        kind: TaskKind,
-        status: TaskStatus,
-        error: Option<String>,
-    },
-    #[serde(rename = "message_added")]
-    MessageAdded { message: MessageView },
-}
-
-impl ConversationEvent {
-    pub fn type_name(&self) -> &'static str {
-        match self {
-            Self::UserMessage { .. } => "user_message",
-            Self::TurnStarted { .. } => "turn_started",
-            Self::Reasoning { .. } => "reasoning",
-            Self::Text { .. } => "text",
-            Self::ToolCall { .. } => "tool_call",
-            Self::ToolResult { .. } => "tool_result",
-            Self::Asset { .. } => "asset",
-            Self::TurnDone { .. } => "turn_done",
-            Self::TurnError { .. } => "turn_error",
-            Self::TaskUpdated { .. } => "task_updated",
-            Self::MessageAdded { .. } => "message_added",
-        }
-    }
-
-    /// The message a journal row should hang off, for mid-turn catch-up lookups.
-    pub fn message_id_of(&self) -> Option<i64> {
-        match self {
-            Self::UserMessage { message } | Self::MessageAdded { message } => Some(message.id),
-            // Task events belong to the conversation, not to one message.
-            Self::TaskUpdated { .. } => None,
-            Self::TurnStarted { message_id, .. }
-            | Self::Reasoning { message_id, .. }
-            | Self::Text { message_id, .. }
-            | Self::ToolCall { message_id, .. }
-            | Self::ToolResult { message_id, .. }
-            | Self::Asset { message_id, .. }
-            | Self::TurnDone { message_id }
-            | Self::TurnError { message_id, .. } => Some(*message_id),
-        }
-    }
-}
 
 /// An event together with the journal id that becomes its SSE `id:` field.
 #[derive(Debug, Clone)]
@@ -349,6 +238,7 @@ impl EventLog {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::task::{TaskKind, TaskStatus};
 
     async fn log() -> EventLog {
         EventLog::new(setup_conversation().await)

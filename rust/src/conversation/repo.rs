@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 use sqlx::query::Query;
 use sqlx::{Row, SqlitePool, Transaction};
 
@@ -16,46 +16,16 @@ use crate::task::TaskKind;
 
 const MAX_TITLE_LENGTH: usize = 30;
 
-/// One tool round-trip, stored as JSON on the assistant message so a reload can
-/// render the turn the way it ran.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct ToolCallRecord {
-    pub name: String,
-    pub arguments: serde_json::Value,
-    pub ok: bool,
-    pub summary: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct AssetView {
-    pub id: i64,
-    /// `image` or `video`.
-    pub kind: TaskKind,
-    /// Download endpoint, not the on-disk path.
-    pub url: String,
-    pub mime: String,
-    pub bytes: i64,
-}
+// The view structs are the conversation stream's payload, so they live in
+// `kestrel-proto` with the events that carry them: the page parses the same types
+// the server publishes, instead of restating their field names as `voice.ts` and
+// `main.ts` both used to. This tree keeps importing `crate::conversation::repo::…`.
+pub use kestrel_proto::event::{AssetView, MessageView, ToolCallRecord};
 
 /// Where the browser fetches an asset from. Single source of the format: it is
 /// also what the turn stream and the voice socket hand to the client.
 pub fn asset_url(asset_id: i64) -> String {
     format!("/api/v1/assets/{asset_id}/download")
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct MessageView {
-    pub id: i64,
-    pub role: String,
-    pub content: String,
-    pub reasoning: Option<String>,
-    pub tool_calls: Option<Vec<ToolCallRecord>>,
-    pub mode: Option<Mode>,
-    pub created_at: i64,
-    pub assets: Vec<AssetView>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]

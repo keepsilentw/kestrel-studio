@@ -11,7 +11,7 @@ use crate::state::AppState;
 use crate::task::service::NewTask;
 use crate::task::TaskKind;
 
-use super::mode::Mode;
+use super::mode::{Mode, ModePrompt};
 
 /// A single image generation call leaves the stream silent for tens of seconds.
 /// The timeout aborts the tool rather than the connection, so the failure comes

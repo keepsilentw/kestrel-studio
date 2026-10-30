@@ -14,26 +14,10 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// Async provider jobs (video today), and the kind tag on an asset. A video
-/// render takes minutes, which does not fit inside an SSE turn: the tool submits,
-/// returns immediately, and the background worker polls the provider, mirrors the
-/// bytes at the moment of success (provider URLs expire) and appends the result
-/// as a new assistant message.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum TaskKind {
-    Image,
-    Video,
-}
+pub mod event;
+pub mod task;
 
-impl TaskKind {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Image => "image",
-            Self::Video => "video",
-        }
-    }
-}
+pub use task::{TaskKind, TaskStatus};
 
 /// Browser → server.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
