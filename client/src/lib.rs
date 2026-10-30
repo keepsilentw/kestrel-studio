@@ -37,3 +37,7 @@ pub mod audio;
 /// The `/voice` page: DOM, hold wiring, and the effect interpreter.
 #[cfg(target_arch = "wasm32")]
 pub mod voice_page;
+
+/// The conversation page's DOM half: stream subscription and painting.
+#[cfg(target_arch = "wasm32")]
+pub mod chat_page;

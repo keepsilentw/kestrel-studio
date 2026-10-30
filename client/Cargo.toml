@@ -97,6 +97,10 @@ web-sys = { version = "0.3", features = [
   "MessagePort",
   # `button.class_list()` for the pressed state.
   "DomTokenList",
+  # The conversation page: `<details>` for the reasoning block and `<dialog>` for
+  # the image preview.
+  "HtmlDetailsElement",
+  "HtmlDialogElement",
 ] }
 
 [profile.release]

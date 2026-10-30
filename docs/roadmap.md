@@ -273,7 +273,7 @@ Rust 客户端源码本身取得，跨语言解析那层可以去掉。
 | 期 | 状态 |
 |---|---|
 | P2 | **交叉编译通了**：`make rust-build-linux` 产出 9.2 MB 的 `x86_64-unknown-linux-musl` 静态 ELF；`Dockerfile` 换成 `FROM scratch`、compose 加 `tmpfs /tmp`、`deploy.sh` 不再上传 node_modules（约 300 MB → 几 MB）、`bootstrap-host.sh` 不再需要缓存基础镜像。目标机实测为 x86_64 / CentOS 7.9 / Docker 26.1.4。**未做**：镜像没构建过、二进制没运行过、没有部署（都需另行授权）。证据见 [verification.md](verification.md) §11.1-§11.2 |
-| P3 | **起步**：新增 `proto/`（语音帧类型单一来源，服务端与客户端共用）与 `client/`（`voice_core` 纯状态机，13 条宿主目标测试覆盖帧顺序，见 §11.3-§11.4）。`wasm-pack 0.15.0` 已装。**未做**：DOM 层（socket / 音频 / 渲染）未移植，因此还没有 `#[wasm_bindgen]` 导出，WASM 产物与真实体积都没测过 |
+| P3 | **两个页面的代码都到位了**。语音页：`client/src/{wire,audio,voice_page}.rs` + `web/public/capture.js`（`40181fd`）。对话页：判定层 `chat_core.rs`（31 条宿主测试，`a2019a8`）+ 渲染层 `chat_page.rs`（订阅、绘制、模式选择、提交、图片预览）。类型单一来源扩到事件流：`proto/src/event.rs` 收了 `ConversationEvent` / `MessageView` / `AssetView` / `ToolCallRecord` / `Mode` / `TaskStatus`（`b59e8ed`），服务端的提示词与工具表用 `ModePrompt` trait 留在原处。契约测试补到两条：`/voice` 骨架与对话骨架分别按 `voice_page.rs`、`chat_page.rs` 源码里读出的 id 校验（rust 侧 161 条通过）。**仍未验证**：`initVoice` / `initChat` 无人调用，模板仍加载 `voice.js` / `main.js`；对话页还差下载对话框（canvas 重编码）、删除确认、右侧轮次索引、历史下拉刷新四项 |
 | P1 | **未开始**。本机不跑服务、不起 Docker（硬规则），所以运行时证据一律外移，见上表的 (a)/(b)。P2/P3 的可逆性不受影响：Nest 管线一行未删，回滚路径写在 deployment.md §1.1 |
 
 顺序偏离原计划一处，值得记下来：**P2/P3 先于 P1 动了**。P1 的判据仍然是硬闸——

@@ -308,3 +308,50 @@ fn the_voice_page_carries_every_element_the_wasm_client_requires() {
         );
     }
 }
+
+/// The ids the **WASM** chat page looks up, read out of its source. A second
+/// extractor, because the Rust client fetches elements through helpers rather than
+/// `requireElement`. Same reason as the two above: a shell that stops carrying an
+/// id is a hard failure in the browser, so it has to be a failing test first.
+fn wasm_chat_ids() -> Vec<String> {
+    let path = std::path::Path::new("../client/src/chat_page.rs");
+    let source = std::fs::read_to_string(path)
+        .unwrap_or_else(|error| panic!("{} must be readable: {error}", path.display()));
+
+    let mut ids = Vec::new();
+    // Only the three fetch helpers count. Matching on `&document, "` alone also
+    // caught `build(&document, "li", …)`, which creates an element rather than
+    // looking one up — the contract is about what the page requires to exist.
+    for needle in ["element(&document, \"", "button(&document, \"", "dialog(&document, \""] {
+        let mut pieces = source.split(needle);
+        pieces.next();
+        for after in pieces {
+            let Some(end) = after.find('"') else { continue };
+            let id = &after[..end];
+            let shaped = !id.is_empty()
+                && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+            if shaped && !ids.iter().any(|existing| existing == id) {
+                ids.push(id.to_string());
+            }
+        }
+    }
+    assert!(ids.len() >= 6, "only found {ids:?} — the extractor is out of date");
+    ids
+}
+
+#[test]
+fn the_chat_page_carries_every_element_the_wasm_client_requires() {
+    let rendered = super::templates::chat_page(&page_fixture(
+        &[stored_message()],
+        &[ConversationEntry { id: 1, title: "一只红隼".to_string(), is_active: true }],
+        Some(1),
+        Some(3),
+        false,
+    ));
+    for id in wasm_chat_ids() {
+        assert!(
+            rendered.contains(&format!("id=\"{id}\"")),
+            "#{id} is looked up by client/src/chat_page.rs but is not in the chat shell"
+        );
+    }
+}
