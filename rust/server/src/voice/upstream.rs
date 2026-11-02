@@ -75,6 +75,7 @@ impl Upstream {
     /// The dial is not the only way to get one: a test drives the state machine
     /// with a fixture that reads commands and pushes events, which is the reason
     /// this handle is channels rather than a socket trait.
+    #[cfg(test)]
     pub fn from_channels(
         commands: mpsc::Sender<Command>,
         events: mpsc::UnboundedReceiver<RealtimeEvent>,

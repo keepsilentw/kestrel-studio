@@ -10,12 +10,9 @@ pub struct InputItem {
 }
 
 impl InputItem {
+    #[cfg(test)]
     pub fn user(content: &str) -> Self {
         Self { role: "user".to_string(), content: content.to_string() }
-    }
-
-    pub fn assistant(content: &str) -> Self {
-        Self { role: "assistant".to_string(), content: content.to_string() }
     }
 }
 

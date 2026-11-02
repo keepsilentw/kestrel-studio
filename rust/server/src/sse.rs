@@ -15,17 +15,6 @@ use serde_json::Value;
 /// two connection-scoped names never carry an id.
 pub const CONNECTED: &str = "connected";
 pub const RESYNC: &str = "resync";
-pub const USER_MESSAGE: &str = "user_message";
-pub const TURN_STARTED: &str = "turn_started";
-pub const REASONING: &str = "reasoning";
-pub const TEXT: &str = "text";
-pub const TOOL_CALL: &str = "tool_call";
-pub const TOOL_RESULT: &str = "tool_result";
-pub const ASSET: &str = "asset";
-pub const TURN_DONE: &str = "turn_done";
-pub const TURN_ERROR: &str = "turn_error";
-pub const TASK_UPDATED: &str = "task_updated";
-pub const MESSAGE_ADDED: &str = "message_added";
 
 const HEARTBEAT: Duration = Duration::from_secs(15);
 
@@ -134,7 +123,7 @@ mod tests {
     fn journaled_frames_carry_the_cursor_and_scoped_ones_do_not() {
         let data = serde_json::json!({ "delta": "hi" });
         assert_eq!(
-            frame(TEXT, &data, Some(7)),
+            frame("text", &data, Some(7)),
             "id: 7\nevent: text\ndata: {\"delta\":\"hi\"}\n\n"
         );
         assert!(!frame(CONNECTED, &data, None).starts_with("id:"));

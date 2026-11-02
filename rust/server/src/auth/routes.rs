@@ -5,7 +5,6 @@ use axum::response::Response;
 use axum::Form;
 use serde::Deserialize;
 
-use super::guards;
 use super::session;
 use super::service::AuthService;
 use crate::error::AppError;
@@ -65,8 +64,3 @@ pub async fn logout(
     Ok(response)
 }
 
-/// Whether this request already carries a live session. The `/login` page uses
-/// it to bounce a signed-in user back to the chat.
-pub async fn signed_in(state: &AppState, headers: &HeaderMap) -> bool {
-    guards::principal_from(state, headers).await.is_some()
-}

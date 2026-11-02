@@ -1,28 +1,12 @@
 use std::path::{Component, Path, PathBuf};
 
-use axum::extract::{Path as UrlPath, State};
+use axum::extract::State;
 use axum::http::header::{self, ETAG, IF_NONE_MATCH, LAST_MODIFIED};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 
 use crate::error::AppError;
 use crate::state::AppState;
-
-/// Serves the Vite output and the favicon out of `public/`, the way
-/// `app.useStaticAssets(..., { index: false })` did: no directory index, no
-/// rewrite, only real files.
-///
-/// `tower-http`'s `fs` feature is unavailable in this build (it needs
-/// `http-range-header`, which is not in the local registry), so the handler is
-/// here instead. Asset names are stable (`assets/main.js`), which the templates
-/// link to directly.
-pub async fn serve(
-    State(state): State<AppState>,
-    UrlPath(requested): UrlPath<String>,
-    headers: HeaderMap,
-) -> Result<Response, AppError> {
-    serve_at(&state, &requested, &headers).await
-}
 
 /// Registered as the router fallback: anything the API routes do not claim is a
 /// file request, which is how `useStaticAssets` behaved for `/logo.svg` and the

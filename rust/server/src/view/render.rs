@@ -137,7 +137,7 @@ mod tests {
     #[test]
     fn assets_carry_their_kind_into_the_template() {
         let mut view = message(1, "assistant", "好了", None);
-        view.assets = vec![crate::conversation::AssetView {
+        view.assets = vec![crate::conversation::repo::AssetView {
             id: 9,
             kind: TaskKind::Video,
             url: "/api/v1/assets/9/download".to_string(),

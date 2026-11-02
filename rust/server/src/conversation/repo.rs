@@ -202,6 +202,7 @@ impl ConversationService {
     }
 
     /// Owner of a conversation, for endpoints that push events rather than read.
+    #[cfg(test)]
     pub async fn owner_of(&self, conversation_id: i64) -> Result<Option<i64>, AppError> {
         let row = sqlx::query("SELECT user_id FROM conversations WHERE id = ?1")
             .bind(conversation_id)

@@ -50,12 +50,9 @@ pub enum RequestItem {
 }
 
 impl RequestItem {
+    #[cfg(test)]
     pub fn user(content: &str) -> Self {
         Self::Message(InputItem::user(content))
-    }
-
-    pub fn assistant(content: &str) -> Self {
-        Self::Message(InputItem::assistant(content))
     }
 
     pub fn call(call_id: &str, name: &str, arguments: &str) -> Self {

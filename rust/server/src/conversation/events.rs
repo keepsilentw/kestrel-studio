@@ -10,7 +10,7 @@ use crate::error::AppError;
 // structs it carries, so the browser parses exactly what is journalled.
 // `PublishedEvent` below stays here: it is the journal row's envelope, not part of
 // the contract.
-pub use kestrel_proto::event::{ConversationEvent, MessageView};
+pub use kestrel_proto::event::ConversationEvent;
 
 /// How many recent events a conversation's journal keeps. Sized above the delta
 /// count of one ordinary turn (docs/verification.md §1: `high` reasoning effort
@@ -239,6 +239,7 @@ impl EventLog {
 mod tests {
     use super::*;
     use crate::task::{TaskKind, TaskStatus};
+    use kestrel_proto::event::MessageView;
 
     async fn log() -> EventLog {
         EventLog::new(setup_conversation().await)

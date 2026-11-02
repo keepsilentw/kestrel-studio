@@ -3,7 +3,7 @@ use sqlx::SqlitePool;
 
 use crate::error::AppError;
 
-use super::roles::{parse_role, Principal, Role};
+use super::roles::{parse_role, Principal};
 
 /// The single conversion from a `users` row to the principal carried in the
 /// session, so the role cannot be forgotten on one of the paths that build it.
@@ -60,11 +60,4 @@ impl AuthService {
         }))
     }
 
-    pub async fn role_of(&self, id: i64) -> Result<Option<Role>, AppError> {
-        let row = sqlx::query("SELECT role FROM users WHERE id = ?1")
-            .bind(id)
-            .fetch_optional(&self.pool)
-            .await?;
-        Ok(row.map(|row| parse_role(row.try_get("role").ok())))
-    }
 }

@@ -20,6 +20,8 @@ pub struct NewTask {
     pub params: Value,
 }
 
+/// A row projection: not every column is consumed by the current worker.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct GenerationTask {
     pub id: i64,
@@ -151,6 +153,7 @@ impl TaskService {
         Ok(rows.iter().map(to_task).collect())
     }
 
+    #[cfg(test)]
     pub async fn by_conversation(
         &self,
         conversation_id: i64,

@@ -300,7 +300,7 @@ mod tests {
     fn raw(fin: bool, opcode: u8, payload: &[u8], mask: Option<[u8; 4]>) -> Vec<u8> {
         let mut out = vec![u8::from(fin) * 0x80 | opcode];
         let length = payload.len();
-        let (mut marker, mut extended): (u8, Vec<u8>) = if length <= 125 {
+        let (mut marker, extended): (u8, Vec<u8>) = if length <= 125 {
             (length as u8, Vec::new())
         } else if length <= 65_535 {
             (126, (length as u16).to_be_bytes().to_vec())

@@ -30,8 +30,6 @@ pub fn is_acceptable_password(password: &str) -> bool {
 pub struct AccountView {
     pub id: i64,
     pub username: String,
-    #[serde(skip)]
-    pub role: Role,
     pub role_label: &'static str,
     pub created_at: i64,
     pub conversation_count: i64,
@@ -233,7 +231,6 @@ fn to_account(row: &sqlx::sqlite::SqliteRow, id: i64, conversation_count: i64, a
     AccountView {
         id,
         username: row.try_get("username").unwrap_or_default(),
-        role,
         role_label: role.label(),
         created_at: row.try_get("created_at").unwrap_or(0),
         conversation_count,

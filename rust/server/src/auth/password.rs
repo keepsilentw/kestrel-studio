@@ -1,5 +1,6 @@
 use sha2::Sha256;
 
+#[cfg(test)]
 use crate::config::random_bytes;
 
 /// Two formats share one column, dispatched per row by its prefix.
@@ -15,7 +16,9 @@ use crate::config::random_bytes;
 /// PBKDF2 (`$pbkdf2-sha256$`) is the format that stood in while bcrypt was not
 /// yet implemented. It stays verifiable so no row written during that gap is
 /// orphaned; nothing new is written in it.
+#[cfg(test)]
 const ITERATIONS: u32 = 120_000;
+#[cfg(test)]
 const SALT_LEN: usize = 16;
 const KEY_LEN: usize = 32;
 const BCRYPT_PREFIX: &str = "$2";
@@ -28,6 +31,7 @@ pub fn hash(password: &str) -> String {
 
 /// Writes a PBKDF2 hash. Kept for the tests and for any operator who prefers a
 /// format from std-only primitives; the login path accepts either.
+#[cfg(test)]
 pub fn hash_pbkdf2(password: &str) -> String {
     let salt = random_bytes(SALT_LEN);
     let derived = derive(password, &salt);
@@ -68,16 +72,19 @@ pub fn verify(password: &str, stored: &str) -> bool {
 /// Whether a stored hash uses a format this build cannot check at all. The login
 /// route can then answer "reset required" instead of "wrong password" — with both
 /// formats supported, that is now only the case for a hand-edited row.
+#[cfg(test)]
 pub fn is_unverifiable(stored: &str) -> bool {
     !stored.starts_with(BCRYPT_PREFIX) && !stored.starts_with(PREFIX)
 }
 
+#[cfg(test)]
 fn derive(password: &str, salt: &[u8]) -> Vec<u8> {
     let mut out = vec![0u8; KEY_LEN];
     pbkdf2::pbkdf2_hmac::<Sha256>(password.as_bytes(), salt, ITERATIONS, &mut out);
     out
 }
 
+#[cfg(test)]
 fn base64encode(bytes: &[u8]) -> String {
     use base64::Engine;
     base64::engine::general_purpose::STANDARD.encode(bytes)

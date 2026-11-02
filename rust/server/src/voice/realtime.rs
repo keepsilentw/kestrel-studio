@@ -436,6 +436,7 @@ impl UpstreamStitch {
     }
 
     /// The call whose argument deltas are arriving, exposed for tests.
+    #[cfg(test)]
     pub fn active_call(&self) -> Option<&str> {
         self.active_call_id.as_deref()
     }
@@ -444,6 +445,7 @@ impl UpstreamStitch {
 /// Maps one upstream frame without any stitching state.
 ///
 /// For the stateless events only; a session uses [`UpstreamStitch`].
+#[cfg(test)]
 pub fn map_inbound_event(raw: &str) -> Option<RealtimeEvent> {
     UpstreamStitch::new().handle(raw).into_iter().next()
 }

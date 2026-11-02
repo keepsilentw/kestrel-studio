@@ -132,12 +132,9 @@ impl VoiceCall {
     }
 
     /// The dial, factored out so a test can hand in a fixture instead.
+    #[cfg(test)]
     pub fn attach_upstream(&mut self, upstream: Upstream) {
         self.upstream = Some(upstream);
-    }
-
-    pub fn conversation_id(&self) -> Option<i64> {
-        self.conversation_id
     }
 
     async fn receive(&mut self, frame: ClientFrame) {

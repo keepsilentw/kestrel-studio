@@ -49,10 +49,12 @@ impl TicketStore {
         (expiry > now_ms).then_some(user_id)
     }
 
+    #[cfg(test)]
     pub fn len(&self) -> usize {
         self.open.lock().expect("ticket lock").len()
     }
 
+    #[cfg(test)]
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }

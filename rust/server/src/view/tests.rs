@@ -83,14 +83,14 @@ fn stored_message() -> MessageView {
         mode: Some(Mode::Image),
         created_at: 1,
         assets: vec![
-            crate::conversation::AssetView {
+            crate::conversation::repo::AssetView {
                 id: 7,
                 kind: TaskKind::Image,
                 url: "/api/v1/assets/7/download".to_string(),
                 mime: "image/png".to_string(),
                 bytes: 4,
             },
-            crate::conversation::AssetView {
+            crate::conversation::repo::AssetView {
                 id: 8,
                 kind: TaskKind::Video,
                 url: "/api/v1/assets/8/download".to_string(),

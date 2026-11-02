@@ -218,7 +218,7 @@ mod tests {
     #[tokio::test]
     async fn outbound_frames_are_unmasked_text_and_a_close_flushes_then_stops() {
         let (_browser_side, server_side) = pair();
-        let (mut tx, mut rx) = mpsc::channel(4);
+        let (tx, mut rx) = mpsc::channel(4);
         let mut server_side = server_side;
         let writer = tokio::spawn(async move { pump_out(&mut server_side, &mut rx).await });
 

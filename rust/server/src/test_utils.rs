@@ -12,9 +12,8 @@ use std::time::Duration;
 use axum::body::{to_bytes, Body};
 
 use futures_util::StreamExt;
-use serde_json::{json, Value};
+use serde_json::Value;
 use sqlx::Row;
-use tower::ServiceExt;
 
 use crate::auth::password;
 use crate::auth::roles::Role;
@@ -25,11 +24,6 @@ use crate::state::AppState;
 pub(crate) use axum::http::header::CONTENT_TYPE;
 
 pub(crate) const LIMIT: usize = 4 << 20;
-
-/// A JSON POST, for the endpoints that read a body rather than a form.
-pub(crate) fn post_json_value(path: &str, cookie: Option<&str>, body: Value) -> Request<Body> {
-    post_json(path, cookie, body)
-}
 
 /// A router over an in-memory database, plus the state behind it.
 pub(crate) async fn app() -> (axum::Router, AppState) {
@@ -81,16 +75,6 @@ pub(crate) fn form_post(path: &str, cookie: &str, fields: &[(&str, &str)]) -> Re
         .expect("request")
 }
 
-/// A conversation the caller owns, created through the API.
-pub(crate) async fn new_conversation(app: &axum::Router, _state: &AppState, cookie: &str) -> i64 {
-    let response = app
-        .clone()
-        .oneshot(post_json("/api/v1/conversations", Some(cookie), json!({ "prompt": "一只红隼" })))
-        .await
-        .expect("create");
-    json_body(response).await["conversationId"].as_i64().expect("id")
-}
-
 pub(crate) fn get(path: &str, cookie: Option<&str>) -> Request<Body> {
     let mut builder = Request::builder()
         .method("GET")
@@ -138,7 +122,7 @@ pub(crate) async fn text_body(response: Response<Body>) -> String {
 
 /// Pulls a bounded number of chunks off a stream body. The conversation stream
 /// never ends on its own, so a test reads what arrived and stops.
-pub(crate) async fn peek(mut response: Response<Body>, chunks: usize) -> String {
+pub(crate) async fn peek(response: Response<Body>, chunks: usize) -> String {
     let mut out = String::new();
     // `into_data_stream` because axum's Body speaks `http_body::Body`, not
     // `futures_util::Stream`, until it is handed over as data.

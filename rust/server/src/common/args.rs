@@ -32,6 +32,7 @@ pub fn read_string(args: &Value, key: &str, fallback: &str) -> String {
     }
 }
 
+#[cfg(test)]
 pub fn read_optional_string(args: &Value, key: &str) -> Option<String> {
     let value = args.get(key)?.as_str()?.trim();
     (!value.is_empty()).then(|| value.to_string())
