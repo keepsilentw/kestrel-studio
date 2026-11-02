@@ -67,6 +67,13 @@ async fn only_a_super_admin_gets_through_and_a_rejected_post_says_403() {
     let page = text_body(app.oneshot(get("/admin", Some(&admin_cookie))).await.expect("admin")).await;
     assert!(page.contains("账号管理"));
     assert!(page.contains("<span class=\"account-name\">boss</span>"));
+    // The menu tuples are (href, label); swapping them made every nav link
+    // point at the Chinese label instead of the route.
+    assert!(page.contains("<a class=\"menu-button\" href=\"/\">返回对话</a>"), "{page}");
+    assert!(
+        page.contains("<a class=\"menu-button\" href=\"/admin/conversations\">全站会话</a>"),
+        "{page}"
+    );
 }
 
 #[tokio::test]
