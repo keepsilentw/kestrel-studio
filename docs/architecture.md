@@ -405,7 +405,7 @@ kestrel-studio/
 | `BAILIAN_VOICE_MODEL` | `/voice` 的实时语音模型。WS 地址由 `BAILIAN_BASE_URL` 换协议头得来（见 §11.1） |
 | `PUBLIC_BASE_URL` | 图生视频交给供应商取首帧的公网前缀；签名帧 URL 由 `common/signed-url.ts` 拼出 |
 | `DATABASE_FILE` | 默认 `data/kestrel-studio.db` |
-| `PORT` | 默认 8848 |
+| `PORT` | 默认 9949（服务器由 compose 注入 8848） |
 | `NODE_ENV` | `production` 时不 seed 本地引导账号 `admin`（Dockerfile 设置） |
 | `SESSION_SECRET` | express-session 签名密钥，同时用于资产帧 URL 签名。**无内置默认值**：`NODE_ENV=production` 下缺失即启动失败，本地每进程随机 |
 | `STORAGE_DIR` | 图片落盘目录，默认 `storage/` |
@@ -602,7 +602,7 @@ WebSocket 的 upgrade 不经过 Express，所以 `AuthenticatedGuard` 对它无�
 工具、媒体与后台任务、`/api/v1` + 可续传 SSE + 签名帧 + 下载、SSR 页面与模板/客户端
 契约测试、admin 面、语音的票据/协议/帧泵/状态机/上游握手。
 
-尚未完成：**未接管构建与部署**（`Dockerfile` 仍是 Nest 管线；`make rust-*` 只做本地
+尚未完成：**未接管构建与部署**（`Dockerfile` 仍是 Nest 管线；`make build-rust` / `make run-rust` 只做本地
 构建与检查）；**没有端到端实测**（开发环境禁止启动服务）；语音的 `connect()` 真拨号
 与 101 接管未上机验证；上游工具派发轮次在循环内 `await`，与 Nest 的 promise 链串形
 式不同（后果是一次工具调用期间 `stop` 会被延后）。

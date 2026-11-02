@@ -34,7 +34,7 @@ make logs         # 跟随日志
 make stop         # 停止
 ```
 
-访问 `http://localhost:8848`。建库时 seed 账号（密码经 bcrypt 哈希）：
+访问 `http://localhost:9949`。建库时 seed 账号（密码经 bcrypt 哈希）：
 
 | 账号 | 密码 | 角色 |
 |---|---|---|
@@ -55,7 +55,7 @@ make stop         # 停止
 
 ```bash
 make dev          # 后端 watch（nest start --watch）
-make web-watch    # 另开一个终端，前端资源 watch 构建
+make watch    # 另开一个终端，前端资源 watch 构建
 ```
 
 `make help` 列出全部命令；服务器侧运维命令见 [deployment.md](deployment.md) §6。

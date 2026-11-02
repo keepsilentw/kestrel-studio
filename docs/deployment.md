@@ -16,7 +16,7 @@
 
 | 需要的东西 | 来源 |
 |---|---|
-| 服务端可执行文件 | 开发机交叉编译的 **x86_64-unknown-linux-musl 静态二进制**（`make rust-build-linux`），随构建上下文上传 |
+| 服务端可执行文件 | 开发机交叉编译的 **x86_64-unknown-linux-musl 静态二进制**（`make build-linux`），随构建上下文上传 |
 | 运行时基础镜像 | `scratch`——Docker 对它有特殊处理、**永远不需要拉取**，所以服务器上没有任何要缓存的镜像 |
 | 前端资源 | 开发机构建的 `public/`（P3 换成 WASM 产物） |
 | TLS 根证书 | 编进二进制的 `webpki-roots`（scratch 里没有 `/etc/ssl/certs`） |

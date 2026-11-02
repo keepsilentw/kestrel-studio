@@ -55,33 +55,29 @@ cwd 拼接），且它的 `assets` **不能写 `outDir`**（写了就按 cwd 拼
 | `make start` | 构建前端资源 + 后端，交给 pm2 常驻，打印访问地址与健康探测 |
 | `make stop` / `restart` / `status` / `logs` | pm2 运维 |
 | `make dev` | 后端 watch（`nest start --watch`） |
-| `make web-watch` | 前端资源 watch 构建，开发时另开一个终端 |
-| `make build` | 全部包：`build-nest-client` + `build-nest-server` + `build-rust-server` + `build-rust-client` |
-| `make typecheck` | 全部包：Nest 三份 `tsconfig` + 两个 `cargo check --tests` |
+| `make watch` | 前端资源 watch 构建，开发时另开一个终端 |
+| `make build` | 全部包：`build-web` + `build-nest` + `build-rust` + `build-wasm` |
+| `make check` | 全部包：Nest 三份 `tsconfig` + 两个 `cargo check --tests` |
 | `make test` | 全部包单元测试：Nest 两轮 `vitest run` + 两个 `cargo test`，纯模块无 DI |
 | `make test-watch` | Nest 后端侧单元测试 watch 模式 |
-| `make clean` | 清全部产物：`nest/server/dist/`、`public/`、`rust/server/target/`、`rust/client/target/`、`crates/*/target/`，保留 `data/` `storage/` |
-| `make typecheck-nest-server` / `typecheck-nest-client` | 只跑某一个 Nest 包的 `tsc --noEmit` |
-| `make typecheck-rust-server` / `typecheck-rust-client` | 只跑某一个 Rust 包的 `cargo check --tests` |
-| `make test-nest-server` / `test-nest-client` / `test-rust-server` / `test-rust-client` | 只跑某一个包的单元测试 |
-| `make build-rust-server` / `run-rust` | 构建 release 二进制 / 本机前台运行（不走 pm2；别名 `rust-build` / `rust-run`） |
-| `make build-rust-client` | `wasm-pack build --target web` 构建到 `rust/client/pkg/`，再连同 `capture.js` 暂存到 `public/wasm/`；模板暂未切换到 WASM |
-| `make build-rust-server-linux` | 交叉编译 `x86_64-unknown-linux-musl` 静态二进制到 `/tmp/kestrel-studio-linux/`（`make deploy` 的输入；需 `zig` + `cargo-zigbuild`；别名 `rust-build-linux`） |
-| `make clean-rust-server` / `clean-rust-client` | 分别清 `rust/server/target/` 与 `rust/client/target/` |
-| `make deploy*` | 部署到 lavo-test。**deploy 现在组装 Rust 静态二进制 + `public/`（`FROM scratch`），不再上传 node_modules**；它会先跑 `build-rust-server-linux` 与 `build-rust-client`（后者会先构建 Nest 客户端资源，再补回 `capture.js`） |
+| `make clean` | 清全部产物：`nest/server/dist/`、`public/`（含 `public/wasm`）、`rust/server/target/`、`rust/client/target/`、`rust/client/pkg/`、`crates/*/target/`，保留 `data/` `storage/` |
+| `make build-rust` / `run-rust` | 构建 release 二进制 / 本机前台运行（不走 pm2） |
+| `make build-wasm` | `wasm-pack build --target web` 构建到 `rust/client/pkg/`，再连同 `capture.js` 暂存到 `public/wasm/`；模板暂未切换到 WASM |
+| `make build-linux` | 交叉编译 `x86_64-unknown-linux-musl` 静态二进制到 `/tmp/kestrel-studio-linux/`（`make deploy` 的输入；需 `zig` + `cargo-zigbuild`） |
+| `make deploy*` | 部署到 lavo-test。**deploy 现在组装 Rust 静态二进制 + `public/`（`FROM scratch`），不再上传 node_modules**；它会先跑 `build-linux` 与 `build-wasm`（后者会先构建 Nest 客户端资源，再补回 `capture.js`） |
 
-目标命名统一为 `<verb>-<stack>-<role>`（`build-nest-server`、`test-rust-client` …）；不带后缀的 `build` / `typecheck` / `test` / `clean` 聚合全部四个包。旧名保留为别名：`build-server` / `build-web` / `build-rust`、`typecheck-{server,web,rust}`、`test-{server,web,rust}`、`clean-{server,web,rust}`、`rust-*`。`make start` 只依赖 `build-nest-client` + `build-nest-server`——Rust 二进制是另一条路径（`run-rust` / `deploy`），不进入 pm2 条目。
+命令面只保留**跨包编排**：单个包的 typecheck/test 直接 `pnpm --dir nest/server run typecheck` / `cargo check --manifest-path rust/server/Cargo.toml --tests`，不再为每个包生成 Make 目标。`make start` 只依赖 `build-web` + `build-nest`——Rust 二进制是另一条路径（`run-rust` / `deploy`），不进入 pm2 条目。
 
 要点：
 
-- 访问 `http://localhost:8848`。建库时 seed 账号（bcrypt 哈希入库，且**只在账号缺失时创建**，
+- 访问 `http://localhost:9949`。建库时 seed 账号（bcrypt 哈希入库，且**只在账号缺失时创建**，
   所以改过的密码不会被重启重置）：`admin` / `123456` 是**本地**引导账号（代码内置，
   `NODE_ENV=production` 时不建号）；超管（多一个 `/admin`）的凭据来自
   `SUPER_ADMIN_USERNAME` / `SUPER_ADMIN_PASSWORD`，**仓库里没有内置超管口令**，
   两个变量缺任一个就不建超管、`/admin` 不可达。这条约束存在的原因是仓库要公开：
   内置凭据等于给线上实例发可用登录。
-- **Rust 实现（`rust/server/`）是并行的第二套服务端**，质量门是 `make typecheck-rust-server` +
-  `make test-rust-server`（旧名 `rust-check` / `rust-test` 仍可用）。它**未接管构建与部署**：线上仍是 Nest 容器，`nest/server/src/` 一行未改。
+- **Rust 实现（`rust/server/`）是并行的第二套服务端**，质量门是 `make check` +
+  `make test`（含 `cargo check --tests` / `cargo test`）。它**未接管构建与部署**：线上仍是 Nest 容器，`nest/server/src/` 一行未改。
   离线 registry 缺 `bcrypt` / `tungstenite` / 模板引擎等件，相关自研与原因见
   `docs/architecture.md` §13，踩坑台账见 `docs/implementation-notes.md` §10-§12。
   **2026-10-30 两点更正与一条决策**：(1)「开发机无出站网络」是**执行环境的网络沙箱**
@@ -102,8 +98,8 @@ cwd 拼接），且它的 `assets` **不能写 `outDir`**（写了就按 cwd 拼
 - **cargo 的产物在仓库外**：手工调 cargo（尤其脚本里）务必带
   `CARGO_TARGET_DIR=/tmp/...`；`.gitignore` 虽已覆盖 `rust/server/target/`，但提交一律用
   `git add -u <path>` 而不是 `git add <path>`，避免未跟踪产物被顺手带进公开仓库。
-- **pm2 与 watch 模式争 8848 端口**：跑 `make dev` 前先 `make stop`；`make dev` 会自己检测并警告。
-- **质量门是 `make typecheck` + `make test`**（两者聚合全部四个包，含 Rust 的 `cargo check --tests` / `cargo test`；只跑 Node 侧用 `make typecheck-nest-server typecheck-nest-client` / `make test-nest-server test-nest-client`）。Node 测试用 vitest，两个 Nest 包各一份配置、各跑一轮 runner（`nest/server/vitest.config.mts`、`nest/client/vitest.config.mts`；合计 30 files / 510 tests，与拆分前单 runner 同数）：
+- **pm2 与 watch 模式争 9949 端口**：跑 `make dev` 前先 `make stop`；`make dev` 会自己检测并警告。
+- **质量门是 `make check` + `make test`**（两者聚合全部四个包，含 Rust 的 `cargo check --tests` / `cargo test`；只跑某个包时直接用 `pnpm --dir` 或 `cargo --manifest-path`）。Node 测试用 vitest，两个 Nest 包各一份配置、各跑一轮 runner（`nest/server/vitest.config.mts`、`nest/client/vitest.config.mts`；合计 30 files / 510 tests，与拆分前单 runner 同数）：
   - `nest/server`（node 环境）—— `nest/server/__tests__/**`，按 src 的模块结构镜像存放（测试文件不进 `src/`，这是约定）。走 **SWC** 而非默认的 esbuild，因为 esbuild 不实现 `emitDecoratorMetadata`，而应用有约 19 处构造参数依赖它；没有 SWC 就起不了 `Test.createTestingModule()`。这也是当初不用 ts-jest 的原因：ts-jest 要 TS 的 programmatic compiler API，而 TS 7 已移除（本项目钉在 TS 6.0.3 正是同一根因）。
   - `nest/client`（jsdom 环境）—— `nest/client/__tests__/**`，测 `nest/client/scripts/main.ts` 的 DOM 行为。`nest/client/__tests__/test-setup.ts` 补了 jsdom 缺失的 `scrollIntoView`。
   - 测试里没有类型断言（全局 TS 规则禁止），所以守卫、控制器、登录链路都是**起真实 HTTP 服务再发请求**验证的，不是伪造 `ExecutionContext` 一类对象。
@@ -114,7 +110,7 @@ cwd 拼接），且它的 `assets` **不能写 `outDir`**（写了就按 cwd 拼
   `/voice` **零条目**；对话页零错误零警告，另有 1 条 Chrome *issue*（`loading="lazy"` 的资产
   `<img>` 缺尺寸，属既有代码），记在 `docs/roadmap.md` §3。
   用 MCP 时**新开标签页**（`new_page`），别动用户自己的会话；用户已把待调试站点打开时除外。
-- `.hbs` 模板不在 TS 编译产物里，由 `nest/server/nest-cli.json` 的 `assets` 拷进 `nest/server/dist/view/views`；watch 模式下自动同步，一次性构建则必须重新 `make build-nest-server`。
+- `.hbs` 模板不在 TS 编译产物里，由 `nest/server/nest-cli.json` 的 `assets` 拷进 `nest/server/dist/view/views`；watch 模式下自动同步，一次性构建则必须重新 `make build-nest`。
 
 ## 架构
 
@@ -260,7 +256,7 @@ provider 工厂在此之前就已经直接调 `loadConfig()` 了。`nest/server/
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
-| `PORT` | 8848 | |
+| `PORT` | 9949（服务器由 compose 注入 8848） | |
 | `NODE_ENV` | 未设置 | `production`（Dockerfile 设）时不 seed 本地引导账号 `admin` |
 | `SESSION_SECRET` | 非 production 下每进程随机；`NODE_ENV=production` 时缺失直接启动失败 | 同时是资产签名密钥（`nest/server/src/common/signed-url.ts:19`） |
 | `DATABASE_FILE` | `data/kestrel-studio.db` | |
