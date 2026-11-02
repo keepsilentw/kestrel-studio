@@ -862,14 +862,14 @@ ssh lavo-test 'sqlite3 "file:/opt/kestrel-studio/data/kestrel-studio.db?mode=ro"
 |---|---|---|
 | 出图 / 视频任务 | 能——任一轮都写 `messages` + `assets`（视频另写 `generation_tasks`） | **正证未在线上跑过**（零新行） |
 | 语音 | 能——`voice/session.rs` 建会话写 `title='语音会话'`，并打 `tracing::info!("voice session opened")` | **正证未在线上跑过**：库里那 3 条「语音会话」（id 4 / 5 / 6）全部写于 2026-09-22，就是 §4.1 那批 Nest 期实测留下的；11-02 一条也没有，日志里也没有 `voice session opened` |
-| `/admin` 只读回放 | **不能**——读操作不写任何行 | 既不能证实也不能证伪 |
-| SSE 断线续传 | **不能**——重放只读事件日志，不写新行 | 同上 |
-| 浏览器控制台零噪音 | **不能**——发生在浏览器里 | 同上 |
+| `/admin` 只读回放 | 当时不能——读操作不写任何行，且服务端没有请求日志 | 既不能证实也不能证伪。**当日已补开关**（§13.7），下一次走查可取证 |
+| SSE 断线续传 | 同上 | 同上；补完后 `/stream?from=N` 直接可见 |
+| 浏览器控制台零噪音 | 不能——发生在浏览器里，服务器永远看不到 | 仍只能由操作者报告，并标注为「操作者观察」 |
 
-取证边界的根因在代码里，不是这次没查到：`rust/server/src/main.rs` 的 `EnvFilter` 默认 `info`，
-全仓**没有任何请求级日志层**（无 `TraceLayer` / `HttpMakeSpan` / `on_request`），`info` 只打在
-启动、会话清理与语音生命周期上。所以线上一次纯读的走查（打开页面、翻历史、进 `/admin` 看回放、
-断线重连）在服务器侧**必然无痕**。
+当时取不到证的根因在代码里，不是这次没查到：`main.rs` 的 `EnvFilter` 默认 `info`，而全仓没有
+任何请求级日志层，`info` 只打在启动、会话清理与语音生命周期上。所以线上一次纯读的走查（打开
+页面、翻历史、进 `/admin` 看回放、断线重连）在服务器侧必然无痕。**这一条已在同日改掉，见 §13.7；
+本节那三次只读走查发生在改掉之前，仍然是无法佐证的操作者陈述。**
 
 因此 P1 的剩余判据天然是两种证据拼起来的，下次走查请照这个顺序留痕：
 
@@ -877,3 +877,38 @@ ssh lavo-test 'sqlite3 "file:/opt/kestrel-studio/data/kestrel-studio.db?mode=ro"
    语音还应多一条 `voice session opened` 与一个新会话行。做完我复查并落记录。
 2. **只读路径**：`/admin` 列表与只读回放、刷新后的事件重放、控制台条目数——这三条只能由人报告，
    报告本身记为「操作者观察」，与机器证据分开写，不混标"实测通过"。
+
+### 13.7 访问日志落地（2026-11-02，本机验证；**尚未上线**）
+
+§13.6 那条盲区当天补掉了。实现是库的默认形态，不是自研件：`rust/server/src/http/router.rs`
+挂 `tower_http::trace::TraceLayer::new_for_http()`，级别用 tower-http 自带的默认
+（span / on_request / on_response = **DEBUG**，on_failure = ERROR），开关是 compose 里的
+`RUST_LOG=${RUST_LOG:-info}`（为什么放 compose 不放 `.env`：见 deployment.md §2.1）。
+
+本机验证方式与结果——不启动服务，用 `oneshot` 驱动同一个 router：
+
+```
+$ CARGO_TARGET_DIR=/tmp/kestrel-studio-target cargo test --manifest-path rust/server/Cargo.toml
+  test result: ok. 164 passed; 0 failed; 2 ignored
+```
+
+新增两条测试，各钉住一个方向：
+
+- `http::tests::the_access_log_records_the_request_and_stays_out_of_the_default_filter`：
+  装一个捕获用的 layer，同一请求分别在 `info`（= 生产默认）与 `debug` 下走一遍。前者断言没有
+  任何 `tower_http` 输出，后者断言出现 `method=GET`、`uri=/login?probe=1`、`status=200`，且级别
+  是 DEBUG。**查询串留在日志里**这一条是重点：SSE 续传在服务器上第一次变成可见的
+  `/api/v1/conversations/{id}/stream?from=N`。
+- `http::tests::the_voice_upgrade_route_stays_out_of_the_access_log`：`/api/voice` 排在 `.layer()`
+  **之后**（axum 只包裹注册前的路由），所以它不进访问日志。这条排除是刻意的——那是唯一劫持
+  连接的路径，而它的 `hyper::upgrade::on` 接管从未上过机器，不在它前面放会碰 response body 的
+  东西。测试用一次无握手头的 GET（返回 426，不触网）断言该路径零输出，防止以后被"顺手统一"。
+
+**仍然没有的运行时证据**（别把上面的通过读成这些已过）：
+
+1. 线上跑的仍是 13:46 构建的那版二进制，**不含这次改动**。要让访问日志生效必须再部署一次。
+   这一次部署**不会登出任何人**：签名口径与 `SESSION_SECRET` 都没动，与 §13.4 那种换侧不同。
+2. `RUST_LOG=debug` 在真容器里的输出形状没验过（本机不启动服务、不起 Docker）。
+3. 语音升级在有/无这层中间件下的实际行为，仍待一次真机通话。
+
+复现命令与读日志的三条限制在 deployment.md §2.1。

@@ -106,6 +106,30 @@ compose 的 `environment` 优先级高于 `env_file`，`.env` 里的残留值不
 
 教训：把一个"只写一次、永不更新"的文件当作配置源时，其中任何可变项都必须挪出去。
 
+## 2.1 访问日志开关（`RUST_LOG`，2026-11-02）
+
+`docker-compose.yml` 的 `environment` 里有一条 `RUST_LOG=${RUST_LOG:-info}`——按上面那条教训放在
+compose 而不是 `.env`，理由一模一样：`.env` 永不覆盖，一次临时 `debug` 留在里面就会变成永久的
+冗长日志。
+
+默认 `info` 下**每请求零输出**（Rust 侧的 `TraceLayer` 全部打在 DEBUG，见 architecture.md §13.3）。
+要取证就在宿主机上单独起一次：
+
+```bash
+ssh lavo-test "cd /opt/kestrel-studio && RUST_LOG=debug docker compose up -d"
+# 走完一遍之后取日志
+ssh lavo-test "docker logs --since 10m kestrel-studio 2>&1 | grep -E 'method=|status=' | tail -40"
+# 收尾：回到默认（make deploy 不转发 RUST_LOG，下一次部署自然就把它清掉）
+ssh lavo-test "cd /opt/kestrel-studio && docker compose up -d"
+```
+
+三条读法上的限制，别指望它超出自己能证的范围：
+
+1. **`/api/voice` 不在日志里**——那条升级路由刻意排在 `.layer()` 之后（architecture.md §13.3）。
+   语音的真实证据是 INFO 上的 `voice session opened`，不需要这个开关。
+2. **流式响应的 `latency` 是首字节时间**，不是一轮或一次通话的时长。
+3. DEBUG 里除了访问日志还有 sqlx 的语句 span，量大；只在走查的那几分钟开着，走完关掉。
+
 ## 3. 对外暴露：openresty 反代
 
 服务器的对外入口是 1Panel 管理的 openresty（容器名形如 `1Panel-openresty-*`，监听 80/443）。
@@ -179,6 +203,7 @@ kestrel-studio 的站点配置：`/opt/1panel/www/conf.d/try.kestrel.justwork.li
 | `make deploy-logs` | 跟随容器日志 |
 | `make deploy-restart` | 重启容器 |
 | `make deploy-down` | 停止并移除容器（保留 `data/`、`storage/`） |
+| `RUST_LOG=debug docker compose up -d`（宿主机上） | 临时打开每请求访问日志，取证用；见 §2.1 |
 
 排障入口见 `.claude/skills/deploy/SKILL.md`；构建失败、容器启动即退出、容器内健康但外部不可达
 三类问题的处置流程在那里。

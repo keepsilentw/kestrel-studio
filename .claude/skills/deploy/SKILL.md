@@ -223,23 +223,42 @@ let `sqlite3` checkpoint the WAL on close — harmless and even useful, but then
 don't be surprised when `kestrel-studio.db-wal` shrinks and the main file grows
 (docs/deployment.md §7 already records this).
 
-**A read-only pass leaves no trace.** There is no request-level logging (the
-`EnvFilter` defaults to `info` and there is no `TraceLayer` / `HttpMakeSpan` in
-the tree), and reads do not write rows — browsing history, opening `/admin`, or
-reconnecting an SSE stream simply cannot be corroborated from the server side.
-Only the write path is auditable:
+**A read-only pass needs the DEBUG switch.** Reads do not write rows, and the
+binary running on the host (built 13:46 on 2026-11-02) predates the access log —
+so right now a walkthrough of `/admin` or an SSE resume still leaves nothing
+behind. The repository does carry a per-request line now
+(`tower_http::trace::TraceLayer` in `rust/server/src/http/router.rs`), at DEBUG,
+which the default `info` filter hides completely; it has to be **deployed once**
+before it can evidence anything:
+
+```bash
+# turn it on (compose reads RUST_LOG from the shell; .env is never rewritten)
+ssh lavo-test "cd /opt/kestrel-studio && RUST_LOG=debug docker compose up -d"
+# walk the page, then read it
+ssh lavo-test "docker logs --since 10m kestrel-studio 2>&1 | grep -E 'method=|status=' | tail -40"
+# back to the default; `make deploy` does not forward RUST_LOG either
+ssh lavo-test "cd /opt/kestrel-studio && docker compose up -d"
+```
 
 | What was exercised | Evidence to look for |
 |---|---|
 | an image or video turn | new `messages` + `assets` rows (video also `generation_tasks`) |
 | a voice call | `voice session opened` in `docker logs`, plus a conversation titled `语音会话` |
 | a login | a new `sessions` row whose `sess` carries the principal at top-level `user` |
+| `/admin`, SSE resume, static files | a DEBUG line: `method=`, `uri=` (query kept, so a resume reads `/stream?from=N`), `status=`, latency |
+
+Two limits when reading that log: `/api/voice` is deliberately outside the traced
+group (it hijacks the connection and its 101 takeover has never run on a host — a
+test pins the exclusion), and for a streaming response `latency` is
+time-to-first-byte, not the length of the call. Details: docs/deployment.md §2.1,
+docs/verification.md §13.7, docs/architecture.md §13.3.
 
 So when a manual browser walkthrough gets reported as "verified", the first
-question is which of those rows appeared. If the answer is only the read-only
-items, record it as an operator observation, not machine evidence — and never let
-it flip a roadmap.md P1 criterion on its own (docs/verification.md §13.6 walks
+question is which of those artefacts appeared. If the answer is only console
+cleanliness, record it as an operator observation, not machine evidence, and never
+let it flip a roadmap.md P1 criterion on its own (docs/verification.md §13.6 walks
 through exactly this case).
+
 ## Troubleshooting
 
 `deploy.sh` stops with **"no /tmp/kestrel-studio-linux/kestrel-studio"** or

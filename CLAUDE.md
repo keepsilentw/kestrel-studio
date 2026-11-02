@@ -106,8 +106,10 @@ cwd 拼接），且它的 `assets` **不能写 `outDir`**（写了就按 cwd 拼
   仍未验证的分成两类，取证方式不同（`docs/verification.md` §13.6）：**出图 / 视频 / 语音**——
   13:47 那次部署之后线上写入为 0（按时间戳查 `messages` / `assets` / `generation_tasks` 全 0 行，
   语音另查 `voice session opened` 日志与「语音会话」行），所以是**正证未在线上跑过**；
-  **`/admin` 页面内容 / SSE 断线续传 / 控制台零噪音**——服务端无请求级日志、只读不写行，
-  机器侧拿不到证据，只能由操作者报告并单独标注，不能与机器证据混标。
+  **`/admin` 页面内容 / SSE 断线续传 / 控制台零噪音**——只读不写行，而线上那版（13:46 构建）
+  还没有请求日志，所以拿不到机器证据；仓库里已补上 DEBUG 访问日志（`RUST_LOG=debug` 开，
+  用法与限制见 `docs/deployment.md` §2.1 与 `docs/verification.md` §13.7），**但它要先部署一次
+  才生效**。控制台零噪音任何时候都只在浏览器里，只能由操作者报告并单独标注，不与机器证据混标。
   两类都要登录态，只能人工在浏览器里走。
   **2026-10-30 明确并重申（覆盖此前任何相反的计划）**：**禁止在本机启动 Docker**，
   **禁止在本机启动服务做测试**。这两条不是临时限制，也不因迁移任务而豁免。
@@ -141,6 +143,9 @@ cwd 拼接），且它的 `assets` **不能写 `outDir`**（写了就按 cwd 拼
 契约源与回滚底牌，两边共用同一个 SQLite 库。本节的端点、事件语义、权限规则按 Nest 版描述，
 **改服务端行为要两侧同步改**，否则线上与契约源会静默分叉——移植期的对照关系与差异记在
 `docs/architecture.md` §13。
+
+**一条刻意的例外**：可观测性件不必同步。Rust 侧新加的 DEBUG 访问日志（`tower_http::trace`）没有
+往 `nest/server/` 搬，也不许搬——那棵树是回滚底牌、不是演进目标，给它加新功能只是延长退役成本。
 
 ### 1. 两条渲染路，互不重叠
 
@@ -309,7 +314,7 @@ provider 工厂在此之前就已经直接调 `loadConfig()` 了。`nest/server/
 - **任何新 tsconfig 都要显式写 `types`。** TS 6 起 `types` 未指定**不再**自动包含 `node_modules/@types`（编译器里是 `usesWildcardTypes` = `some(options.types, t => t === "*")`，未指定即空）。本项目一直能用 Node 全局量，靠的是模块图顺带解析：`nest/server/src/main.ts` import `express` → `@types/express` → `@types/node`。所以一个只以测试文件为根的 program 不 import express，`process` / `Buffer` / `node:*` 全部变成未解析名。`nest/server/tsconfig.test.json` 里的 `"types": ["node"]` 是必需的，不是风格选择。
 - **`nest/server/src/alias-bootstrap.ts` 必须是入口的第一个 import**。TS 不为产物重写 `@/*` 别名，运行时靠它注册解析钩子；任何在它之前被 require 的模块都会漏掉别名。因此它显式传 `baseUrl`（TS 7 移除了 `baseUrl`，tsconfig-paths 读 tsconfig 会抛 `ERR_INVALID_ARG_TYPE`），`start:prod` 也就不需要 `-r tsconfig-paths/register`。
 - **登录必须显式 `req.logIn()`**。`@nestjs/passport` 的 `AuthGuard.canActivate` 只把结果挂到 `request.user`，**从不写 session**；漏了这一步会表现为「登录 302 成功但没有 Set-Cookie，后续全部 401」。见 `auth/auth.controller.ts`。
-- **`PORT` 不放 `.env`，由 compose 注入**。`.env` 是「只写一次、永不覆盖」（保护 `SESSION_SECRET`），里面任何可变项都会变成永久生效的过期值；compose 的 `environment` 优先级高于 `env_file`。
+- **可变项不放 `.env`，由 compose 注入**（`PORT`、`RUST_LOG` 都是这一条的实例）。`.env` 是「只写一次、永不覆盖」（保护 `SESSION_SECRET`），里面任何可变项都会变成永久生效的过期值；compose 的 `environment` 优先级高于 `env_file`。`RUST_LOG` 默认 `info`，一次临时 `debug` 若写进 `.env` 就会永远冗长，所以它进 compose。
 - **`.dockerignore` 的每条路径都要带前导斜杠锚定**；`deploy.sh` 的打包用**显式白名单**而非 `tar --exclude`。未锚定的 `storage` 会在任意深度匹配，静默删掉 `node_modules/.pnpm/multer@*/node_modules/multer/storage`，运行时表现为 `Cannot find module './storage/disk'`，而 NestJS 会把它转述成误导性的「`@nestjs/platform-express` 没装」。踩坑全过程见 `docs/implementation-notes.md` §6。
 - **`make restart` 起不来时先看 pm2 条目的 `exec path`。** 项目从 `playground/kestrel-studio/` 搬到
   现在的位置后，pm2 里那条老条目仍指向旧目录（`--update-env` 的 restart 不会改 script 与 cwd），

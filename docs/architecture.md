@@ -593,6 +593,9 @@ WebSocket 的 upgrade 不经过 Express，所以 `AuthenticatedGuard` 对它无�
 >
 > 这张表**不因更正而重做**：已写好的手写层各有测试钉住（bcrypt 对拍两套独立实现、
 > WS 有帧级测试），换成官方库只有 churn 没有收益。此后新增依赖可按需下载。
+>
+> **2026-11-02**：清单里早就写着却没被用过的 `tower-http` `trace` 特性现在用上了——最小访问日志
+> （见 §13.3）。这一件不是自研，是库的默认形态，级别与开关都由 `EnvFilter` 决定。
 
 ### 13.2 与 Nest 版的互操作点
 
@@ -633,13 +636,28 @@ WebSocket 的 upgrade 不经过 Express，所以 `AuthenticatedGuard` 对它无�
 另有一处与 Nest 的实现差异未消除：上游工具派发轮次在循环内 `await`，与 Nest 的 promise 链串
 式不同（后果是一次工具调用期间 `stop` 会被延后）。
 
-**取证边界（写在这里是为了下次别再当作遗漏）**：本服务没有任何请求级日志——`main.rs` 的
-`EnvFilter` 默认 `info`，全仓没有 `TraceLayer` / `HttpMakeSpan` / `on_request` 一类的横切件，
-`info` 只打在启动、会话清理与语音生命周期上。于是纯读的一轮走查（翻页、进 `/admin` 看回放、
-断线重连）在服务器侧**必然无痕**；只有写路径留下可核对的证据（`messages` / `assets` /
-`generation_tasks` 的新行，语音的 `voice session opened` 与「语音会话」行）。
-复核过程与分类见 [verification.md](verification.md) §13.6，是否补一层请求日志是
-[roadmap.md](roadmap.md) §3 里的决策项，不在本节的"未做"清单里。
+**取证边界与访问日志（2026-11-02 补）**：在这之前本服务没有任何请求级日志（`EnvFilter` 默认
+`info`，全仓没有 `TraceLayer` 一类横切件），所以纯读的一轮走查——翻页、进 `/admin` 看回放、
+断线重连——在服务器侧无痕，`verification.md` §13.6 那次复核就撞在这上面。现在
+`http/router.rs` 挂了 `tower_http::trace::TraceLayer`，**级别是它自带的默认 `DEBUG`**
+（`make_span` / `on_request` / `on_response` 皆 DEBUG，`on_failure` ERROR），因此默认过滤下
+一行都不打、生产日志量不变；灰度要取证时在宿主机 `RUST_LOG=debug docker compose up -d`
+（开关位置与理由见 deployment.md §2），每请求一行 method + uri + status + latency。
+`uri` 保留查询串，所以「带 `?from=N` 重连」这种事件第一次变得可见。
+
+两处刻意的边界，改动前先读：
+
+1. **`/api/voice` 不在被包裹的那一组里**。路由是在 `.layer()` **之后**注册的，axum 只包裹注册
+   之前的路由；这是唯一会劫持连接做 WebSocket 升级的路径，而它的 `hyper::upgrade::on` 接管
+   至今没有上机跑过一次，所以不在它前面放任何会碰 response body 的东西。真实通话本来就打在
+   INFO（`voice session opened` / `voice turn committed`），这条访问日志在它上面买不到东西。
+   有朝一日要把它并进来，前提是宿主机上先验过 101 仍能落地；这条排除由
+   `http::tests::the_voice_upgrade_route_stays_out_of_the_access_log` 钉着。
+2. **流式响应的 `latency` 是首字节时间**，不是通话或整轮的长度（`on_response` 在响应头出去时
+   触发）。读日志时别把它当耗时。
+
+Nest 侧没有对应件（`main.ts` 不挂 morgan、也不开 `useLoggerConfig`）。这是**刻意不同步**：
+第七期的目标是删掉那棵树，给它加可观测性等于给一堆待退役的代码补新功能。
 
 语音的两项遗留**不是移植遗漏，而是需要决策或需要真机**，与 Nest 版同状态：
 
