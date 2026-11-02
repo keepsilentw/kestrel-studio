@@ -28,12 +28,10 @@ pub fn asset_url(asset_id: i64) -> String {
     format!("/api/v1/assets/{asset_id}/download")
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
-pub struct ConversationSummary {
-    pub id: i64,
-    pub title: String,
-    pub updated_at: i64,
-}
+// The dropdown's row shape lives in `kestrel-proto` with the other types the
+// browser parses, so a rename breaks the client that consumes it instead of
+// changing the answer under its feet. This tree keeps importing it by path.
+pub use kestrel_proto::event::ConversationSummary;
 
 /// A conversation plus whose it is, for the super admin's site-wide list.
 #[derive(Debug, Clone, Serialize, PartialEq)]

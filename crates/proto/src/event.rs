@@ -116,6 +116,20 @@ pub struct MessageView {
     pub assets: Vec<AssetView>,
 }
 
+/// One row of the history dropdown, as `GET /api/v1/conversations` answers it.
+///
+/// Not a journal payload, so it does **not** follow this module's camelCase rule:
+/// the endpoint serialises the database row straight out, and the field names on
+/// the wire are the snake_case ones both servers already print. The client reads
+/// this type instead of restating `item.id` / `item.title` by hand, which is the
+/// whole reason `main.ts` could silently break on a rename.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ConversationSummary {
+    pub id: i64,
+    pub title: String,
+    pub updated_at: i64,
+}
+
 /// One journaled event on a conversation stream. The `type` discriminant is the
 /// same name the SSE frame carries, and the whole object is what the frame's
 /// `data:` holds — stored verbatim so a replayed frame is byte-equivalent to the
