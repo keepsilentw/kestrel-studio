@@ -30,7 +30,10 @@ Web 生成式媒体 Agent：用户在网页给一句话，LLM 流式思考、调
 **拆分的三条口径**：(1) Node 侧是 pnpm workspace：**依赖声明在用到它的那棵树里**，根 `package.json`
 不声明依赖，只有 `pnpm -r build|typecheck|test` 三条聚合脚本，所以 roadmap.md §4 P4 删 Node 栈时
 根不会留下需要手工裁剪的清单（`nest/server/` 与 `nest/client/` 的 TS 面各自连配置带依赖一起消失）。
-Rust 侧**不**合并 Cargo workspace：那要把四份 `Cargo.lock` 重写成一份，收益只是少一个 `target/`。
+Rust 侧**不**合并 Cargo workspace：四棵 crate 各自解析一遍依赖，合并成一份的改动量全在锁文件上，
+收益只是少一个 `target/`。仓库只跟踪两份锁：`rust/server/Cargo.lock` 与 `rust/client/Cargo.lock`；
+**单独对 `crates/proto` 或 `crates/md` 跑 cargo 会就地生成一份没人跟踪的 lock**，`git add -A`
+会把它一起提交（详见 `docs/implementation-notes.md` §18）。
 (2) `public/`、`data/`、`storage/` 留在根：`public/` 是两个服务端共用的静态目录，后两者是运行时状态。
 (3) **nest / drizzle 起的进程 cwd 必须是仓库根**——`.env`、`DATABASE_FILE`、`STORAGE_DIR` 都按 cwd
 解析，cwd 挪进 `nest/server/` 会让本地跑打开一个全新的空库。所以 `nest/server/package.json` 的相关脚本先

@@ -368,3 +368,31 @@ partials）与仓库根 `public/assets/{main.js,main.css,voice.js}` + `public/{c
 复跑证据：`pnpm install`（重写锁）、`make typecheck`（两个 app 全过）、`make test`
 （461 + 49）、`make clean && make build`（`server/dist/main.js` + `server/dist/view/views/*.hbs`、
 仓库根 `public/assets/*` + `public/{capture.js,logo.svg}`）全绿；Rust 侧本轮零改动。
+
+## 18. 单独构建 `crates/*` 会就地留下没人跟踪的 Cargo.lock（2026-11-02）
+
+Rust 侧没合并 workspace（四棵 crate 各自解析），而仓库只跟踪两份锁文件：
+
+```
+$ git ls-files | grep Cargo.lock
+rust/client/Cargo.lock
+rust/server/Cargo.lock
+```
+
+`crates/proto` 与 `crates/md` 没有 lock——平时它们是作为路径依赖跟着上面两棵 crate 一起解析的。
+但一旦单独对它们跑 cargo，cargo 就按"这是一个包的 workspace"就地写一份：
+
+```
+$ cargo test --manifest-path crates/proto/Cargo.toml
+$ git status --porcelain=v1
+?? crates/proto/Cargo.lock        # 未跟踪，.gitignore 里也没有 cargo 规则
+```
+
+危险不在文件本身，而在它出现的方式：它是一次**验证动作**的副产品，看起来跟改动无关，于是
+`git add -A` 会把它连同真正的改动一起提交进去——那是一份没人复核过的依赖锁。
+
+**处理**：要么别单独跑 `crates/*`（改动 `crates/proto` 时，跑 `rust/server` 或 `rust/client`
+的测试就足以覆盖，两边都把它当路径依赖吃进去），要么跑完就删掉那份 lock。本次删的就是它。
+
+**不动 `.gitignore`**：加一条 `crates/*/Cargo.lock` 是把这次的疏忽固化成规则，而不是修掉来源；
+按项目约定 `.gitignore` 只由用户明确要求时才改。

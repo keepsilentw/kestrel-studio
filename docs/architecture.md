@@ -336,7 +336,7 @@ kestrel-studio/
     vite-env.d.ts
     __tests__/           jsdom 环境：main.test.ts / voice.test.ts / test-setup.ts
   crates/               服务端与浏览器**共享**的 Rust 库（谁都不能自己抄一份）
-    proto/               线类型 kestrel-proto：语音帧、会话事件、TaskKind、Mode
+    proto/               线类型 kestrel-proto：语音帧、会话事件、历史列表行、TaskKind、Mode
     md/                  线渲染 kestrel-md：HTML 转义 + Markdown 子集
   rust/server/                 同一服务端的 Rust 实现（见 §13），2026-11-02 起是线上在跑的那一套
     Cargo.toml
@@ -374,7 +374,9 @@ kestrel-studio/
 - **Node 侧是 pnpm workspace，依赖声明在用到它的那棵树里**。根 `package.json` 不声明任何依赖，
   只留 `pnpm -r` 的聚合脚本；这样 roadmap.md §4 P4「删 Node 栈」= 删 `nest/server/` 与 `nest/client/` 的 TS 面
   （配置与依赖跟着树走）+ 根清单和锁整个删掉，不会留下需要手工裁剪的依赖列表。
-  **Rust 侧不合并 Cargo workspace**：那要把四份 `Cargo.lock` 重写成一份，收益只是少一个 `target/`。
+  **Rust 侧不合并 Cargo workspace**：四棵 crate 各自解析依赖，合并成一份的收益只是少一个 `target/`。
+  仓库只跟踪 `rust/server/Cargo.lock` 与 `rust/client/Cargo.lock`；单独构建 `crates/*` 会就地生成一份
+  未跟踪的 lock（`docs/implementation-notes.md` §18）。
 - **`public/` 与 `data/` `storage/` 留在仓库根**。`public/` 是两个服务端共用的静态目录
   （Nest 走 `useStaticAssets`，Rust 走 `STATIC_DIR`），`data/`/`storage/` 是运行时状态；
   三者都不属于任何一棵源码树。
@@ -678,7 +680,7 @@ Nest 侧没有对应件（`main.ts` 不挂 morgan、也不开 `useLoggerConfig`�
 
 | crate | 职责 | 为什么存在 |
 |---|---|---|
-| `crates/proto/`（`kestrel-proto`） | 语音帧 `ClientFrame` / `ServerFrame`、`parse_client_frame`、`TaskKind` | 类型从 `rust/server/src/voice/protocol.rs` 搬出，服务端与浏览器客户端**编译同一份定义**。原来那套形状在 TS 里是手抄的（服务端自己的注释就写着这一点），而手抄的形状正是语音 `start` 帧事故的温床（implementation-notes.md §8）。现在改字段名会在消费方编译失败 |
+| `crates/proto/`（`kestrel-proto`） | 语音帧 `ClientFrame` / `ServerFrame`、`parse_client_frame`、`TaskKind`、事件与历史列表行（`ConversationEvent` / `MessageView` / `AssetView` / `ConversationSummary`） | 类型从 `rust/server/src/voice/protocol.rs` 搬出，服务端与浏览器客户端**编译同一份定义**。原来那套形状在 TS 里是手抄的（服务端自己的注释就写着这一点），而手抄的形状正是语音 `start` 帧事故的温床（implementation-notes.md §8）。现在改字段名会在消费方编译失败 |
 | `rust/client/`（`kestrel-client`） | 浏览器端，Rust→WASM | `voice_core` 是纯状态机：时钟与 socket 都由调用方注入，输出 `Effect` 值，因此**帧顺序断言能在宿主目标的 `cargo test` 里跑**，不需要浏览器。这是刻意保留 jsdom 套件那份保证的方式（它当年抓住了那次静默故障，见 verification.md §7） |
 
 `crates/md/`（`kestrel-md`）是同批补的第三个：`rust/server/src/view/html.rs` 里的 `escape` 与 markdown
@@ -688,6 +690,8 @@ Nest 侧没有对应件（`main.ts` 不挂 morgan、也不开 `useLoggerConfig`�
 **子集之外的内容一律转义而非透传**，模型吐 `<script>` 不会被渲染
 （`rust/server/src/view/tests.rs` 钉着这条）。代价是语法面收窄——无表格、无删除线，
 见 [roadmap.md](roadmap.md) §4.1.1 的开放项。
+
+2026-11-02 又把历史下拉的行类型 `ConversationSummary` 从 `rust/server/src/conversation/repo.rs` 搬了过来（server 侧改成再导出），因为 WASM 客户端的 `refresh_history` 现在要解析它——同一条规矩：改字段名在消费方编译失败。注意它是**蛇形**（`updated_at`），因为这个端点从来就这么答，模块里那套 camelCase 只属于日志 payload。
 
 `rust/server/src/voice/protocol.rs` 仍在，内容只剩再导出与**线名测试**——测试钉的是 JSON 上的
 字段名（`conversationId` 这种），那才是浏览器真正依赖的契约，比类型共享更容易漂。
