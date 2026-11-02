@@ -234,7 +234,7 @@ host since the 16:18 deploy on 2026-11-02. Turn it on just for the walkthrough:
 # turn it on (compose reads RUST_LOG from the shell; .env is never rewritten)
 ssh lavo-test "cd /opt/kestrel-studio && RUST_LOG=debug docker compose up -d"
 # walk the page, then read it
-ssh lavo-test "docker logs --since 10m kestrel-studio 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep -E 'method=|status=' | tail -40"
+ssh lavo-test "docker logs --since 10m kestrel-studio 2>&1 | grep -E 'method=GET|status=' | tail -40"
 # back to the default; `make deploy` does not forward RUST_LOG either
 ssh lavo-test "cd /opt/kestrel-studio && docker compose up -d"
 ```
@@ -246,10 +246,11 @@ ssh lavo-test "cd /opt/kestrel-studio && docker compose up -d"
 | a login | a new `sessions` row whose `sess` carries the principal at top-level `user` |
 | `/admin`, SSE resume, static files | a DEBUG line: `method=`, `uri=` (query kept, so a resume reads `/stream?from=N`), `status=`, latency |
 
-Three limits when reading that log: the lines arrive **with ANSI escapes**, so a
-plain `grep 'method='` matches nothing — strip them with `sed 's/\x1b\[[0-9;]*m//g'`
-first (docs/verification.md §13.8); `/api/voice` is deliberately outside the traced
-group (it hijacks the connection and its 101 takeover has never run on a host — a
+Three things to know when reading that log: lines written **before 2026-11-02 17:29**
+carry ANSI escapes, so `grep 'method='` matches nothing in them — strip them with
+`sed 's/\x1b\[[0-9;]*m//g'`; from that deploy on the container logs plain text
+(`main.rs` keys `.with_ansi` off `stderr().is_terminal()`). `/api/voice` is
+deliberately outside the traced group (it hijacks the connection and its 101 takeover has never run on a host — a
 test pins the exclusion), and for a streaming response `latency` is
 time-to-first-byte, not the length of the call. Details: docs/deployment.md §2.1,
 docs/verification.md §13.7, docs/architecture.md §13.3.

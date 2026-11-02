@@ -940,12 +940,19 @@ Docker 收日志不是 TTY，色码照旧写进日志文件。于是字段被拆
 ```
 
 我第一次取证用 `grep -E "method=|status="`，结果 **0 命中**，看起来像"日志没生效"，其实是被
-转义序列挡住了。正确写法是先去色：
+转义序列挡住了。当时能用的写法是先去色（今天只有读 17:29 之前的旧日志才需要它）：
 
 ```bash
 docker logs --since 2m kestrel-studio 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep -E "method=|status="
 ```
 
-根治办法是在 `main.rs` 里按 `std::io::stderr().is_terminal()` 调 `.with_ansi(...)`，让容器里
-输出纯文本。这是代码改动 + 再一次部署，尚未做；deployment.md §2.1 与部署手册里的命令现在
-都已按"先去色"写。
+**根治已做并上线**（提交 `704b9af`，当天 17:29 部署）：`main.rs` 按 `std::io::stderr().is_terminal()`
+决定 `.with_ansi(...)`。Docker 收日志不是 TTY，所以容器里现在是纯文本；开发者在前台跑
+`make run-rust` 仍保留颜色。线上复测：`docker logs | grep -E 'method=GET|status='` **不去色直接命中**
+四行（`/login?probe=1` 与 `/admin` 的 on_request / on_response），同批日志里 ESC 序列计数为 **0**。
+两条测试钉在 `rust/server/src/main.rs::tests`：
+`a_non_terminal_log_is_plain_text_so_access_lines_are_greppable`（纯文本下 `method=GET`、
+`uri=/login?probe=1` 连着写且无 ESC）与 `ansi_mode_is_what_broke_the_ops_grep`（开着 ANSI 时确有
+ESC 且 `method=GET` 不再连续）——后者直接复现根因，不是转述实现。`cargo test` 166 passed / 0 failed。
+
+**唯一残留**：17:29 之前已经写进日志文件的那些行仍带 ANSI，读那段历史日志要去色；新行不需要。

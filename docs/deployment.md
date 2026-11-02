@@ -118,16 +118,17 @@ compose 而不是 `.env`，理由一模一样：`.env` 永不覆盖，一次临�
 ```bash
 ssh lavo-test "cd /opt/kestrel-studio && RUST_LOG=debug docker compose up -d"
 # 走完一遍之后取日志
-ssh lavo-test "docker logs --since 10m kestrel-studio 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep -E 'method=|status=' | tail -40"
+ssh lavo-test "docker logs --since 10m kestrel-studio 2>&1 | grep -E 'method=GET|status=' | tail -40"
 # 收尾：回到默认（make deploy 不转发 RUST_LOG，下一次部署自然就把它清掉）
 ssh lavo-test "cd /opt/kestrel-studio && docker compose up -d"
 ```
 
 四条读法上的限制，别指望它超出自己能证的范围：
 
-1. **日志带 ANSI 色码**，`grep 'method='` 直接抓不到（字段名与 `=` 之间夹着 `\e[0m`），必须先
-   `sed 's/\x1b\[[0-9;]*m//g'` 去色——上面那条命令已经带上它了。这是 2026-11-02 第一次取证时
-   踩到的，当时的 0 命中被误读成"日志没生效"；根因与根治办法见 verification.md §13.8。
+1. **只有旧日志要去色**：2026-11-02 17:29 之前写进日志文件的行带 ANSI（字段名与 `=` 之间夹着
+   `\e[0m`，`grep 'method='` 因此 0 命中，第一次取证就被这坑到过），那部分要先
+   `sed 's/\x1b\[[0-9;]*m//g'`。此后容器输出是纯文本（`main.rs` 按 stderr 是否 TTY 决定），
+   上面的 grep 直接命中。根因、测试与线上复测见 verification.md §13.8。
 
 2. **`/api/voice` 不在日志里**——那条升级路由刻意排在 `.layer()` 之后（architecture.md §13.3）。
    语音的真实证据是 INFO 上的 `voice session opened`，不需要这个开关。
