@@ -222,11 +222,12 @@ openai 面须置 compat 位 `stream_include_usage = true`，否则全程 `usage:
 - **P3 的 wasm 产物已随 `public/` 上线却无人引用**：模板仍引 `/assets/main.js`、
   `/assets/voice.js`（`rust/server/src/view/templates.rs`），`initChat` / `initVoice`
   仍是零调用点。切换动作按计划留给 P4 之前的一次独立改动。
-- **灰度取证的盲区已补，但还没上线**：`router.rs` 挂了 `tower_http::trace::TraceLayer`，每请求一行
-  method + uri + status + latency，**级别 DEBUG**，所以默认的 `info` 过滤下一行都不打、生产日志量不变；
-  开关是 compose 里的 `RUST_LOG=${RUST_LOG:-info}`，用法与三条限制见 deployment.md §2.1，实现与
-  测试见 verification.md §13.7。剩下的动作：**(1) 部署一次才生效**（这次部署不会登出任何人，签名
-  口径没变）；**(2)** 打开 DEBUG 走一遍只读项，控制台噪音那条仍然只能由人报告。
+- **灰度取证的盲区已补并上线**（2026-11-02 16:18）：`router.rs` 挂了 `tower_http::trace::TraceLayer`，
+  每请求一行 method + uri + status + latency，**级别 DEBUG**，所以默认的 `info` 过滤下一行都不打、
+  生产日志量不变（线上实测：打了若干请求之后去色计数仍为 0）；开关是 compose 里的
+  `RUST_LOG=${RUST_LOG:-info}`，用法与四条限制见 deployment.md §2.1，实现与测试见
+  verification.md §13.7，ANSI 那个 grep 陷阱见 §13.8。剩下的动作只有一个：**开着 DEBUG 走一遍**
+  只读项与出图 / 视频 / 语音，控制台噪音那条仍然只能由人报告。
   注意 `/api/voice` 刻意排除在外（它是唯一劫持连接的路径，接管未上机验过之前不在它前面放碰
   response body 的件），这条排除有测试钉住。
 
@@ -274,7 +275,7 @@ Rust 服务端从未真跑、客户端要重写、部署镜像要换形态。
 
 | 期 | 内容 | 完成判据 |
 |---|---|---|
-| P1 | Rust 服务端第一次**真运行**（不在本机） | 本机禁止启动 Docker、禁止为本机起服务做测试，且仓库不保留 CI 配置（CLAUDE.md），所以判据只剩一个去处：**目标主机上的灰度实例**——与现有 Nest 容器并存、占另一个端口，跑通 `/login` 200、静态资源、SSE 续传、出图 / 视频任务 / 语音 / `/admin` 只读回放 + 控制台零噪音。需用户授权并人工执行。**取证边界（11-02 复核补，同日补访问日志后修订）**：写路径一直可正证——出图 / 视频看 `messages`+`assets`（视频另有 `generation_tasks`）的新行，语音看 `voice session opened` 日志与「语音会话」行；`/admin` 回放与 SSE 重放在 13:47 那版上**取不到**（服务端没有请求日志），现在可以看每请求一行的 DEBUG 访问日志（`RUST_LOG=debug`，见 verification.md §13.7 与 deployment.md §2.1，**前提是先部署一次**）；控制台噪音任何时候都只在浏览器里，只能由操作者报告并单独标注。另：实际执行与本行设想不同——不是并存占另一端口，而是 compose 直接换掉镜像、Nest 容器被移除（回滚见 deployment.md §1.1） |
+| P1 | Rust 服务端第一次**真运行**（不在本机） | 本机禁止启动 Docker、禁止为本机起服务做测试，且仓库不保留 CI 配置（CLAUDE.md），所以判据只剩一个去处：**目标主机上的灰度实例**——与现有 Nest 容器并存、占另一个端口，跑通 `/login` 200、静态资源、SSE 续传、出图 / 视频任务 / 语音 / `/admin` 只读回放 + 控制台零噪音。需用户授权并人工执行。**取证边界（11-02 复核补，同日补访问日志后修订）**：写路径一直可正证——出图 / 视频看 `messages`+`assets`（视频另有 `generation_tasks`）的新行，语音看 `voice session opened` 日志与「语音会话」行；`/admin` 回放与 SSE 重放在 13:47 那版上**取不到**（服务端没有请求日志），现在可以看每请求一行的 DEBUG 访问日志（`RUST_LOG=debug`，见 verification.md §13.7 与 deployment.md §2.1；**16:18 已上线**，日志带 ANSI，grep 前先去色，见 §13.8）；控制台噪音任何时候都只在浏览器里，只能由操作者报告并单独标注。另：实际执行与本行设想不同——不是并存占另一端口，而是 compose 直接换掉镜像、Nest 容器被移除（回滚见 deployment.md §1.1） |
 | P2 | 交付链换 Rust | 开发机构建静态 musl 二进制 → `FROM scratch` 运行镜像（服务器零下载，TLS 根证书已有 `webpki-roots`）；先确认宿主机架构；灰度前备份 SQLite 库；已知副作用：**cookie 的签名口径不同，切流时全员重新登录一次**——而且这个方向是不对称的（Nest 读不懂 Rust 写在顶层 `user` 的 sess 行），所以**回滚同样会登出一次**，见 verification.md §13.4 与 deployment.md §1.1 |
 | P3 | 客户端 Rust→WASM | 装 `wasm-pack`（不能用 brew 的 wasm-bindgen CLI，版本 0.2.111 vs crate 0.2.129）；按页拆 `main` / `voice` 两个 wasm 模块；**语音帧序列逻辑与 DOM 分离**，使 `start`/`commit`/排队补发那组断言能在 `cargo test` 里跑（jsdom 测试要退役，而它正是抓住线上"永远停在正在连接…"的那个测试）；`AudioWorklet` 的 JS 留在静态资源里 |
 | P4 | 删除 Node 栈 | `nest/server/`（整棵树，含自己的 `package.json` 与 `vitest.config.mts`）、`nest/client/` 的 TS 面（`scripts/`、`styles/`、`__tests__/`、`package.json`、`tsconfig.json`、`vite.config.mts`、`vitest.config.mts`，**留下 `rust/client/`**）、根的 `package.json` + `pnpm-lock.yaml` + `pnpm-workspace.yaml`（workspace 依赖已下沉到两棵树，根清单没有需要手工裁剪的残留）、Makefile 的 Node targets、Dockerfile 的 node 阶段一并移除；删前打 tag，提交按文件面拆分先给计划 |
@@ -297,9 +298,10 @@ Rust 客户端源码本身取得，跨语言解析那层可以去掉。
 控制台噪音，服务器侧无痕，操作者报告的"已在浏览器中验证过"拿不到机器证据佐证，因此
 **P1 仍记为部分通过**。复核命令与分类见 verification.md §13.6。
 同日把盲区补了一半：DEBUG 访问日志已实现并通过本机 `oneshot` 测试（`cargo test` 164 passed，
-见 verification.md §13.7），`/admin` 与 SSE 重连从此有机器证据可取；但**线上跑的还是 13:46 那版
-不含它的二进制**，所以上面这三次走查仍然无法追认，P1 的判断不变。下一步是先部署一次（这次部署
-不会登出任何人：签名口径与 `SESSION_SECRET` 都没动），再按 §13.6 末尾的顺序走一遍。
+见 verification.md §13.7），并于当天 16:18 部署上线（§13.7 末尾那张线上实测表：默认级别零输出、
+打开后 `uri=` 保留查询串、`/api/voice` 仍零输出、连续三次重建容器没有登出任何人）。因此上面这
+三次走查**仍然无法追认**（当时日志还没上线），P1 的判断不变。下一步：开着 DEBUG 按 §13.6 末尾的
+顺序走一遍——出图、视频、语音这三条现在既有库里的新行、也有日志行可核。
 
 顺序偏离原计划两处，都记下来。一是 **P2/P3 先于 P1 动了**；二是**11-02 在 P1 只部分通过的
 情况下就把交付链切了**——本节原先那句「P1 未通过之前交付链不得实际切换」被实际执行推翻。

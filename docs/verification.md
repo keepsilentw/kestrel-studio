@@ -878,7 +878,7 @@ ssh lavo-test 'sqlite3 "file:/opt/kestrel-studio/data/kestrel-studio.db?mode=ro"
 2. **只读路径**：`/admin` 列表与只读回放、刷新后的事件重放、控制台条目数——这三条只能由人报告，
    报告本身记为「操作者观察」，与机器证据分开写，不混标"实测通过"。
 
-### 13.7 访问日志落地（2026-11-02，本机验证；**尚未上线**）
+### 13.7 访问日志落地（2026-11-02，本机 + 线上均已实测）
 
 §13.6 那条盲区当天补掉了。实现是库的默认形态，不是自研件：`rust/server/src/http/router.rs`
 挂 `tower_http::trace::TraceLayer::new_for_http()`，级别用 tower-http 自带的默认
@@ -906,9 +906,39 @@ $ CARGO_TARGET_DIR=/tmp/kestrel-studio-target cargo test --manifest-path rust/se
 
 **仍然没有的运行时证据**（别把上面的通过读成这些已过）：
 
-1. 线上跑的仍是 13:46 构建的那版二进制，**不含这次改动**。要让访问日志生效必须再部署一次。
-   这一次部署**不会登出任何人**：签名口径与 `SESSION_SECRET` 都没动，与 §13.4 那种换侧不同。
-2. `RUST_LOG=debug` 在真容器里的输出形状没验过（本机不启动服务、不起 Docker）。
-3. 语音升级在有/无这层中间件下的实际行为，仍待一次真机通话。
+1. 语音升级在有/无这层中间件下的实际行为，仍待一次真机通话。
+2. 需要登录态的只读项（`/admin` 内容、带 session 的 SSE 重连）仍然只有操作者能验；
+   日志现在能给他们佐证，但本节下面那次 curl 是无凭据的，只验到形状与排除项。
 
-复现命令与读日志的三条限制在 deployment.md §2.1。
+**同日 16:18 上线后的线上实测**（备份 `data/backup-20261102-pre-accesslog.db`，`integrity_check` ok）：
+
+| 验的东西 | 结果 |
+|---|---|
+| 新二进制真的在跑 | 镜像 16:18:48 构建，`.build/linux-x86_64/kestrel-studio` 9,758,336 B，容器 `Up` |
+| 默认级别确实静默 | 容器 env `RUST_LOG=info`，打了 `/login`、`/admin` 等请求之后，去色的日志里 `method=` / `status=` 计数 **0**，日志仍只有启动那 3 行 INFO |
+| 打开后的输出形状 | `DEBUG request{method=GET uri=/login?probe=1 version=HTTP/1.1}: tower_http::trace::on_response: finished processing request latency=0 ms status=200` |
+| 查询串保留（SSE 续传可见的设计目的） | `GET /api/v1/conversations/7/stream?from=9` 无凭据返回 401，日志里的 `uri=` 完整带 `?from=9` |
+| `/api/voice` 的排除生效 | 无握手头的 GET 返回 426，日志里 `uri=/api/voice` 计数 **0**；同批 `/login`、`/assets/main.css`、`/admin`、`/stream` 都有行 |
+| 同侧重部署不登人 | 容器连续重建三次（info→debug→info），`sessions` 仍是 §13.4 那 3 行，`expired sessions cleared=0`。与 §13.4 换侧登出是两回事，这里签名口径与 `SESSION_SECRET` 都没动 |
+
+复现命令与读日志的限制在 deployment.md §2.1；那里原本写的 grep 命令是错的，已按 §13.8 改正。
+
+### 13.8 一个踩到的坑：日志带 ANSI，朴素 grep 抓不到（2026-11-02）
+
+`tracing_subscriber::fmt()` 开着 `ansi` 特性就**恒定**输出转义序列，不看 stderr 是不是 TTY——
+Docker 收日志不是 TTY，色码照旧写进日志文件。于是字段被拆开：
+
+```
+...: \e[3mmethod\e[0m=\e[3mGET   # 原始字节里 "method" 与 "=" 之间夹着 \e[0m
+```
+
+我第一次取证用 `grep -E "method=|status="`，结果 **0 命中**，看起来像"日志没生效"，其实是被
+转义序列挡住了。正确写法是先去色：
+
+```bash
+docker logs --since 2m kestrel-studio 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep -E "method=|status="
+```
+
+根治办法是在 `main.rs` 里按 `std::io::stderr().is_terminal()` 调 `.with_ansi(...)`，让容器里
+输出纯文本。这是代码改动 + 再一次部署，尚未做；deployment.md §2.1 与部署手册里的命令现在
+都已按"先去色"写。

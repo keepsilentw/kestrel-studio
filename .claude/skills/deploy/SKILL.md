@@ -223,19 +223,18 @@ let `sqlite3` checkpoint the WAL on close — harmless and even useful, but then
 don't be surprised when `kestrel-studio.db-wal` shrinks and the main file grows
 (docs/deployment.md §7 already records this).
 
-**A read-only pass needs the DEBUG switch.** Reads do not write rows, and the
-binary running on the host (built 13:46 on 2026-11-02) predates the access log —
-so right now a walkthrough of `/admin` or an SSE resume still leaves nothing
-behind. The repository does carry a per-request line now
-(`tower_http::trace::TraceLayer` in `rust/server/src/http/router.rs`), at DEBUG,
-which the default `info` filter hides completely; it has to be **deployed once**
-before it can evidence anything:
+**A read-only pass needs the DEBUG switch.** Reads do not write rows, so the
+per-request line is what makes `/admin`, an SSE resume or a static-file 404
+auditable at all. `rust/server/src/http/router.rs` carries
+`tower_http::trace::TraceLayer`, at DEBUG only, so the default `info` filter hides
+it completely and production log volume does not change; it has been live on the
+host since the 16:18 deploy on 2026-11-02. Turn it on just for the walkthrough:
 
 ```bash
 # turn it on (compose reads RUST_LOG from the shell; .env is never rewritten)
 ssh lavo-test "cd /opt/kestrel-studio && RUST_LOG=debug docker compose up -d"
 # walk the page, then read it
-ssh lavo-test "docker logs --since 10m kestrel-studio 2>&1 | grep -E 'method=|status=' | tail -40"
+ssh lavo-test "docker logs --since 10m kestrel-studio 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep -E 'method=|status=' | tail -40"
 # back to the default; `make deploy` does not forward RUST_LOG either
 ssh lavo-test "cd /opt/kestrel-studio && docker compose up -d"
 ```
@@ -247,7 +246,9 @@ ssh lavo-test "cd /opt/kestrel-studio && docker compose up -d"
 | a login | a new `sessions` row whose `sess` carries the principal at top-level `user` |
 | `/admin`, SSE resume, static files | a DEBUG line: `method=`, `uri=` (query kept, so a resume reads `/stream?from=N`), `status=`, latency |
 
-Two limits when reading that log: `/api/voice` is deliberately outside the traced
+Three limits when reading that log: the lines arrive **with ANSI escapes**, so a
+plain `grep 'method='` matches nothing — strip them with `sed 's/\x1b\[[0-9;]*m//g'`
+first (docs/verification.md §13.8); `/api/voice` is deliberately outside the traced
 group (it hijacks the connection and its 101 takeover has never run on a host — a
 test pins the exclusion), and for a streaming response `latency` is
 time-to-first-byte, not the length of the call. Details: docs/deployment.md §2.1,

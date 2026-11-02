@@ -643,7 +643,8 @@ WebSocket 的 upgrade 不经过 Express，所以 `AuthenticatedGuard` 对它无�
 （`make_span` / `on_request` / `on_response` 皆 DEBUG，`on_failure` ERROR），因此默认过滤下
 一行都不打、生产日志量不变；灰度要取证时在宿主机 `RUST_LOG=debug docker compose up -d`
 （开关位置与理由见 deployment.md §2），每请求一行 method + uri + status + latency。
-`uri` 保留查询串，所以「带 `?from=N` 重连」这种事件第一次变得可见。
+`uri` 保留查询串，所以「带 `?from=N` 重连」这种事件第一次变得可见。读日志前记得**先去色**：
+输出带 ANSI 转义序列，朴素 `grep 'method='` 会 0 命中（根因与根治见 verification.md §13.8）。
 
 两处刻意的边界，改动前先读：
 
