@@ -3,13 +3,13 @@
 //! This is the same move that [`crate::ClientFrame`] / [`crate::ServerFrame`] made
 //! for the voice socket, applied to the bigger channel: the browser used to
 //! restate these shapes by hand (`readString(data, 'messageId')` in
-//! `web/scripts/main.ts`), so a renamed field on the server was invisible until
+//! `nest/client/scripts/main.ts`), so a renamed field on the server was invisible until
 //! the page silently stopped painting. Now the server publishes these types and
 //! the client parses them, and a rename breaks the side that consumes it.
 //!
 //! What lives here is deliberately only the **wire**: data plus the naming every
 //! surface needs. The server's agent logic over these values — which tools a mode
-//! advertises, the system prompt a mode builds — stays in `rust/src/agent/mode.rs`
+//! advertises, the system prompt a mode builds — stays in `rust/server/src/agent/mode.rs`
 //! behind an extension trait, because the browser has no business knowing either.
 //!
 //! Field names are camelCase because that is what the journal already stores: the
@@ -119,7 +119,7 @@ pub struct MessageView {
 /// One journaled event on a conversation stream. The `type` discriminant is the
 /// same name the SSE frame carries, and the whole object is what the frame's
 /// `data:` holds — stored verbatim so a replayed frame is byte-equivalent to the
-/// live one. (Frame names: `rust/src/sse.rs`.)
+/// live one. (Frame names: `rust/server/src/sse.rs`.)
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type")]
 pub enum ConversationEvent {

@@ -8,7 +8,7 @@
 //! and the shape of a turn differed across them: commit `e7b2911` fixed one such
 //! case, and the size of the gap is measured in `docs/verification.md` §11.5.
 //!
-//! Two properties the tests in `rust/src/view/tests.rs` pin, because they are the
+//! Two properties the tests in `rust/server/src/view/tests.rs` pin, because they are the
 //! reason to keep a subset instead of importing a full engine:
 //!
 //! * everything outside the subset is **escaped, never forwarded**. `marked`

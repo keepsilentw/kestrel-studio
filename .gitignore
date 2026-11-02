@@ -1,13 +1,15 @@
 node_modules/
 dist/
-rust/target/
+rust/server/target/
 # Cargo also writes a target dir for the packages that are not the server: the
-# WASM client builds into `web/client/target/`, and a direct `cargo test` on a
-# shared crate writes `crates/<name>/target/`. Neither is under `rust/`, so they
-# need their own lines. `dist/` above has no slash, so it already covers
-# `server/dist/`.
+# WASM client builds into `rust/client/target/`, and a direct `cargo test` on a
+# shared crate writes `crates/<name>/target/`. Neither is under `rust/server/`,
+# so they need their own lines. `dist/` above has no slash, so it already covers
+# `nest/server/dist/`.
 crates/*/target/
-web/client/target/
+rust/client/target/
+# wasm-pack writes the browser-ready package here (`make build-rust-client`).
+rust/client/pkg/
 /public/
 data/
 storage/

@@ -11,8 +11,8 @@
 /.git
 /.gitignore
 /docs
-/server/__tests__
-/web/__tests__
+/nest/server/__tests__
+/nest/client/__tests__
 /.claude
 /.env
 *.log

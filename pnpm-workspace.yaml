@@ -1,10 +1,11 @@
-# The two Node apps. `crates/`, `rust/` and `web/client/` are Cargo packages and
-# deliberately stay out of this list. The root package declares no dependencies:
-# every package belongs to the app that imports it, which is what lets roadmap.md
-# §4 P4 delete `server/` and the TS half of `web/` without pruning a root manifest.
+# The two Node packages of the Nest stack. `crates/`, `rust/server/` and
+# `rust/client/` are Cargo packages and deliberately stay out of this list. The
+# root package declares no dependencies: every package belongs to the stack that
+# imports it, which is what lets roadmap.md §4 P4 delete `nest/server/` and the TS
+# half of `nest/client/` without pruning a root manifest.
 packages:
-  - server
-  - web
+  - nest/server
+  - nest/client
 
 # pnpm 12 does not run dependency lifecycle scripts unless the package is listed
 # here (native builds: better-sqlite3's node-gyp, esbuild and @swc/core postinstalls).

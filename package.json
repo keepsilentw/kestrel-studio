@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "Web image-generation agent over Bailian Token Plan",
-  "//": "Workspace root. It declares NO dependencies on purpose: every package belongs to the app that imports it (server/package.json, web/package.json), so the two trees can be deleted independently (roadmap.md §4 P4). These three scripts are the only aggregate conveniences — the Makefile is the command entry point.",
+  "//": "Workspace root. It declares NO dependencies on purpose: every package belongs to the stack that imports it (nest/server/package.json, nest/client/package.json), so the two trees can be deleted independently (roadmap.md §4 P4). These three scripts are the only aggregate conveniences — the Makefile is the command entry point.",
   "scripts": {
     "build": "pnpm -r build",
     "typecheck": "pnpm -r typecheck",

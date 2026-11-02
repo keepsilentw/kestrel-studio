@@ -1,13 +1,13 @@
-// Regenerates rust/src/auth/blowfish_tables.rs from bcryptjs's own tables.
+// Regenerates rust/server/src/auth/blowfish_tables.rs from bcryptjs's own tables.
 //
 // The Blowfish P-array and S-boxes are the hex digits of pi: 1042 constants that
 // must not be transcribed by hand. bcryptjs (Apache-2.0) is already a dependency
 // of this project, so its copy is the source of truth here.
 //
-//   node scripts/gen-blowfish-tables.mjs > rust/src/auth/blowfish_tables.rs
+//   node scripts/gen-blowfish-tables.mjs > rust/server/src/auth/blowfish_tables.rs
 import { readFileSync } from 'node:fs';
 
-const SRC = 'node_modules/bcryptjs/index.js';
+const SRC = 'nest/server/node_modules/bcryptjs/index.js';
 
 function grab(name, expected) {
   const source = readFileSync(SRC, 'utf8');
@@ -55,7 +55,7 @@ console.log(
     '// Generated from bcryptjs 3.0.3 (Apache-2.0) - the standard Blowfish P-array and',
     '// S-boxes (the hex digits of pi) plus the bcrypt magic constant "Orphean-',
     '// BeholderScryDoubt". Do not hand-edit; regenerate with:',
-    '//   node scripts/gen-blowfish-tables.mjs > rust/src/auth/blowfish_tables.rs',
+    '//   node scripts/gen-blowfish-tables.mjs > rust/server/src/auth/blowfish_tables.rs',
     '',
     table('P_ORIG', 18, p, 6, '#[allow(clippy::upper_case_acronyms)]\n'),
     '',

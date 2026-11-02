@@ -1,0 +1,118 @@
+[package]
+name = "kestrel-client"
+version = "0.1.0"
+edition = "2021"
+description = "Browser client for kestrel-studio, written in Rust (compiles to WASM)"
+license = "MIT"
+
+[lib]
+name = "kestrel_client"
+crate-type = ["cdylib", "rlib"]
+
+# The core state machines are compiled and tested for the host target too:
+# `cargo test` must be able to assert the frame sequence without a browser. The
+# DOM layer is what will be gated behind `target_arch = "wasm32"`.
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+# This crate is the browser client of the Rust stack, so it lives next to the
+# Rust server it pairs with; the shared wire types and the markdown subset stay in
+# `crates/` because the server compiles the same definitions.
+kestrel-proto = { path = "../../crates/proto" }
+# The same renderer the server's SSR uses. Deliberately not `pulldown-cmark`:
+# measured at +87 KB gz in the browser (docs/verification.md §11.5), for syntax the
+# assistant does not write — and it would reintroduce the split this crate exists
+# to close.
+kestrel-md = { path = "../../crates/md" }
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+wasm-bindgen = "0.2"
+js-sys = "0.3"
+wasm-bindgen-futures = "0.4"
+web-sys = { version = "0.3", features = [
+  "Window",
+  "Navigator",
+  "MediaDevices",
+  "DomStringMap",
+  "BinaryType",
+  "console",
+  "Document",
+  "Element",
+  "HtmlElement",
+  "HtmlDivElement",
+  "HtmlButtonElement",
+  "HtmlTextAreaElement",
+  "HtmlFormElement",
+  "HtmlSelectElement",
+  "HtmlInputElement",
+  "HtmlOutputElement",
+  "HtmlImageElement",
+  "HtmlCanvasElement",
+  "CanvasRenderingContext2d",
+  "Blob",
+  "BlobPropertyBag",
+  "Url",
+  "EventSource",
+  "MessageEvent",
+  "CloseEvent",
+  "ErrorEvent",
+  "WebSocket",
+  "Headers",
+  "Request",
+  "RequestInit",
+  "Response",
+  "AbortController",
+  "AbortSignal",
+  "History",
+  "Location",
+  "Storage",
+  "DomRect",
+  "ScrollOptions",
+  "ScrollBehavior",
+  "ScrollIntoViewOptions",
+  "ScrollLogicalPosition",
+  "Text",
+  "Node",
+  "NodeList",
+  "HtmlCollection",
+  "EventTarget",
+  "Event",
+  "MouseEvent",
+  "PointerEvent",
+  "Touch",
+  "TouchEvent",
+  "AddEventListenerOptions",
+  # The voice page's audio graph: capture through the worklet, playback through
+  # a scheduled buffer source.
+  "AudioContext",
+  "AudioContextOptions",
+  "BaseAudioContext",
+  "AudioNode",
+  "AudioDestinationNode",
+  "AudioWorklet",
+  "AudioWorkletNode",
+  "AudioWorkletNodeOptions",
+  "AudioBuffer",
+  "AudioBufferSourceNode",
+  "ChannelCountMode",
+  "MediaStream",
+  "MediaStreamConstraints",
+  "MediaStreamTrack",
+  "MediaStreamAudioSourceNode",
+  "MessagePort",
+  # `button.class_list()` for the pressed state.
+  "DomTokenList",
+  # The conversation page: `<details>` for the reasoning block and `<dialog>` for
+  # the image preview.
+  "HtmlDetailsElement",
+  "HtmlDialogElement",
+] }
+
+[profile.release]
+opt-level = "s"
+lto = true
+# Tried for size: `abort` removes the landing pads a `panic = unwind` build emits
+# into every wasm import, and nothing here catches a panic — a trap in the client
+# takes the page's callback down either way, and the console line is the signal.
+panic = "abort"
+codegen-units = 1

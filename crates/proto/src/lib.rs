@@ -2,13 +2,13 @@
 //!
 //! Both sides compile against these types now: the server (`rust/`) and the
 //! browser client (`client/`, to WASM). Before this crate the shapes lived in
-//! `rust/src/voice/protocol.rs` and were **restated by hand** in
-//! `web/scripts/voice.ts`, because a browser script cannot import server code.
+//! `rust/server/src/voice/protocol.rs` and were **restated by hand** in
+//! `nest/client/scripts/voice.ts`, because a browser script cannot import server code.
 //! That duplication is what made the voice `start`-frame outage possible
 //! (docs/implementation-notes.md §8, docs/verification.md §7): with one source of
 //! truth, a renamed field is a compile error on the side that consumes it.
 //!
-//! Naming mirrors the SSE events in `rust/src/sse.rs` and the `AssetView` shape,
+//! Naming mirrors the SSE events in `rust/server/src/sse.rs` and the `AssetView` shape,
 //! so the two channels can be reasoned about with one mental model.
 
 use serde::{Deserialize, Serialize};

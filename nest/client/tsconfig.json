@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "strict": true,
+    "target": "ES2022",
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "lib": ["DOM", "DOM.Iterable", "ES2022"],
+    "types": ["vite/client"],
+    "skipLibCheck": true,
+    "noEmit": true,
+    "isolatedModules": true
+  },
+  // The Nest client is everything under this directory: the progressive-enhancement
+  // scripts, their jsdom suite, and the static files Vite copies verbatim. The
+  // Rust->WASM client (`rust/client/`) is a separate Cargo package, not a TS program.
+  "include": ["scripts/**/*.ts", "vite-env.d.ts", "__tests__/**/*.ts"]
+}

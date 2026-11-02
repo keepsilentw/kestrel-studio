@@ -8,7 +8,7 @@
 #   * the runtime base is `scratch`, which Docker never pulls: there is no base
 #     image to cache on the host at all;
 #   * the server binary is cross-compiled on the dev machine
-#     (`make rust-build-linux`) as a static musl ELF, so there is no libc to
+#     (`make build-rust-server-linux`) as a static musl ELF, so there is no libc to
 #     match on the host and nothing to compile there;
 #   * the client assets in `public/` are built on the dev machine too.
 #
@@ -58,9 +58,9 @@ ssh -o BatchMode=yes -o ConnectTimeout=10 "$HOST" 'true' \
 
 # Preflight, before anything is uploaded: a stale binary used to be discoverable
 # only after the container came up and served yesterday's code.
-[ -f "$BINARY" ] || fail "no $BINARY — run \`make rust-build-linux\` first"
-STALE="$(find "$PROJECT_ROOT/rust/src" -newer "$BINARY" -name '*.rs' 2>/dev/null | head -1)"
-[ -z "$STALE" ] || fail "$STALE is newer than $BINARY — run \`make rust-build-linux\` again"
+[ -f "$BINARY" ] || fail "no $BINARY — run \`make build-rust-server-linux\` first"
+STALE="$(find "$PROJECT_ROOT/rust/server/src" -newer "$BINARY" -name '*.rs' 2>/dev/null | head -1)"
+[ -z "$STALE" ] || fail "$STALE is newer than $BINARY — run \`make build-rust-server-linux\` again"
 log "  binary: $(du -h "$BINARY" | cut -f1)"
 
 REMOTE_IP="$(ssh -G "$HOST" | awk '/^hostname /{print $2}')"
