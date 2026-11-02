@@ -24,6 +24,20 @@ use std::error::Error;
 use crate::config::AppConfig;
 use crate::state::AppState;
 
+/// ANSI escapes only when stderr really is a terminal.
+///
+/// `tracing_subscriber`'s `ansi` feature is on by default and the fmt layer does
+/// **not** look at the stream, so a container's log file used to be full of
+/// escape sequences: `method` and `=` were separated by `\e[0m`, which made
+/// `grep 'method='` on `docker logs` return nothing and read as "the access log
+/// is not firing". Docker captures stdout without a TTY, so this returns false
+/// in production and the log is plain text; a developer at a terminal keeps the
+/// colours. Docs: docs/verification.md §13.8, docs/deployment.md §2.1.
+fn log_uses_ansi() -> bool {
+    use std::io::IsTerminal;
+    std::io::stderr().is_terminal()
+}
+
 /// One process, SSR plus streaming, no separate front-end service — the shape the
 /// Nest server had, kept on purpose (it is what makes an 8 GB host work).
 #[tokio::main]
@@ -35,6 +49,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let overlay = env_file::load_env_file(&cwd);
 
     tracing_subscriber::fmt()
+        .with_ansi(log_uses_ansi())
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
@@ -139,4 +154,93 @@ async fn shutdown_signal() {
         _ = terminate => {},
     }
     tracing::info!("signal received, closing the listener");
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Write;
+    use std::sync::{Mutex, OnceLock};
+    use tracing::span;
+    use tracing::Level;
+    use tracing_subscriber::fmt::MakeWriter;
+    use tracing_subscriber::EnvFilter;
+
+    // fmt 层往这里写。两个测试各自起线程，所以整段渲染串行化。
+    static CAPTURE: OnceLock<Mutex<Vec<u8>>> = OnceLock::new();
+    static RENDER: Mutex<()> = Mutex::new(());
+
+    fn captured() -> &'static Mutex<Vec<u8>> {
+        CAPTURE.get_or_init(|| Mutex::new(Vec::new()))
+    }
+
+    #[derive(Clone)]
+    struct Sink;
+
+    impl Write for Sink {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            captured().lock().expect("capture lock").extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for Sink {
+        type Writer = Sink;
+
+        fn make_writer(&'a self) -> Sink {
+            Sink
+        }
+    }
+
+    /// 复刻访问日志那一行的形状：tower_http 把 `method` / `uri` 挂在**父 span** 上，
+    /// 事件本身只有消息，所以渲染出来是
+    /// `request{method=GET uri=/login?probe=1}: … started processing request`。
+    fn render_one_line(ansi: bool) -> String {
+        let _serialised = RENDER.lock().expect("render lock");
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(ansi)
+            .with_env_filter(EnvFilter::new("debug"))
+            .with_writer(Sink)
+            .without_time()
+            .with_target(false)
+            .finish();
+
+        captured().lock().expect("capture lock").clear();
+        tracing::subscriber::with_default(subscriber, || {
+            // `%` on purpose: that is how tower_http records these two fields
+            // (`method = %request.method()`), and it is what makes the plain-text
+            // line read `method=GET` rather than `method="GET"`.
+            let request = span!(
+                Level::DEBUG,
+                "request",
+                method = %"GET",
+                uri = %"/login?probe=1",
+            );
+            let _entered = request.enter();
+            tracing::debug!("started processing request");
+        });
+        String::from_utf8(captured().lock().expect("capture lock").clone()).expect("utf-8")
+    }
+
+    #[test]
+    fn a_non_terminal_log_is_plain_text_so_access_lines_are_greppable() {
+        let plain = render_one_line(false);
+        assert!(plain.contains("method=GET"), "字段名与 = 之间不该有东西：{plain:?}");
+        assert!(plain.contains("uri=/login?probe=1"), "查询串要留在日志里：{plain:?}");
+        assert!(!plain.contains('\u{1b}'), "容器里不该有 ANSI：{plain:?}");
+    }
+
+    #[test]
+    fn ansi_mode_is_what_broke_the_ops_grep() {
+        let coloured = render_one_line(true);
+        assert!(coloured.contains('\u{1b}'), "开着 ANSI 时应带转义序列：{coloured:?}");
+        // 这正是 2026-11-02 第一次取证 0 命中的原因，也是 §13.8 的根因。
+        assert!(
+            !coloured.contains("method=GET"),
+            "转义序列把字段名与 = 隔开，朴素 grep 因此抓不到：{coloured:?}"
+        );
+    }
 }
