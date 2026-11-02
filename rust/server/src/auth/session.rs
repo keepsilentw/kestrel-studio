@@ -1,3 +1,4 @@
+use chrono::{DateTime, SecondsFormat, TimeZone, Utc};
 use hmac::{Hmac, Mac};
 use sha2::Sha256;
 use sqlx::Row;
@@ -13,6 +14,27 @@ pub const MAX_AGE_MS: i64 = 7 * 24 * 60 * 60 * 1000;
 
 fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
+}
+
+/// The Nest store (better-sqlite3-session-store) wrote `expire` as an ISO-8601
+/// string and declared the column TEXT. This server keeps that format: a row
+/// written here stays readable by the Nest store during a cutover, and rows
+/// written by either server are parsed the same way.
+fn expire_string(ms: i64) -> String {
+    Utc.timestamp_millis_opt(ms)
+        .single()
+        .map(|time| time.to_rfc3339_opts(SecondsFormat::Millis, true))
+        .unwrap_or_else(|| ms.to_string())
+}
+
+/// Accepts both the ISO-8601 text the Nest store wrote and the epoch-millis text
+/// (or integer) an earlier build of this server wrote.
+fn parse_expire(raw: &str) -> Option<i64> {
+    raw.parse::<i64>().ok().or_else(|| {
+        DateTime::parse_from_rfc3339(raw)
+            .ok()
+            .map(|time| time.timestamp_millis())
+    })
 }
 
 fn sign(token: &str, secret: &str) -> String {
@@ -73,7 +95,7 @@ pub async fn create(pool: &SqlitePool, user_id: i64) -> Result<String, crate::er
     sqlx::query("INSERT INTO sessions (sid, sess, expire) VALUES (?1, ?2, ?3)")
         .bind(&token)
         .bind(sess.to_string())
-        .bind(now_ms() + MAX_AGE_MS)
+        .bind(expire_string(now_ms() + MAX_AGE_MS))
         .execute(pool)
         .await?;
     Ok(token)
@@ -83,14 +105,14 @@ pub async fn create(pool: &SqlitePool, user_id: i64) -> Result<String, crate::er
 /// Expired rows are deleted here rather than by a timer: one less background
 /// task, and a stale row is only ever read at request time anyway.
 pub async fn principal_id(pool: &SqlitePool, token: &str) -> Result<Option<i64>, crate::error::AppError> {
-    let row = sqlx::query("SELECT sess, expire FROM sessions WHERE sid = ?1")
+    let row = sqlx::query("SELECT sess, CAST(expire AS TEXT) AS expire FROM sessions WHERE sid = ?1")
         .bind(token)
         .fetch_optional(pool)
         .await?;
     let Some(row) = row else { return Ok(None) };
 
-    let expire: i64 = row.try_get("expire")?;
-    if expire < now_ms() {
+    let expire: String = row.try_get("expire")?;
+    if parse_expire(&expire).map(|ms| ms < now_ms()).unwrap_or(true) {
         sqlx::query("DELETE FROM sessions WHERE sid = ?1")
             .bind(token)
             .execute(pool)
@@ -119,11 +141,26 @@ pub async fn destroy(pool: &SqlitePool, token: &str) -> Result<(), crate::error:
 /// Deletes rows whose expiry passed. Called at boot and on an interval; the Nest
 /// store did the same every 15 minutes.
 pub async fn sweep(pool: &SqlitePool) -> Result<u64, crate::error::AppError> {
-    let result = sqlx::query("DELETE FROM sessions WHERE expire < ?1")
-        .bind(now_ms())
-        .execute(pool)
+    // Expiry is compared in Rust rather than SQL: the same column may hold
+    // ISO-8601 text (written here / by the Nest store) or epoch millis (an older
+    // build), and SQLite's text comparison would order them differently.
+    let rows = sqlx::query("SELECT sid, CAST(expire AS TEXT) AS expire FROM sessions")
+        .fetch_all(pool)
         .await?;
-    Ok(result.rows_affected())
+    let now = now_ms();
+    let mut removed = 0u64;
+    for row in rows {
+        let sid: String = row.try_get("sid")?;
+        let raw: String = row.try_get("expire")?;
+        if parse_expire(&raw).map(|ms| ms < now).unwrap_or(true) {
+            let result = sqlx::query("DELETE FROM sessions WHERE sid = ?1")
+                .bind(&sid)
+                .execute(pool)
+                .await?;
+            removed += result.rows_affected();
+        }
+    }
+    Ok(removed)
 }
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
@@ -154,6 +191,18 @@ mod tests {
         assert_eq!(token_from_cookie(&forged, SECRET), None);
         assert_eq!(token_from_cookie(&format!("{COOKIE_NAME}=abc123"), SECRET), None);
         assert_eq!(token_from_cookie("", SECRET), None);
+    }
+
+    #[test]
+    fn both_expiry_formats_are_understood() {
+        assert_eq!(parse_expire("1794200538332"), Some(1_794_200_538_332));
+        let expected = Utc
+            .with_ymd_and_hms(2026, 11, 9, 5, 1, 0)
+            .single()
+            .expect("valid time")
+            .timestamp_millis();
+        assert_eq!(parse_expire("2026-11-09T05:01:00.000Z"), Some(expected));
+        assert_eq!(parse_expire("not-a-date"), None);
     }
 
     #[tokio::test]

@@ -86,7 +86,8 @@ CREATE INDEX IF NOT EXISTS idx_events_conversation ON conversation_events(conver
 CREATE TABLE IF NOT EXISTS sessions (
   sid TEXT NOT NULL PRIMARY KEY,
   sess TEXT NOT NULL,
-  expire INTEGER NOT NULL
+  -- TEXT to match the Nest session store, which writes ISO-8601 timestamps.
+  expire TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_expire ON sessions(expire);
 "#;
