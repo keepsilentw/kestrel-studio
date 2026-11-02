@@ -20,7 +20,7 @@
 
 use std::collections::HashSet;
 
-use kestrel_proto::event::{ConversationEvent, MessageView, Mode};
+use kestrel_proto::event::{ConversationEvent, ConversationSummary, MessageView, Mode};
 
 /// Validate the mode read back from `localStorage`. An unrecognised value yields
 /// `None` and the page keeps the shell's own choice, so the selector can never
@@ -206,6 +206,77 @@ pub fn format_bytes(bytes: u64) -> String {
     format!("{:.2} MB", bytes as f64 / (1024.0 * 1024.0))
 }
 
+/// The size radio group's fallback. The shell checks `100`, and an empty group (a
+/// later edit that drops the `checked` attribute) must not mean "export at 0 px":
+/// that scales every edge away.
+pub const DEFAULT_EXPORT_SIZE: u32 = 100;
+
+/// The export edge the dialog will use, off the checked radio's `value`.
+/// Unparseable or zero reads fall back, for the reason above.
+pub fn selected_size(raw: Option<&str>) -> u32 {
+    raw.and_then(|value| value.parse::<u32>().ok())
+        .filter(|value| *value > 0)
+        .unwrap_or(DEFAULT_EXPORT_SIZE)
+}
+
+/// The quality slider's reading in whole percent, clamped to the range the input
+/// declares (10..=100): a tampered value must not ask the encoder for 0.
+pub fn quality_percent(raw: Option<&str>) -> u32 {
+    raw.and_then(|value| value.parse::<u32>().ok())
+        .map(|value| value.clamp(10, 100))
+        .unwrap_or(90)
+}
+
+/// The name handed to the download, matching what the TS client wrote:
+/// `kestrel-<edge>-<epoch ms>.<ext>`. A mime this match does not know falls back to
+/// JPEG, the same way the encoder would treat it.
+pub fn download_filename(format: &str, size: u32, timestamp_ms: i64) -> String {
+    let extension = match format {
+        "image/png" => "png",
+        "image/webp" => "webp",
+        _ => "jpg",
+    };
+    format!("kestrel-{size}-{timestamp_ms}.{extension}")
+}
+
+/// Bytes carried by a `data:` URL's base64 payload — how the estimate measures a
+/// canvas export without decoding it. Every character that is not padding carries
+/// six bits, so eight of them are exactly six bytes and `=` is dropped before the
+/// maths. `None` means the string is not a data URL at all, and then the dialog says
+/// it cannot estimate instead of showing a made-up size.
+pub fn decoded_bytes(data_url: &str) -> Option<u64> {
+    let payload = data_url.split_once(',')?.1;
+    let carried = payload.chars().filter(|c| *c != '=').count() as u64;
+    Some(carried * 6 / 8)
+}
+
+/// One row the history dropdown should show, with both decisions already made: which
+/// row is the conversation on screen, and whether this account may delete it. The
+/// shell answers the second through `data-can-delete-conversations`
+/// (architecture.md §12.1); the client never infers it from who owns the row.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HistoryRow {
+    pub id: i64,
+    pub title: String,
+    pub is_active: bool,
+    pub can_delete: bool,
+}
+
+/// Shape `GET /api/v1/conversations` into rows. The order is the server's (newest
+/// first, ties broken by id) and is preserved untouched — sorting here would
+/// disagree with what the SSR shell painted on the first load.
+pub fn history_rows(items: &[ConversationSummary], active: Option<i64>, can_delete: bool) -> Vec<HistoryRow> {
+    items
+        .iter()
+        .map(|item| HistoryRow {
+            id: item.id,
+            title: item.title.clone(),
+            is_active: active == Some(item.id),
+            can_delete,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -380,5 +451,63 @@ mod tests {
         assert!(raw.contains("\"createdAt\""), "camelCase is the published shape: {raw}");
         assert!(raw.contains("\"toolCalls\""));
         assert!(raw.contains("\"type\":\"user_message\""));
+    }
+
+    #[test]
+    fn an_unreadable_size_radio_falls_back_instead_of_scaling_by_zero() {
+        assert_eq!(selected_size(Some("1024")), 1024);
+        assert_eq!(selected_size(None), DEFAULT_EXPORT_SIZE, "no checked row");
+        assert_eq!(selected_size(Some("0")), DEFAULT_EXPORT_SIZE, "a 0 edge scales everything away");
+        assert_eq!(selected_size(Some("abc")), DEFAULT_EXPORT_SIZE);
+    }
+
+    #[test]
+    fn the_quality_reading_stays_inside_the_range_the_slider_declares() {
+        assert_eq!(quality_percent(None), 90, "the markup's default");
+        assert_eq!(quality_percent(Some("45")), 45);
+        assert_eq!(quality_percent(Some("150")), 100, "clamped to the top of the range");
+        assert_eq!(quality_percent(Some("3")), 10, "and to the bottom");
+    }
+
+    #[test]
+    fn the_download_name_carries_the_size_and_the_format_the_dialog_chose() {
+        assert_eq!(
+            download_filename("image/jpeg", 200, 1_700_000_000_000),
+            "kestrel-200-1700000000000.jpg"
+        );
+        assert!(download_filename("image/png", 50, 1).ends_with(".png"));
+        assert!(download_filename("image/webp", 50, 1).ends_with(".webp"));
+        assert!(download_filename("image/unknown", 100, 2).ends_with(".jpg"), "unknown mime exports as JPEG");
+    }
+
+    #[test]
+    fn a_data_url_is_measured_by_its_base64_payload_not_its_prefix() {
+        // The two padding cases plus a padded and unpadded spelling of the same bytes.
+        assert_eq!(decoded_bytes("data:image/png;base64,aGVsbG8="), Some(5));
+        assert_eq!(decoded_bytes("data:image/png;base64,aGVsbG8"), Some(5), "no padding");
+        assert_eq!(decoded_bytes("data:image/jpeg;base64,aGk="), Some(2));
+        assert_eq!(decoded_bytes("data:image/jpeg;base64,"), Some(0), "an empty export is 0 bytes");
+        assert_eq!(decoded_bytes("not-a-data-url"), None, "no comma means no estimate");
+    }
+
+    #[test]
+    fn history_rows_mark_one_active_row_and_keep_the_server_order() {
+        let items = vec![
+            ConversationSummary { id: 7, title: "一只红隼".to_string(), updated_at: 30 },
+            ConversationSummary { id: 3, title: "占位".to_string(), updated_at: 20 },
+        ];
+
+        let rows = history_rows(&items, Some(3), true);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].id, 7, "order is the server's, not re-sorted here");
+        assert!(!rows[0].is_active);
+        assert!(rows[1].is_active, "the conversation on screen is the one the shell stamped");
+        assert!(rows.iter().all(|row| row.can_delete));
+
+        let read_only = history_rows(&items, Some(999), false);
+        assert!(read_only.iter().all(|row| !row.is_active), "a current conversation not in the list highlights nothing");
+        assert!(read_only.iter().all(|row| !row.can_delete), "the shell said so, the client obeys");
+
+        assert!(history_rows(&[], Some(1), true).is_empty(), "an empty list is the page's 暂无会话 row");
     }
 }

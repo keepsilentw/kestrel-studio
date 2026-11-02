@@ -12,10 +12,10 @@
 //! the borrow first, then borrows again only for the state it mutates.
 //!
 //! Scope of this slice: stream subscription, turn painting, mode selector,
-//! composer, image preview. **Not here yet:** the download dialog (canvas
-//! re-encode), the delete-confirmation dialog, the right sidebar's turn index and
-//! the history dropdown refresh. `/` therefore still loads `/assets/main.js`; this
-//! module compiles and is not yet referenced by any template.
+//! composer, image preview, the delete-confirmation dialog, the right sidebar's turn
+//! index, the download dialog (canvas re-encode) and the history dropdown refresh.
+//! `/` still loads `/assets/main.js` — the switch is roadmap.md §4 P4, and none of
+//! this module has ever run in a browser (docs/verification.md §13.5).
 
 use std::cell::RefCell;
 use std::cell::Cell;
@@ -26,13 +26,17 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::{spawn_local, JsFuture};
 use web_sys::{
-    Document, Element, EventSource, Headers, HtmlButtonElement, HtmlDialogElement, HtmlElement,
-    HtmlTextAreaElement, MessageEvent, Request, RequestInit, Response, ScrollBehavior,
-    ScrollIntoViewOptions, ScrollLogicalPosition,
+    CanvasRenderingContext2d, Document, Element, EventSource, Headers, HtmlButtonElement,
+    HtmlCanvasElement, HtmlDetailsElement, HtmlDialogElement, HtmlElement, HtmlImageElement,
+    HtmlInputElement, HtmlSelectElement, HtmlTextAreaElement, MessageEvent, Request, RequestInit,
+    Response, ScrollBehavior, ScrollIntoViewOptions, ScrollLogicalPosition,
 };
 
-use crate::chat_core::{Paint, Stream};
-use kestrel_proto::event::{ConversationEvent, MessageView, Mode};
+use crate::chat_core::{
+    decoded_bytes, download_filename, format_bytes, history_rows, plan_download, quality_percent,
+    selected_size, DownloadPlan, Paint, Stream,
+};
+use kestrel_proto::event::{ConversationEvent, ConversationSummary, MessageView, Mode};
 
 /// The mode the selector starts in is remembered across visits.
 pub const MODE_STORAGE_KEY: &str = "kestrel-studio:mode";
@@ -82,6 +86,20 @@ struct Dom {
     /// because the shell gives them classes, not ids.
     delete_dialog: HtmlDialogElement,
     delete_target: HtmlElement,
+    /// The re-encode dialog. Every control in it is read from the shell's own
+    /// markup — the size is a radio group with no id, so it is queried, not fetched.
+    download_dialog: HtmlDialogElement,
+    download_format: HtmlSelectElement,
+    download_quality: HtmlInputElement,
+    download_quality_value: HtmlElement,
+    download_hint: HtmlElement,
+    download_estimate: HtmlElement,
+    download_confirm: HtmlButtonElement,
+    download_cancel: HtmlButtonElement,
+    /// The 历史会话 `<details>`. Its rows are the shell's on first paint and this
+    /// module's after a refresh, which is why the delete listener sits on the
+    /// document and not on the rows.
+    history: HtmlDetailsElement,
     body: HtmlElement,
 }
 
@@ -105,6 +123,13 @@ struct Page {
     /// refuses a second concurrent turn with 409 on purpose.
     turn_running: bool,
     submitting: bool,
+    /// The image the dialog is about: the `<img class="asset-image">` already on the
+    /// page. `None` means nothing is loaded, and the estimate says so rather than
+    /// showing a size it did not compute.
+    download_image: Option<HtmlImageElement>,
+    /// Re-encoding is synchronous and not free, so slider drags coalesce into one
+    /// pass — 160 ms, the same window the TS client used.
+    estimate_timer: Option<i32>,
 }
 
 type Handle = Rc<RefCell<Page>>;
@@ -127,6 +152,22 @@ pub fn init_chat() -> Result<(), JsValue> {
         preview_image: element(&document, "preview-image")?,
         delete_dialog: dialog(&document, "conversation-delete-dialog")?,
         delete_target: element(&document, "conversation-delete-target")?,
+        download_dialog: dialog(&document, "download-dialog")?,
+        download_format: element(&document, "download-format")?
+            .dyn_into::<HtmlSelectElement>()
+            .map_err(|_| "#download-format is not a select")?,
+        download_quality: element(&document, "download-quality")?
+            .dyn_into::<HtmlInputElement>()
+            .map_err(|_| "#download-quality is not an input")?,
+        download_quality_value: element(&document, "download-quality-value")?,
+        download_hint: element(&document, "download-hint")?,
+        download_estimate: element(&document, "download-estimate")?,
+        download_confirm: button(&document, "download-confirm")?,
+        download_cancel: button(&document, "download-cancel")?,
+        history: document
+            .query_selector(".menu-dropdown")?
+            .and_then(|node| node.dyn_into::<HtmlDetailsElement>().ok())
+            .ok_or_else(|| JsValue::from_str("#.menu-dropdown is missing"))?,
         body,
     };
 
@@ -144,6 +185,8 @@ pub fn init_chat() -> Result<(), JsValue> {
         anchors: Vec::new(),
         active_anchor: None,
         scroll_scheduled: Cell::new(false),
+        download_image: None,
+        estimate_timer: None,
     }));
 
     seed_rendered(&document, &page);
@@ -312,26 +355,50 @@ fn bind(page: &Handle, dom: &Dom) -> Result<(), JsValue> {
         else {
             return;
         };
-        if !target.class_list().contains("asset-image") {
+        if target.class_list().contains("asset-image") {
+            let Some(src) = target.get_attribute("src") else { return };
+            let (preview, preview_image) = {
+                let borrow = scoped.borrow();
+                (borrow.dom.preview.clone(), borrow.dom.preview_image.clone())
+            };
+            preview_image.set_attribute("src", &src).ok();
+            preview.set_attribute("data-src", &src).ok();
+            if !preview.open() {
+                // A dialog that refuses to open is the feature failing, not a detail:
+                // say which. `showModal` throws when the element is not a dialog or the
+                // document is not active.
+                if let Err(error) = preview.show_modal() {
+                    web_sys::console::error_1(&JsValue::from_str(&format!(
+                        "kestrel: cannot open the preview: {error:?}"
+                    )));
+                }
+            }
             return;
         }
-        let Some(src) = target.get_attribute("src") else { return };
-        let (preview, preview_image) = {
-            let borrow = scoped.borrow();
-            (borrow.dom.preview.clone(), borrow.dom.preview_image.clone())
-        };
-        preview_image.set_attribute("src", &src).ok();
-        preview.set_attribute("data-src", &src).ok();
-        if !preview.open() {
-            // A dialog that refuses to open is the feature failing, not a detail:
-            // say which. `showModal` throws when the element is not a dialog or the
-            // document is not active.
-            if let Err(error) = preview.show_modal() {
-                web_sys::console::error_1(&JsValue::from_str(&format!(
-                    "kestrel: cannot open the preview: {error:?}"
-                )));
-            }
+
+        // The download link. Re-encoding only exists for still images, so a video's
+        // link is left to the browser — same carve-out the TS client made.
+        let Some(link) = find_closest(&target, "a.asset-download") else { return };
+        let is_video = find_closest(&target, "figure.asset")
+            .and_then(|figure| figure.query_selector("video").ok().flatten())
+            .is_some();
+        if is_video {
+            return;
         }
+        // The `<img>` on the page is the same resource the link points at (both are
+        // built from one url in `append_asset`), and it is already decoded — so the
+        // canvas can draw from it directly instead of fetching the href a second time.
+        let Some(source) = find_closest(&target, "figure.asset")
+            .and_then(|figure| figure.query_selector("img.asset-image").ok().flatten())
+            .and_then(|image| image.dyn_into::<HtmlImageElement>().ok())
+        else {
+            // No image to draw from: leave the plain link alone so the download still
+            // happens, just without the re-encode step.
+            let _ = link;
+            return;
+        };
+        event.prevent_default();
+        open_download_dialog(&scoped, source);
     });
     dom.stream
         .add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
@@ -458,19 +525,9 @@ fn confirm_delete(page: &Handle) {
             }
             return;
         }
-        // Any other row is just a row going away.
-        if let Some(document) = dom.body.owner_document() {
-            if let Some(button) = document
-                .query_selector(&format!("[data-delete-conversation=\"{id}\"]"))
-                .ok()
-                .flatten()
-            {
-                if let Some(row) = button.parent_element() {
-                    row.remove();
-                }
-            }
-        }
-        let _ = scoped;
+        // Any other row is just a row going away. Refetched rather than spliced, so
+        // the list keeps the server's order and the active row stays the shell's call.
+        refresh_history(&scoped);
     });
 }
 
@@ -903,6 +960,10 @@ async fn create_conversation(dom: &Dom, page: &Handle, prompt: &str) -> Result<S
             let _ = history.replace_state_with_url(&JsValue::NULL, "", Some(&url));
         }
     }
+    // The shell painted this page before the conversation existed, so its dropdown
+    // cannot know about it: ask for the list rather than splice a row in, the same
+    // way the TS client did — one shape, one source of truth.
+    refresh_history(page);
     // The page is now subscribed to a conversation the shell never knew about.
     open_stream(&Rc::clone(page), &id, "0");
     Ok(id)
@@ -963,6 +1024,445 @@ async fn post_empty(path: &str) -> Result<u16, String> {
     Ok(response.status())
 }
 
+/* ---------- download dialog ---------- */
+
+/// The `<img>` the dialog is about, plus the choices on the shell's own controls.
+/// Reading them at click time (not caching them) is what keeps the estimate and the
+/// export the same picture: one source, no state to fall out of step.
+fn current_plan(dom: &Dom, image: &HtmlImageElement) -> Option<DownloadPlan> {
+    let document = dom.body.owner_document()?;
+    let format = dom.download_format.value();
+    let quality = quality_percent(Some(&dom.download_quality.value()));
+    let size = checked_size(&document);
+    plan_download(image.natural_width(), image.natural_height(), size, &format, quality)
+}
+
+/// The checked radio's edge. Queried, not held: the group is markup, and a shell
+/// edit that drops `checked` must fall back rather than scale by zero
+/// (`chat_core::selected_size` owns that decision).
+fn checked_size(document: &Document) -> u32 {
+    let checked = document
+        .query_selector("input[name=\"download-size\"]:checked")
+        .ok()
+        .flatten()
+        .and_then(|node| node.dyn_into::<HtmlInputElement>().ok())
+        .map(|input| input.value());
+    selected_size(checked.as_deref())
+}
+
+/// PNG ignores the quality argument, so the slider is switched off and the hint
+/// says which knob actually controls the size.
+fn sync_quality_availability(dom: &Dom) {
+    let lossy = dom.download_format.value() != "image/png";
+    dom.download_quality.set_disabled(!lossy);
+    let shown = if lossy {
+        format!("{}%", dom.download_quality.value())
+    } else {
+        "不适用".to_string()
+    };
+    dom.download_quality_value.set_text_content(Some(&shown));
+    let hint = if lossy {
+        "质量越低文件越小，画质损失越明显。"
+    } else {
+        "PNG 为无损格式，质量选项不生效，请用尺寸控制体积。"
+    };
+    dom.download_hint.set_text_content(Some(hint));
+}
+
+/// Scale onto a canvas and hand back the encoded `data:` URL.
+///
+/// A data URL rather than a `Blob` + object URL (what `main.ts` did): the encoder
+/// is synchronous in both cases, and this costs no callback plumbing and nothing to
+/// revoke. The bytes are the same, which is what makes the estimate honest.
+fn render_data_url(image: &HtmlImageElement, plan: &DownloadPlan, format: &str) -> Result<String, String> {
+    let document = image.owner_document().ok_or("图片已不在文档里")?;
+    let canvas = document
+        .create_element("canvas")
+        .map_err(|_| "当前浏览器不支持 canvas".to_string())?
+        .dyn_into::<HtmlCanvasElement>()
+        .map_err(|_| "当前浏览器不支持 canvas".to_string())?;
+    canvas.set_width(plan.width);
+    canvas.set_height(plan.height);
+    let context = canvas
+        .get_context("2d")
+        .map_err(|_| "当前浏览器不支持 canvas".to_string())?
+        .ok_or_else(|| "当前浏览器不支持 canvas".to_string())?
+        .dyn_into::<CanvasRenderingContext2d>()
+        .map_err(|_| "当前浏览器不支持 canvas".to_string())?;
+    context
+        .draw_image_with_html_image_element_and_dw_and_dh(
+            image,
+            0.0,
+            0.0,
+            f64::from(plan.width),
+            f64::from(plan.height),
+        )
+        .map_err(|_| "图片导出失败".to_string())?;
+    canvas
+        // `encoderOptions` is a JS number: the quality 0..1, ignored by PNG.
+        .to_data_url_with_type_and_encoder_options(format, &JsValue::from_f64(f64::from(plan.quality)))
+        .map_err(|_| "图片导出失败".to_string())
+}
+
+/// Every estimate line starts with this, including the ones that say it failed.
+const ESTIMATE_PREFIX: &str = "预计大小：";
+
+/// Whether this `<img>` still has to be decoded. A displayed image reports its
+/// natural size; one the browser has not finished is 0x0, which no plan can use.
+fn image_is_measuring(image: &HtmlImageElement) -> bool {
+    image.natural_width() == 0 || image.natural_height() == 0
+}
+
+/// Re-encode and write the size. Everything here is synchronous, which is why the
+/// debounce is a timer and not a request token.
+fn update_estimate(page: &Handle) {
+    let (dom, image) = {
+        let borrow = page.borrow();
+        (borrow.dom.clone(), borrow.download_image.clone())
+    };
+    let Some(image) = image else {
+        dom.download_estimate
+            .set_text_content(Some(&format!("{ESTIMATE_PREFIX}无法计算")));
+        return;
+    };
+    let Some(plan) = current_plan(&dom, &image) else {
+        dom.download_estimate
+            .set_text_content(Some(&format!("{ESTIMATE_PREFIX}无法计算")));
+        return;
+    };
+    let format = dom.download_format.value();
+    let text = match render_data_url(&image, &plan, &format) {
+        Ok(url) => match decoded_bytes(&url) {
+            Some(bytes) => format!("{ESTIMATE_PREFIX}{}", format_bytes(bytes)),
+            None => format!("{ESTIMATE_PREFIX}无法计算"),
+        },
+        Err(message) => format!("{ESTIMATE_PREFIX}{message}"),
+    };
+    dom.download_estimate.set_text_content(Some(&text));
+}
+
+/// Coalesce rapid slider / radio input into one encode, as the TS client did.
+fn schedule_estimate(page: &Handle) {
+    let window = match web_sys::window() {
+        Some(window) => window,
+        None => return,
+    };
+    let pending = {
+        let mut borrow = page.borrow_mut();
+        let pending = borrow.estimate_timer.take();
+        (pending, Rc::clone(page))
+    };
+    if let Some(handle) = pending.0 {
+        window.clear_timeout_with_handle(handle);
+    }
+    let scoped = pending.1;
+    let fire = Closure::once_into_js(move || update_estimate(&scoped));
+    let Ok(handle) = window.set_timeout_with_callback_and_timeout_and_arguments_0(fire.as_ref().unchecked_ref(), 160) else {
+        // No timer means no debounce: encode now rather than never.
+        update_estimate(page);
+        return;
+    };
+    page.borrow_mut().estimate_timer = Some(handle);
+}
+
+/// Open the dialog on an image the page already shows.
+fn open_download_dialog(page: &Handle, image: HtmlImageElement) {
+    // Handles are references, so keeping a second one for the load listener costs
+    // nothing and avoids borrowing the page again to get it back.
+    let watched = image.clone();
+    let dom = {
+        let mut borrow = page.borrow_mut();
+        borrow.download_image = Some(image);
+        borrow.dom.clone()
+    };
+    sync_quality_availability(&dom);
+    dom.download_estimate
+        .set_text_content(Some(&format!("{ESTIMATE_PREFIX}计算中…")));
+    if let Err(error) = dom.download_dialog.show_modal() {
+        web_sys::console::error_1(&JsValue::from_str(&format!(
+            "kestrel: cannot open the download dialog: {error:?}"
+        )));
+    }
+    // An asset the browser has not decoded yet reports 0x0, and `plan_download`
+    // refuses to scale by zero. Rather than showing 无法计算 and leaving it there,
+    // take the measurement again when the image finishes: a `loading="lazy"` row the
+    // user scrolled straight past is the ordinary case for this.
+    if image_is_measuring(&watched) {
+        let scoped = Rc::clone(page);
+        let loaded = Closure::once_into_js(move || update_estimate(&scoped));
+        if watched
+            .add_event_listener_with_callback("load", loaded.unchecked_ref())
+            .is_err()
+        {
+            web_sys::console::error_1(&JsValue::from_str("kestrel: cannot watch the image decode"));
+        }
+    }
+    update_estimate(page);
+}
+
+/// Save the re-encoded image under the name the dialog implies, then close.
+fn perform_download(page: &Handle) {
+    let (dom, image) = {
+        let borrow = page.borrow();
+        (borrow.dom.clone(), borrow.download_image.clone())
+    };
+    let Some(image) = image else {
+        dom.download_estimate
+            .set_text_content(Some("图片尚未加载完成"));
+        return;
+    };
+    let Some(plan) = current_plan(&dom, &image) else {
+        dom.download_estimate.set_text_content(Some("无法导出"));
+        return;
+    };
+    let format = dom.download_format.value();
+    let url = match render_data_url(&image, &plan, &format) {
+        Ok(url) => url,
+        Err(message) => {
+            dom.download_estimate.set_text_content(Some(&message));
+            return;
+        }
+    };
+    let Some(document) = dom.body.owner_document() else { return };
+    let name = download_filename(
+        &format,
+        checked_size(&document),
+        js_sys::Date::now() as i64,
+    );
+    // A detached `<a>` is enough for the click to start a download — which is what
+    // `main.ts` did — so there is no node to insert and none to take back out.
+    let link = build(&document, "a", "download-trigger");
+    link.set_attribute("href", &url).ok();
+    link.set_attribute("download", &name).ok();
+    link.click();
+    dom.download_dialog.close();
+}
+
+/// The dialog's own wiring. One document-level query for the radio group, because
+/// those inputs are markup rather than ids the shell guarantees.
+fn bind_download(page: &Handle, dom: &Dom) {
+    let Some(document) = dom.body.owner_document() else { return };
+
+    if let Ok(radios) = document.query_selector_all("input[name=\"download-size\"]") {
+        for index in 0..radios.length() {
+            let Some(node) = radios.item(index) else { continue };
+            let scoped = Rc::clone(page);
+            let listener = Closure::<dyn FnMut()>::new(move || schedule_estimate(&scoped));
+            if node
+                .add_event_listener_with_callback("change", listener.as_ref().unchecked_ref())
+                .is_ok()
+            {
+                listener.forget();
+            }
+        }
+    }
+
+    let scoped = Rc::clone(page);
+    let format_changed = Closure::<dyn FnMut()>::new(move || {
+        let borrow = scoped.borrow();
+        sync_quality_availability(&borrow.dom);
+        drop(borrow);
+        schedule_estimate(&scoped);
+    });
+    dom.download_format
+        .add_event_listener_with_callback("change", format_changed.as_ref().unchecked_ref())
+        .ok();
+    format_changed.forget();
+
+    let scoped = Rc::clone(page);
+    let quality_changed = Closure::<dyn FnMut()>::new(move || {
+        let borrow = scoped.borrow();
+        let lossy = borrow.dom.download_format.value() != "image/png";
+        if lossy {
+            let shown = format!("{}%", borrow.dom.download_quality.value());
+            borrow.dom.download_quality_value.set_text_content(Some(&shown));
+        }
+        drop(borrow);
+        schedule_estimate(&scoped);
+    });
+    dom.download_quality
+        .add_event_listener_with_callback("input", quality_changed.as_ref().unchecked_ref())
+        .ok();
+    quality_changed.forget();
+
+    let scoped = Rc::clone(page);
+    let confirm = Closure::<dyn FnMut()>::new(move || perform_download(&scoped));
+    dom.download_confirm
+        .add_event_listener_with_callback("click", confirm.as_ref().unchecked_ref())
+        .ok();
+    confirm.forget();
+
+    let cancel_dom = dom.clone();
+    let cancel = Closure::<dyn FnMut()>::new(move || cancel_dom.download_dialog.close());
+    dom.download_cancel
+        .add_event_listener_with_callback("click", cancel.as_ref().unchecked_ref())
+        .ok();
+    cancel.forget();
+
+    // Backdrop click closes a `<dialog>` only if the page says so: the target is the
+    // dialog itself when the click lands outside its content box.
+    let backdrop = dom.download_dialog.clone();
+    let outside = Closure::<dyn FnMut(web_sys::MouseEvent)>::new(move |event: web_sys::MouseEvent| {
+        let is_dialog = event
+            .target()
+            .and_then(|value| value.dyn_into::<HtmlDialogElement>().ok())
+            .is_some();
+        if is_dialog {
+            backdrop.close();
+        }
+    });
+    dom.download_dialog
+        .add_event_listener_with_callback("click", outside.as_ref().unchecked_ref())
+        .ok();
+    outside.forget();
+
+    // A closed dialog holds nothing: the decoded image can be several megabytes, and
+    // the next open always re-reads what is on screen.
+    let scoped = Rc::clone(page);
+    let closed = Closure::<dyn FnMut()>::new(move || {
+        scoped.borrow_mut().download_image = None;
+    });
+    dom.download_dialog
+        .add_event_listener_with_callback("close", closed.as_ref().unchecked_ref())
+        .ok();
+    closed.forget();
+}
+
+/* ---------- history dropdown ---------- */
+
+/// A `<details>` stays open across a turn ending, and the list is exactly what
+/// changed then: a conversation created by this page, or one deleted in another tab.
+fn bind_history(page: &Handle, dom: &Dom) {
+    let scoped = Rc::clone(page);
+    let on_toggle = Closure::<dyn FnMut()>::new(move || {
+        let borrow = scoped.borrow();
+        let open = borrow.dom.history.open();
+        drop(borrow);
+        if open {
+            refresh_history(&scoped);
+        }
+    });
+    dom.history
+        .add_event_listener_with_callback("toggle", on_toggle.as_ref().unchecked_ref())
+        .ok();
+    on_toggle.forget();
+}
+
+/// Replace the dropdown's rows with what the server says they should be.
+///
+/// Failure is surfaced inside the dropdown (where the action came from) rather than
+/// silently leaving rows that no longer exist: an out-of-date list invites a delete
+/// that answers 404.
+fn refresh_history(page: &Handle) {
+    let dom = { page.borrow().dom.clone() };
+    spawn_local(async move {
+        let items = match get_json("/api/v1/conversations").await {
+            Ok(value) => value,
+            Err(message) => {
+                show_history_error(&dom, &message);
+                return;
+            }
+        };
+        // A body that does not parse is a failure, not an empty history: painting
+        // 暂无会话 here would erase rows that still exist on the server.
+        let rows: Vec<ConversationSummary> = match serde_json::from_value(items) {
+            Ok(rows) => rows,
+            Err(_) => {
+                show_history_error(&dom, "历史列表读不出来");
+                return;
+            }
+        };
+
+        let active = conversation_id(&dom.body).and_then(|id| id.parse::<i64>().ok());
+        let can_delete = dom
+            .body
+            .dataset()
+            .get("can-delete-conversations")
+            .is_some_and(|flag| flag == "true");
+        let document = match dom.body.owner_document() {
+            Some(document) => document,
+            None => return,
+        };
+        paint_history(&document, &history_rows(&rows, active, can_delete));
+    });
+}
+
+/// Rebuild `.conversation-list` to match the shell's markup for it, element for
+/// element — a reloaded page and a refreshed dropdown have to look the same.
+fn paint_history(document: &Document, rows: &[crate::chat_core::HistoryRow]) {
+    let Some(list) = document.query_selector(".conversation-list").ok().flatten() else {
+        return;
+    };
+    while let Some(child) = list.first_child() {
+        list.remove_child(&child).ok();
+    }
+
+    if rows.is_empty() {
+        let empty = build(document, "li", "conversation-empty");
+        empty.set_text_content(Some("暂无会话"));
+        list.append_child(&empty).ok();
+        return;
+    }
+
+    for row in rows {
+        let item = build(document, "li", "conversation-item");
+        let link = build(document, "a", if row.is_active { "conversation-link is-active" } else { "conversation-link" });
+        link.set_attribute("href", &format!("/?c={}", row.id)).ok();
+        link.set_text_content(Some(&row.title));
+        item.append_child(&link).ok();
+
+        if row.can_delete {
+            let remove = build(document, "button", "conversation-delete");
+            remove.set_attribute("type", "button").ok();
+            remove
+                .set_attribute("data-delete-conversation", &row.id.to_string())
+                .ok();
+            remove
+                .set_attribute("aria-label", &format!("删除会话 {}", row.title))
+                .ok();
+            remove.set_attribute("title", "删除会话").ok();
+            remove.set_text_content(Some("删除"));
+            item.append_child(&remove).ok();
+        }
+        list.append_child(&item).ok();
+    }
+}
+
+fn show_history_error(dom: &Dom, message: &str) {
+    let Some(document) = dom.body.owner_document() else { return };
+    let Some(list) = document.query_selector(".conversation-list").ok().flatten() else {
+        web_sys::console::error_1(&JsValue::from_str(&format!("kestrel: {message}")));
+        return;
+    };
+    let item = build(&document, "li", "conversation-error");
+    item.set_text_content(Some(message));
+    match list.first_child() {
+        Some(child) => list.insert_before(&item, Some(&child)).ok(),
+        None => list.append_child(&item).ok(),
+    };
+}
+
+/// A `GET` that answers with the parsed body, for the list endpoints.
+async fn get_json(path: &str) -> Result<serde_json::Value, String> {
+    let window = web_sys::window().ok_or("no window")?;
+    // Same shape as `post_send`: a `Request` built from an init, because that is the
+    // pair this crate's web-sys features give a promise directly.
+    let init = RequestInit::new();
+    init.set_method("GET");
+    let request = Request::new_with_str_and_init(path, &init).map_err(|_| "cannot build the request")?;
+    let value = JsFuture::from(window.fetch_with_request(&request))
+        .await
+        .map_err(|_| format!("{path} 请求失败"))?;
+    let response: Response = value.dyn_into().map_err(|_| "malformed response".to_string())?;
+    if !response.ok() {
+        return Err(format!("{path} 失败（HTTP {}）", response.status()));
+    }
+    let body = response.text().map_err(|_| "no body".to_string())?;
+    let text = JsFuture::from(body).await.map_err(|_| "no body".to_string())?;
+    let raw = text.as_string().ok_or_else(|| "body is not text".to_string())?;
+    serde_json::from_str(&raw).map_err(|_| format!("{path} 的响应不是 JSON"))
+}
+
 /// The wiring that is not the composer or the stream: the sidebar's index, the
 /// scroll follower that keeps it honest, and dropping a delete question dismissed
 /// with Esc.
@@ -973,6 +1473,9 @@ fn bind_extras(page: &Handle) {
         (borrow.dom.clone(), document)
     };
     let Some(document) = document else { return };
+
+    bind_download(page, &dom);
+    bind_history(page, &dom);
 
     // Rows the shell already rendered, each pointing at a turn by message id.
     if let Ok(links) = document.query_selector_all(".turn-index-link[data-target]") {
