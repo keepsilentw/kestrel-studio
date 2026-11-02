@@ -21,7 +21,11 @@ async function bootstrap(): Promise<void> {
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   app.disable('x-powered-by');
 
-  app.useStaticAssets(join(__dirname, '..', 'public'), { index: false });
+  // The build product is `server/dist`, so the compiled entry point sits two
+  // levels under the repo root. `public/` is the asset directory both servers
+  // serve (the Rust binary reads the same one through `STATIC_DIR`), and it is a
+  // repo-root artifact rather than part of either app.
+  app.useStaticAssets(join(__dirname, '..', '..', 'public'), { index: false });
   app.setBaseViewsDir(join(__dirname, 'view', 'views'));
   app.setViewEngine('hbs');
   hbs.registerPartials(join(__dirname, 'view', 'views', 'partials'));

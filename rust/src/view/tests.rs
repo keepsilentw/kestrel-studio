@@ -268,7 +268,7 @@ fn the_markdown_subset_matches_what_the_assistant_actually_writes() {
 /// A shell that stops carrying one is a hard failure in the browser, so it has to
 /// be a failing test first.
 fn voice_required_ids() -> Vec<String> {
-    let path = std::path::Path::new("../client/src/voice_page.rs");
+    let path = std::path::Path::new("../web/client/src/voice_page.rs");
     let source = std::fs::read_to_string(path)
         .unwrap_or_else(|error| panic!("{} must be readable: {error}", path.display()));
 
@@ -304,7 +304,7 @@ fn the_voice_page_carries_every_element_the_wasm_client_requires() {
     for id in voice_required_ids() {
         assert!(
             rendered.contains(&format!("id=\"{id}\"")),
-            "#{id} is looked up by client/src/voice_page.rs but is not in the /voice shell"
+            "#{id} is looked up by web/client/src/voice_page.rs but is not in the /voice shell"
         );
     }
 }
@@ -314,7 +314,7 @@ fn the_voice_page_carries_every_element_the_wasm_client_requires() {
 /// `requireElement`. Same reason as the two above: a shell that stops carrying an
 /// id is a hard failure in the browser, so it has to be a failing test first.
 fn wasm_chat_ids() -> Vec<String> {
-    let path = std::path::Path::new("../client/src/chat_page.rs");
+    let path = std::path::Path::new("../web/client/src/chat_page.rs");
     let source = std::fs::read_to_string(path)
         .unwrap_or_else(|error| panic!("{} must be readable: {error}", path.display()));
 
@@ -351,7 +351,7 @@ fn the_chat_page_carries_every_element_the_wasm_client_requires() {
     for id in wasm_chat_ids() {
         assert!(
             rendered.contains(&format!("id=\"{id}\"")),
-            "#{id} is looked up by client/src/chat_page.rs but is not in the chat shell"
+            "#{id} is looked up by web/client/src/chat_page.rs but is not in the chat shell"
         );
     }
 }

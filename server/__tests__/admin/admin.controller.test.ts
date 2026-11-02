@@ -13,6 +13,7 @@ import type { Role } from '@/auth/roles';
 import { ConversationService } from '@/conversation/conversation.service';
 import { applySchema, DRIZZLE_INSTANCE } from '@/database/database.module';
 import * as schema from '@/database/schema';
+import { VIEWS_DIR } from '../views-dir';
 
 /**
  * The admin surface over real HTTP, rendered by the production templates.
@@ -31,8 +32,6 @@ const ROLE_BY_ID = new Map<number, Role>([
   [ALICE, 'user'],
   [ROOT, 'super'],
 ]);
-
-const VIEWS_DIR = join(process.cwd(), 'src', 'view', 'views');
 
 let app: NestExpressApplication;
 let origin: string;

@@ -23,5 +23,9 @@
     }
   },
   "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist", "web", "__tests__"]
+  // Anchored at this directory: the sibling apps (`../web`) are a separate
+  // program with its own tsconfig, and `__tests__` belongs to tsconfig.test.json
+  // because a test-only import (vitest) leaking into `nest build` would break
+  // `make build` / `make start` / `make deploy`, not just the tests.
+  "exclude": ["node_modules", "dist", "__tests__"]
 }

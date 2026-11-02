@@ -6,7 +6,7 @@
 //! `cfg(target_arch = "wasm32")` and stay thin: they translate browser events
 //! into core calls and core effects into browser calls.
 //!
-//! Why the split is load-bearing: the jsdom suite this replaces (`__tests__/web/`)
+//! Why the split is load-bearing: the jsdom suite this replaces (`web/__tests__/`)
 //! exists because of a production bug it would have caught — the client opened
 //! the socket and never sent the `start` frame, so the page sat on "正在连接…"
 //! with a healthy socket, a silent server and a clean console. That bug lives in

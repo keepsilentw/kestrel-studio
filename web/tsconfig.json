@@ -10,5 +10,8 @@
     "noEmit": true,
     "isolatedModules": true
   },
-  "include": ["scripts/**/*.ts", "vite-env.d.ts", "../__tests__/web/**/*.ts"]
+  // The web app is everything under this directory: the progressive-enhancement
+  // scripts, their jsdom suite, and the static files Vite copies verbatim. The
+  // Rust->WASM client (`client/`) is a separate Cargo package, not a TS program.
+  "include": ["scripts/**/*.ts", "vite-env.d.ts", "__tests__/**/*.ts"]
 }

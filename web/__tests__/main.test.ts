@@ -117,7 +117,7 @@ async function boot(
   }
   openedStreams = [];
   vi.stubGlobal('EventSource', FakeEventSource);
-  await import('../../web/scripts/main');
+  await import('../scripts/main');
 }
 
 interface StoredMessageFixture {
@@ -817,7 +817,7 @@ describe('历史会话删除', () => {
  * The fixture above mirrors src/view/views/chat.hbs rather than rendering it:
  * the client script cannot import server files without the `@` alias and Node
  * globals leaking into browser code. Template drift is therefore caught on the
- * server side instead — __tests__/server/view/view.controller.test.ts renders the real
+ * server side instead — server/__tests__/view/view.controller.test.ts renders the real
  * template and asserts every id this file's fixture depends on is present.
  * Change a template id and that suite fails; this one keeps testing behaviour.
  */

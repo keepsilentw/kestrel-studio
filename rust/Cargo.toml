@@ -16,8 +16,8 @@ license = "MIT"
 
 [dependencies]
 axum = "0.8"
-kestrel-proto = { path = "../proto" }
-kestrel-md = { path = "../md" }
+kestrel-proto = { path = "../crates/proto" }
+kestrel-md = { path = "../crates/md" }
 hyper = { version = "1", features = ["http1", "server"] }
 hyper-util = { version = "0.1", features = ["tokio", "server", "http1", "service"] }
 tokio = { version = "1", features = ["full"] }

@@ -147,7 +147,7 @@ async function boot(): Promise<void> {
   });
   URL.createObjectURL = (): string => 'blob:test';
   URL.revokeObjectURL = (): void => {};
-  await import('../../web/scripts/voice');
+  await import('../scripts/voice');
 }
 
 function element<T extends Element>(selector: string): T {

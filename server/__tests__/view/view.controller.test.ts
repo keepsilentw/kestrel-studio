@@ -15,12 +15,13 @@ import * as schema from '@/database/schema';
 import { TaskService } from '@/task/task.service';
 import { ViewController } from '@/view/view.controller';
 import type { Role } from '@/auth/roles';
+import { VIEWS_DIR } from '../views-dir';
 
 /**
  * Asserts against the actually rendered Handlebars output, with the view engine
- * wired exactly as src/main.ts wires it. That makes this the one place a
+ * wired exactly as `server/src/main.ts` wires it. That makes this the one place a
  * template change is caught: the client script cannot import server files, so
- * its own fixture (web/scripts/main.test.ts) can only mirror the contract.
+ * its own fixture (`web/__tests__/main.test.ts`) can only mirror the contract.
  *
  * The scaffold test at the bottom is the counterpart — it pins the ids
  * web/scripts/main.ts looks up with requireElement().
@@ -36,8 +37,6 @@ const ROLE_BY_ID = new Map<number, Role>([
   [BOB, 'user'],
   [ROOT, 'super'],
 ]);
-
-const VIEWS_DIR = join(process.cwd(), 'src', 'view', 'views');
 
 let app: NestExpressApplication;
 let origin: string;
