@@ -18,8 +18,15 @@ services:
     # PORT left in it would silently win and the app would listen on the wrong
     # port while the published mapping pointed elsewhere. compose's
     # `environment` takes precedence over `env_file`.
+    # RUST_LOG follows the same rule for the same reason: it is deployment config,
+    # not a secret, and leaving a one-off `debug` in `.env` would make every later
+    # run verbose. The default is what the binary already uses (info), so normal
+    # deploys log nothing per request; a grey release turns the access log on with
+    # `RUST_LOG=debug docker compose up -d` on the host. `make deploy` does not
+    # forward RUST_LOG, so the next deploy clears it by itself.
     environment:
       - PORT=${HOST_PORT:-8848}
+      - RUST_LOG=${RUST_LOG:-info}
     # The runtime base is `scratch`, which has no /tmp. SQLite creates temporary
     # files there whenever a query needs a temp b-tree, so the absence would only
     # show up as a rare "unable to open temporary file" under load. A tmpfs keeps
