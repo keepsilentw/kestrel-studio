@@ -25,47 +25,29 @@ const decoratorMetadata = swc.vite({
 });
 
 /**
- * What this runner is for: everything that can be decided from the source
- * alone — the pure modules, the services that can be instantiated against a
- * real in-memory schema (scoping, replay, status transitions), and the browser
- * script against jsdom.
+ * What this runner is for: everything that can be decided from the source alone —
+ * the pure modules, and the services that can be instantiated against a real
+ * in-memory schema (scoping, replay, status transitions).
  *
  * What it is deliberately NOT for: the agent turn loop
- * (`src/agent/agent.service.ts`) and the provider client
- * (`src/bailian/responses-client.ts`). Their behaviour is defined by a live
+ * (`server/src/agent/agent.service.ts`) and the provider client
+ * (`server/src/bailian/responses-client.ts`). Their behaviour is defined by a live
  * endpoint — the non-standard SSE comment lines, the reasoning event naming,
  * per-call latency, and what happens when a tool times out mid-stream. A fake
  * provider would only re-encode our assumptions about all of that, and it would
  * keep passing exactly when the provider changed, which is the case worth
  * catching. Dated evidence for that layer lives in docs/verification.md.
+ *
+ * This config belongs to the server app and is discovered by `vitest run` with the
+ * working directory at `server/` (`pnpm -C server test`); the browser suite has its
+ * own under `web/`. Paths below are relative to this directory, not the repo root.
  */
 export default defineConfig({
+  plugins: [decoratorMetadata],
+  resolve: { alias },
   test: {
-    projects: [
-      {
-        // Server and shared modules. Two kinds of test live here: the pure
-        // ones (no container, esbuild would have sufficed) and the ones that
-        // build a Nest container — hence SWC for the whole project rather than
-        // splitting it, which would mean two configs to keep in sync.
-        plugins: [decoratorMetadata],
-        resolve: { alias },
-        test: {
-          name: 'server',
-          environment: 'node',
-          include: ['__tests__/server/**/*.test.ts'],
-        },
-      },
-      {
-        // The browser script. Runs against jsdom; no decorators involved, so it
-        // keeps the default esbuild transform.
-        resolve: { alias },
-        test: {
-          name: 'web',
-          environment: 'jsdom',
-          include: ['__tests__/web/**/*.test.ts'],
-          setupFiles: ['__tests__/web/test-setup.ts'],
-        },
-      },
-    ],
+    name: 'server',
+    environment: 'node',
+    include: ['__tests__/**/*.test.ts'],
   },
 });

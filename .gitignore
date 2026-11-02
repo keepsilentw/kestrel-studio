@@ -1,6 +1,13 @@
 node_modules/
 dist/
 rust/target/
+# Cargo also writes a target dir for the packages that are not the server: the
+# WASM client builds into `web/client/target/`, and a direct `cargo test` on a
+# shared crate writes `crates/<name>/target/`. Neither is under `rust/`, so they
+# need their own lines. `dist/` above has no slash, so it already covers
+# `server/dist/`.
+crates/*/target/
+web/client/target/
 /public/
 data/
 storage/

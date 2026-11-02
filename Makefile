@@ -7,7 +7,29 @@ PNPM := pnpm
 PM2  := pm2
 APP  := kestrel-studio
 
+# Repository layout (monorepo; one Node package at the root, one Cargo package
+# per app). Each tree owns its own build/tooling config:
+#
+#   server/        NestJS backend  — package.json, src/, __tests__/, tsconfig*.json,
+#                                    nest-cli.json, drizzle.config.ts, dist/
+#   web/           frontend        — package.json, scripts/, styles/, public/,
+#                                    __tests__/, tsconfig.json, vite.config.mts,
+#                                    vitest.config.mts, client/ (Rust->WASM)
+#   rust/          Rust backend    — the axum server (`make deploy` ships this)
+#   crates/        shared Rust     — proto/ (wire types), md/ (markdown subset)
+#   public/        build output    — the asset directory BOTH servers serve
+#
+# The root `package.json` is the pnpm workspace root and declares **no** dependencies:
+# every package belongs to the app that imports it, and each app owns its config, its
+# tooling and its test runner. `pnpm-workspace.yaml` lists the two Node apps; the Rust
+# packages (rust/, crates/, web/client/) stay out of it. Commands therefore run per app
+# (`pnpm --dir server run build`) — except the nest/drizzle ones, whose script does
+# `cd ..` first, because `.env`, `DATABASE_FILE` and `STORAGE_DIR` are resolved from the
+# working directory and must keep the repo root as their cwd.
+
 CARGO ?= cargo
+SERVER_DIR ?= $(CURDIR)/server
+WEB_DIR    ?= $(CURDIR)/web
 # The Rust tree (rust/) is what `make deploy` ships now. `make start` (pm2 + the
 # Nest process) is still the Nest pipeline until the WASM client lands; the two
 # are separate paths and neither one silently takes the other's port.
@@ -23,7 +45,7 @@ RUST_LINUX_TARGET ?= x86_64-unknown-linux-musl
 LINUX_TARGET_DIR ?= /tmp/kestrel-studio-linux-target
 LINUX_BINARY     ?= /tmp/kestrel-studio-linux/kestrel-studio
 
-# Local port the app listens on. Keep in sync with src/config/configuration.ts.
+# Local port the app listens on. Keep in sync with server/src/config/configuration.ts.
 PORT ?= 8848
 
 DEPLOY_HOST ?= lavo-test
@@ -74,9 +96,9 @@ help:
 	@echo "    make logs                   跟随服务日志"
 	@echo ""
 	@echo "  质量"
-	@echo "    make typecheck              类型检查（后端 + 前端脚本 + 测试）"
-	@echo "    make test                   运行单元测试（纯模块，无 DI）"
-	@echo "    make test-watch             单元测试 watch 模式"
+	@echo "    make typecheck              两个 app 各自 typecheck（server 含测试配置）"
+	@echo "    make test                   单元测试（server + web 两轮 runner，纯模块无 DI）"
+	@echo "    make test-watch             server 侧 watch（web 侧：pnpm --dir web run test:watch）"
 	@echo ""
 	@echo "  清理"
 	@echo "    make clean                  清理构建产物（保留 data/ 与 storage/）"
@@ -109,26 +131,29 @@ dev:
 		echo "      先执行 make stop，或直接用 make start / make restart。"; \
 		echo ""; \
 	fi
-	$(PNPM) dev
+	$(PNPM) --dir $(SERVER_DIR) run dev
 
 web-watch:
-	$(PNPM) web:watch
+	$(PNPM) --dir $(WEB_DIR) run watch
 
 # ===== 构建 =====
 
 build: build-web build-server
 
 build-web:
-	$(PNPM) web:build
+	$(PNPM) --dir $(WEB_DIR) run build
 
 build-server:
-	$(PNPM) build
+	$(PNPM) --dir $(SERVER_DIR) run build
 
 # ===== 运行（pm2 守护） =====
 
 # The frontend has no runtime process — Vite only emits assets that Nest serves —
 # so "starting web and server" means building the assets and putting the Nest
 # process under pm2.
+# `--cwd` stays the repo root even though the entry point is now `server/dist`:
+# `.env`, `data/` and `storage/` are all resolved from the working directory, and
+# moving them would change what the running instance sees.
 start: build
 	@echo ""
 	@echo "==> 启动 $(APP)"
@@ -137,9 +162,9 @@ start: build
 			&& echo "    已重启现有 pm2 进程" \
 			|| { echo "    重启失败，pm2 输出："; $(PM2) restart $(APP) --update-env; exit 1; }; \
 	else \
-		$(PM2) start "$(CURDIR)/dist/main.js" --name $(APP) --cwd "$(CURDIR)" >/dev/null 2>&1 \
+		$(PM2) start "$(CURDIR)/server/dist/main.js" --name $(APP) --cwd "$(CURDIR)" >/dev/null 2>&1 \
 			&& echo "    已创建 pm2 进程" \
-			|| { echo "    启动失败，pm2 输出："; $(PM2) start "$(CURDIR)/dist/main.js" --name $(APP) --cwd "$(CURDIR)"; exit 1; }; \
+			|| { echo "    启动失败，pm2 输出："; $(PM2) start "$(CURDIR)/server/dist/main.js" --name $(APP) --cwd "$(CURDIR)"; exit 1; }; \
 	fi
 	@sleep 2
 	@printf "    健康探测    "
@@ -182,7 +207,7 @@ status:
 	@printf "  健康探测    "
 	@$(HEALTH_PROBE)
 	@echo ""
-	@echo "  构建产物    dist: $$([ -f dist/main.js ] && echo 已就绪 || echo 缺失)   public: $$([ -f public/assets/main.js ] && echo 已就绪 || echo 缺失)"
+	@echo "  构建产物    dist: $$([ -f server/dist/main.js ] && echo 已就绪 || echo 缺失)   public: $$([ -f public/assets/main.js ] && echo 已就绪 || echo 缺失)"
 	@echo ""
 
 logs:
@@ -191,22 +216,20 @@ logs:
 # ===== 质量 =====
 
 typecheck:
-	$(PNPM) typecheck
-	$(PNPM) run typecheck:web
-	$(PNPM) run typecheck:test
+	$(PNPM) -r run typecheck
 
 # Unit tests cover the pure modules only. See vitest.config.mts for why tests
 # needing a Nest container are out of scope for this runner.
 test:
-	$(PNPM) test
+	$(PNPM) -r run test
 
 test-watch:
-	$(PNPM) test:watch
+	$(PNPM) --dir $(SERVER_DIR) run test:watch
 
 # ===== 清理 =====
 
 clean:
-	rm -rf dist public
+	rm -rf dist server/dist public
 
 # ===== Rust 实现 =====
 
