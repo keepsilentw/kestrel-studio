@@ -1,6 +1,14 @@
-# node_modules, dist and public ARE deliberately shipped: the host's outbound
-# bandwidth (~65 KB/s) makes installing or building them there impractical, so
-# the build context carries the finished artifacts from the dev machine.
+# Since 2026-10-30 the deploy context is NOT the repository: scripts/deploy.sh
+# assembles it in /tmp/kestrel-studio-deploy from a whitelist (public/,
+# .build/linux-x86_64/kestrel-studio, Dockerfile, docker-compose.yml,
+# .dockerignore, Makefile). Everything the image needs is already built on the
+# dev machine, because the host's outbound bandwidth (~65 KB/s) makes installing
+# or compiling there impractical. node_modules and dist used to be shipped by the
+# Node pipeline and are gone with it.
+#
+# So the list below only bites on a manual `docker compose build` from a full
+# checkout. It must keep excluding runtime state (data/, storage/) and secrets
+# (.env), and must NOT exclude public/ or .build/ — those are the inputs.
 #
 # Every path below is anchored with a leading slash. Unanchored patterns match
 # at ANY depth, and a bare `storage` silently deleted
