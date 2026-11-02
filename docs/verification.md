@@ -836,3 +836,44 @@ sqlite3 "file:/opt/kestrel-studio/data/kestrel-studio.db?mode=ro" \
 5. **浏览器控制台零噪音**：切换后没有任何一次浏览器侧观察。
 
 2–5 都需要登录态或真人操作，只能接着在这台机器上人工走。
+同日复核见 §13.6：其中 1、2 已**正证未在线上跑过**（按时间戳查新行，语音另查 `voice session opened`
+日志与「语音会话」行）；3、4、5 从服务器侧**取不到证**（Rust 无请求级日志，只读操作不写行），
+只能由操作者报告，并与机器证据分开标注。
+
+### 13.6 复核：13:47 那次部署之后，线上写入为 0（同日）
+
+操作者报告"已在浏览器中验证过"之后先复核，而不是把结论抄进证据文件。核对方式是按时间戳查
+新行（13:47:00 CST = `1793598420000` ms）：
+
+```bash
+ssh lavo-test 'sqlite3 "file:/opt/kestrel-studio/data/kestrel-studio.db?mode=ro" \
+  "select (select count(*) from messages            where created_at > 1793598420000) msgs, \
+          (select count(*) from assets              where created_at > 1793598420000) assets, \
+          (select count(*) from conversation_events where created_at > 1793598420000) evs, \
+          (select count(*) from generation_tasks    where created_at > 1793598420000) tasks;"'
+```
+
+结果 `0|0|0|0`。`sessions` 仍是 13:35 / 13:39 / 13:42 那 3 行，`docker logs --since
+2026-11-02T13:47:00` 只有启动那 3 行，`conversations` 最新仍是 13:45:53 的会话 7。
+
+**这五条要分成两类，不能混为一谈：**
+
+| 项 | 服务器侧能否取证 | 复核结论 |
+|---|---|---|
+| 出图 / 视频任务 | 能——任一轮都写 `messages` + `assets`（视频另写 `generation_tasks`） | **正证未在线上跑过**（零新行） |
+| 语音 | 能——`voice/session.rs` 建会话写 `title='语音会话'`，并打 `tracing::info!("voice session opened")` | **正证未在线上跑过**：库里那 3 条「语音会话」（id 4 / 5 / 6）全部写于 2026-09-22，就是 §4.1 那批 Nest 期实测留下的；11-02 一条也没有，日志里也没有 `voice session opened` |
+| `/admin` 只读回放 | **不能**——读操作不写任何行 | 既不能证实也不能证伪 |
+| SSE 断线续传 | **不能**——重放只读事件日志，不写新行 | 同上 |
+| 浏览器控制台零噪音 | **不能**——发生在浏览器里 | 同上 |
+
+取证边界的根因在代码里，不是这次没查到：`rust/server/src/main.rs` 的 `EnvFilter` 默认 `info`，
+全仓**没有任何请求级日志层**（无 `TraceLayer` / `HttpMakeSpan` / `on_request`），`info` 只打在
+启动、会话清理与语音生命周期上。所以线上一次纯读的走查（打开页面、翻历史、进 `/admin` 看回放、
+断线重连）在服务器侧**必然无痕**。
+
+因此 P1 的剩余判据天然是两种证据拼起来的，下次走查请照这个顺序留痕：
+
+1. **写路径**：发一张图 → 跑一个视频 → 打一次语音。每条之后本节上面的 SQL 应当出现新行，
+   语音还应多一条 `voice session opened` 与一个新会话行。做完我复查并落记录。
+2. **只读路径**：`/admin` 列表与只读回放、刷新后的事件重放、控制台条目数——这三条只能由人报告，
+   报告本身记为「操作者观察」，与机器证据分开写，不混标"实测通过"。

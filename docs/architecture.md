@@ -633,6 +633,14 @@ WebSocket 的 upgrade 不经过 Express，所以 `AuthenticatedGuard` 对它无�
 另有一处与 Nest 的实现差异未消除：上游工具派发轮次在循环内 `await`，与 Nest 的 promise 链串
 式不同（后果是一次工具调用期间 `stop` 会被延后）。
 
+**取证边界（写在这里是为了下次别再当作遗漏）**：本服务没有任何请求级日志——`main.rs` 的
+`EnvFilter` 默认 `info`，全仓没有 `TraceLayer` / `HttpMakeSpan` / `on_request` 一类的横切件，
+`info` 只打在启动、会话清理与语音生命周期上。于是纯读的一轮走查（翻页、进 `/admin` 看回放、
+断线重连）在服务器侧**必然无痕**；只有写路径留下可核对的证据（`messages` / `assets` /
+`generation_tasks` 的新行，语音的 `voice session opened` 与「语音会话」行）。
+复核过程与分类见 [verification.md](verification.md) §13.6，是否补一层请求日志是
+[roadmap.md](roadmap.md) §3 里的决策项，不在本节的"未做"清单里。
+
 语音的两项遗留**不是移植遗漏，而是需要决策或需要真机**，与 Nest 版同状态：
 
 - **打断（barge-in）**：需要改 `nest/client/scripts/voice.ts`（播上一句时按下按钮要先停播再

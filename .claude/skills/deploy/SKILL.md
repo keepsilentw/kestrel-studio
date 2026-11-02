@@ -223,6 +223,23 @@ let `sqlite3` checkpoint the WAL on close — harmless and even useful, but then
 don't be surprised when `kestrel-studio.db-wal` shrinks and the main file grows
 (docs/deployment.md §7 already records this).
 
+**A read-only pass leaves no trace.** There is no request-level logging (the
+`EnvFilter` defaults to `info` and there is no `TraceLayer` / `HttpMakeSpan` in
+the tree), and reads do not write rows — browsing history, opening `/admin`, or
+reconnecting an SSE stream simply cannot be corroborated from the server side.
+Only the write path is auditable:
+
+| What was exercised | Evidence to look for |
+|---|---|
+| an image or video turn | new `messages` + `assets` rows (video also `generation_tasks`) |
+| a voice call | `voice session opened` in `docker logs`, plus a conversation titled `语音会话` |
+| a login | a new `sessions` row whose `sess` carries the principal at top-level `user` |
+
+So when a manual browser walkthrough gets reported as "verified", the first
+question is which of those rows appeared. If the answer is only the read-only
+items, record it as an operator observation, not machine evidence — and never let
+it flip a roadmap.md P1 criterion on its own (docs/verification.md §13.6 walks
+through exactly this case).
 ## Troubleshooting
 
 `deploy.sh` stops with **"no /tmp/kestrel-studio-linux/kestrel-studio"** or
