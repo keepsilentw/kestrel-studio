@@ -48,7 +48,7 @@ afterEach(() => {
 describe('loadConfig — 默认值', () => {
   it('全部缺省时给出一组可用默认值', () => {
     const config = loadConfig();
-    expect(config.port).toBe(8848);
+    expect(config.port).toBe(9949);
     expect(config.isProduction).toBe(false);
     expect(config.sessionSecret).toMatch(/^[0-9a-f]{64}$/);
     expect(config.databaseFile).toBe(join('data', 'kestrel-studio.db'));
@@ -68,7 +68,7 @@ describe('loadConfig — 默认值', () => {
     process.env.PORT = '   ';
     process.env.STORAGE_DIR = '';
     const config = loadConfig();
-    expect(config.port).toBe(8848);
+    expect(config.port).toBe(9949);
     expect(config.storageDir).toBe('storage');
   });
 });
@@ -84,9 +84,9 @@ describe('loadConfig — PORT', () => {
     expect(loadConfig().port).toBe(9000);
   });
 
-  it.each(['abc', '0', '-1', '3000.5', 'NaN'])('非法值 %s 回退到 8848', (value) => {
+  it.each(['abc', '0', '-1', '3000.5', 'NaN'])('非法值 %s 回退到 9949', (value) => {
     process.env.PORT = value;
-    expect(loadConfig().port).toBe(8848);
+    expect(loadConfig().port).toBe(9949);
   });
 });
 
@@ -135,7 +135,7 @@ describe('loadConfig — 每次调用都重新读环境', () => {
   it('不缓存，改环境后立刻生效', () => {
     // The tests below rely on this; so does deploy.sh, which writes .env and
     // restarts the container rather than reloading anything in-process.
-    expect(loadConfig().port).toBe(8848);
+    expect(loadConfig().port).toBe(9949);
     process.env.PORT = '1234';
     expect(loadConfig().port).toBe(1234);
   });

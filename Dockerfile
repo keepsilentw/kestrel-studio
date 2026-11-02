@@ -2,7 +2,7 @@
 #
 # The host has ~65 KB/s of outbound bandwidth and cannot reach the Docker Hub
 # registry, so the image is assembled from artifacts the dev machine already
-# produced: a statically linked Linux binary (see `make build-rust-server-linux`) plus
+# produced: a statically linked Linux binary (see `make build-linux`) plus
 # the client assets in `public/`. `scratch` is an empty base that Docker never
 # pulls, which is what keeps the zero-download property total — there is no
 # base image to cache on the host at all.

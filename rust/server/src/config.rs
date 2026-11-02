@@ -89,7 +89,7 @@ fn read_port() -> u16 {
     read_env("PORT")
         .and_then(|raw| raw.parse::<u16>().ok())
         .filter(|port| *port > 0)
-        .unwrap_or(8848)
+        .unwrap_or(9949)
 }
 
 fn read_reasoning_effort() -> ReasoningEffort {
@@ -197,20 +197,6 @@ pub(crate) mod hex {
             out.push(char::from_digit((byte & 0x0f) as u32, 16).unwrap());
         }
         out
-    }
-
-    pub fn decode(value: &str) -> Option<Vec<u8>> {
-        let bytes = value.as_bytes();
-        if bytes.len() % 2 != 0 {
-            return None;
-        }
-        let mut out = Vec::with_capacity(bytes.len() / 2);
-        for pair in bytes.chunks(2) {
-            let hi = char::from(pair[0]).to_digit(16)?;
-            let lo = char::from(pair[1]).to_digit(16)?;
-            out.push(((hi << 4) | lo) as u8);
-        }
-        Some(out)
     }
 }
 

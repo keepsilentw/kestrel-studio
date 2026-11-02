@@ -63,10 +63,10 @@ function readEnv(key: string): string | null {
 function readPort(): number {
   const raw = readEnv('PORT');
   if (raw === null) {
-    return 8848;
+    return 9949;
   }
   const parsed = Number(raw);
-  return Number.isInteger(parsed) && parsed > 0 ? parsed : 8848;
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : 9949;
 }
 
 /**
