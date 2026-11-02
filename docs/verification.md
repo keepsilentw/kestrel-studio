@@ -712,6 +712,7 @@ test result: ok. 13 passed; 0 failed
 一句话更正前面的载荷结论：桩量的"持平"不成立，真实语音页把模块推到约 85 KB gz
 （整站现客户端 21 KB gz）。**这条到此为止，不再作为决策输入**——按用户判断，体积不是这个
 迁移该纠结的量。已保留 `panic = "abort"` + `codegen-units = 1`（顺手省 1.7 KB gz）。
+「不再作为决策输入」不等于「数字可以烂在文档里」：对话页两项补完后这个数字又涨了一次，见 §13.9，§4.1 那句「实测持平」现在引用的是过期测量。
 
 ### 12.2 代码到位到哪一步（重要：运行时一次都没验过）
 
@@ -929,7 +930,6 @@ $ CARGO_TARGET_DIR=/tmp/kestrel-studio-target cargo test --manifest-path rust/se
 | 同侧重部署不登人 | 容器连续重建三次（info→debug→info），`sessions` 仍是 §13.4 那 3 行，`expired sessions cleared=0`。与 §13.4 换侧登出是两回事，这里签名口径与 `SESSION_SECRET` 都没动 |
 
 复现命令与读日志的限制在 deployment.md §2.1；那里原本写的 grep 命令是错的，已按 §13.8 改正。
-
 ### 13.8 一个踩到的坑：日志带 ANSI，朴素 grep 抓不到（2026-11-02）
 
 `tracing_subscriber::fmt()` 开着 `ansi` 特性就**恒定**输出转义序列，不看 stderr 是不是 TTY——
@@ -956,3 +956,41 @@ docker logs --since 2m kestrel-studio 2>&1 | sed 's/\x1b\[[0-9;]*m//g' | grep -E
 ESC 且 `method=GET` 不再连续）——后者直接复现根因，不是转述实现。`cargo test` 166 passed / 0 failed。
 
 **唯一残留**：17:29 之前已经写进日志文件的那些行仍带 ANSI，读那段历史日志要去色；新行不需要。
+
+### 13.9 WASM 包体积复测（2026-11-02 18:16，含对话页两项）
+
+对话页的下载对话框与历史刷新是第一批**真进浏览器**的 DOM 代码之外还带进了 canvas 与 fetch 路径的
+功能，`make build-wasm` 之后重新量一次（`wasm-opt` 已跑，profile = release，`panic = "abort"` +
+`codegen-units = 1` 保持）：
+
+```bash
+for f in public/wasm/kestrel_client_bg.wasm public/wasm/kestrel_client.js \
+         public/assets/main.js public/assets/main.css public/assets/voice.js public/capture.js; do
+  printf "%-38s raw=%8d gz=%7d\n" "$f" "$(wc -c < "$f")" "$(gzip -c9 "$f" | wc -c)"
+done
+```
+
+| 文件 | raw | gz |
+|---|---|---|
+| `public/wasm/kestrel_client_bg.wasm` | 368,270 | **131,647** |
+| `public/wasm/kestrel_client.js`（glue） | 55,333 | 9,577 |
+| `public/capture.js`（worklet，删不掉的那 20 行 JS） | 1,687 | 905 |
+| `public/assets/main.js`（现客户端） | 60,503 | 18,195 |
+| `public/assets/main.css` | 16,153 | 3,527 |
+| `public/assets/voice.js` | 6,517 | 3,064 |
+
+读法：
+
+- **对话页**从 21.7 KB gz（`main.js` + `main.css`）换成 wasm 一侧要付 142.1 KB gz
+  （wasm + glue），约 **6.5 倍**；§12 当时那句「约 85 KB gz」已经低了 46 KB，因为语音之后又加上了
+  对话页的 canvas 重编码与列表刷新。
+- 全站两个页面都换过去则是 142.1 + 0.9 KB gz 对 24.8 KB gz（`main.js` + `main.css` + `voice.js`）。
+- 这个数字**不作为决策输入**（§12 那句判断仍然成立），这里只负责让 roadmap.md §4.1 不再挂着
+  一个过期的「实测持平」。
+- **没有做逐项归因**：没跑 `cargo bloat`（未安装），所以「哪一块最大」这个问题现在没有答案。
+  能说的是增长轨迹：桩量（markdown 子集 + `voice_core` + serde_json，无 DOM，§11.5）24.4 KB gz → 语音页（socket +
+  AudioWorklet 胶水 + 状态机）约 85 KB gz → 对话页（canvas 重编码 + fetch + 列表刷新）131.6 KB gz，
+  即两次 DOM 化各带来 40–50 KB gz；glue 那 9.6 KB gz 是 wasm-bindgen 按导出函数生成的桥。要真想
+  瘦身，先装 `cargo-bloat` 量一次，而不是照这段推测动手。
+- 产物本身仍未被任何模板引用（`initChat` / `initVoice` 零调用点），所以这些字节目前**一个都没
+  下载给用户**。切换发生在 P4 之前那次独立改动。
