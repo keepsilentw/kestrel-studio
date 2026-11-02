@@ -191,7 +191,7 @@ ssh lavo-test "rm -rf /opt/kestrel-image"
 2. **`.env` 必须复制而不是重新生成**。`deploy.sh` 只在目录下没有 `.env` 时创建它，
    重新生成会换掉 `SESSION_SECRET`（所有人被登出）与百炼 key。
 3. **服务器上的资产路径不需要修**（现在连本地也不需要了）。`assets.file_path` 只存**文件名**，
-   读取时按运行中的 `STORAGE_DIR` 解析（`server/src/media/asset-path.ts`）；旧行里的绝对路径仍然认，
+   读取时按运行中的 `STORAGE_DIR` 解析（`nest/server/src/media/asset-path.ts`）；旧行里的绝对路径仍然认，
    文件还在原处就原样用。所以容器里（cwd `/app`）与本地都一样工作，改目录名不再需要动数据。
    这条曾经是"本地必须手工修库"的坑，根因与改法见
    [implementation-notes.md](implementation-notes.md) §7。

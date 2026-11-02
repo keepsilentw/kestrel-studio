@@ -166,7 +166,7 @@ hbs 只负责渲染首屏骨架：登录态判断、历史会话侧栏、页面�
   目的是刷新页面或重进会话时能完整回放思考过程，而不只剩最终文本。
 - 图片二进制不入库，只存元数据 + **文件名**，避免单库文件膨胀。
   `assets.file_path` 存的是文件**名**，读取时按运行中的 `STORAGE_DIR` 解析
-  （`server/src/media/asset-path.ts`）——目录是运行环境的属性，写进数据就等于绑死一次部署。
+  （`nest/server/src/media/asset-path.ts`）——目录是运行环境的属性，写进数据就等于绑死一次部署。
   搬迁前写入的绝对路径仍被兼容：文件还在原处就原样用。踩坑经过见
   [implementation-notes.md](implementation-notes.md) §7。
 - 初始化时 seed 账号（`admin` 本地引导账号；超管凭据来自 `SUPER_ADMIN_*` 环境变量），
@@ -214,7 +214,7 @@ sequenceDiagram
 
 ### SSE 事件表
 
-真源是 `server/src/common/sse.ts` 的闭合联合类型（轮次与会话事件都在内）。
+真源是 `nest/server/src/common/sse.ts` 的闭合联合类型（轮次与会话事件都在内）。
 带 `id` 的事件都进了日志，可按游标重放；连接级事件不带 id，不得移动客户端游标。
 
 | event | id | data | 说明 |
@@ -243,14 +243,14 @@ sequenceDiagram
 
 ## 8. 前端结构
 
-无框架，但上构建工具。**一个页面一个入口**，`web/vite.config.mts` 的 `input` 键就是产物名：
+无框架，但上构建工具。**一个页面一个入口**，`nest/client/vite.config.mts` 的 `input` 键就是产物名：
 
 | 文件 | 页面 | 职责 |
 |---|---|---|
-| `web/scripts/main.ts` | `GET /` | 提交轮次、订阅会话事件流并按事件绘制 DOM、图片预览（原生 `<dialog>`）、下载弹窗。单文件 |
-| `web/scripts/voice.ts` | `GET /voice` | 麦克风采集（AudioWorklet）、WS 客户端、音频播放、会话事件流订阅 |
-| `web/styles/main.css` | 两者共用 | 布局与主题，按 `:root` 变量 + 章节横幅组织 |
-| `web/__tests__/test-setup.ts` | — | 测试用，补 jsdom 缺失的 `scrollIntoView` 与 `<dialog>` 的 `showModal`/`close` |
+| `nest/client/scripts/main.ts` | `GET /` | 提交轮次、订阅会话事件流并按事件绘制 DOM、图片预览（原生 `<dialog>`）、下载弹窗。单文件 |
+| `nest/client/scripts/voice.ts` | `GET /voice` | 麦克风采集（AudioWorklet）、WS 客户端、音频播放、会话事件流订阅 |
+| `nest/client/styles/main.css` | 两者共用 | 布局与主题，按 `:root` 变量 + 章节横幅组织 |
+| `nest/client/__tests__/test-setup.ts` | — | 测试用，补 jsdom 缺失的 `scrollIntoView` 与 `<dialog>` 的 `showModal`/`close` |
 | （无） | `/admin` 各页 | 管理页刻意不引客户端脚本：纯表单 + 302，见 §12 |
 
 **助手**的最终文本用 `marked` 渲染成 HTML；用户自己那句话是**纯文本**——服务端转义后直接输出，
@@ -283,12 +283,12 @@ kestrel-studio/
   Makefile              命令入口（make help 列全部）
   package.json          workspace 根：**不声明依赖**，只有 `pnpm -r build|typecheck|test` 三条聚合脚本
   pnpm-lock.yaml        全仓一份（workspace 只有一份锁）
-  pnpm-workspace.yaml   `packages: [server, web]` + pnpm 12 的 allowBuilds（放行原生模块构建脚本）
+  pnpm-workspace.yaml   `packages: [nest/server, nest/client]` + pnpm 12 的 allowBuilds（放行原生模块构建脚本）
   Dockerfile            服务器上零下载构建（见 deployment.md §1）
   docker-compose.yml
   scripts/              deploy.sh / bootstrap-host.sh
   scripts/gen-blowfish-tables.mjs
-                        从 bcryptjs 抽 Blowfish π 常量表，供 rust/src/auth 使用
+                        从 bcryptjs 抽 Blowfish π 常量表，供 rust/server/src/auth 使用
   docs/
     README.md             文档索引与维护约定
     architecture.md       本文：系统设计与关键决策
@@ -296,11 +296,11 @@ kestrel-studio/
     implementation-notes.md  实现期环境踩坑台账
     deployment.md         服务器部署与运维
     verification.md       端点实测与端到端验证
-  server/               NestJS 后端（Node 栈，迁移期仍是线上进程；roadmap.md §4 P4 删除它）
-    package.json        本 app 的依赖与脚本；nest / drizzle 脚本先 `cd ..`（cwd 必须是仓库根）
-    vitest.config.mts   node 环境的测试配置（`pnpm --dir server test`）
+  nest/server/               NestJS 后端（Node 栈，迁移期仍是线上进程；roadmap.md §4 P4 删除它）
+    package.json        本包的依赖与脚本；nest / drizzle 脚本先 `cd ../..`（cwd 必须是仓库根）
+    vitest.config.mts   node 环境的测试配置（`pnpm --dir nest/server test`）
     tsconfig.json       后端；tsconfig.test.json 覆盖测试
-    nest-cli.json       assets 把 view/views/** 拷进 server/dist
+    nest-cli.json       assets 把 view/views/** 拷进 nest/server/dist
     drizzle.config.ts
     dist/               nest build 产物（gitignore）
     src/
@@ -323,22 +323,21 @@ kestrel-studio/
       common/              SSE 写入与解析、工具参数读取、错误描述、签名 URL
       types/               .d.ts 声明（express / session store）
     __tests__/           node 环境，按 src 的模块结构镜像
-  web/                  前端：代码与配置同目录（roadmap.md §4 P3/P4 换成 WASM 产物）
-    package.json        本 app 的依赖与脚本（vite / tsc / vitest 都在本目录直接跑）
+  nest/client/                 Nest 栈的浏览器客户端：代码与配置同目录
+    package.json        本包的依赖与脚本（vite / tsc / vitest 都在本目录直接跑）
     tsconfig.json        DOM lib、noEmit
     vite.config.mts      前端打包：一个页面一个入口，产物写进仓库根的 public/
-    vitest.config.mts    jsdom 环境的测试配置（`pnpm --dir web test`）
+    vitest.config.mts    jsdom 环境的测试配置（`pnpm --dir nest/client test`）
     scripts/main.ts      对话页：提交轮次、事件流绘制、图片预览
     scripts/voice.ts     语音页：采集、WS、播放
     styles/main.css      两页共用
-    public/              静态资源（logo.svg、AudioWorklet 的 capture.js），由 Vite 复制
+    public/              静态资源（logo.svg），由 Vite 复制
     vite-env.d.ts
     __tests__/           jsdom 环境：main.test.ts / voice.test.ts / test-setup.ts
-    client/              浏览器客户端的 Rust 实现（kestrel-client，Rust→WASM）
   crates/               服务端与浏览器**共享**的 Rust 库（谁都不能自己抄一份）
     proto/               线类型 kestrel-proto：语音帧、会话事件、TaskKind、Mode
     md/                  线渲染 kestrel-md：HTML 转义 + Markdown 子集
-  rust/                 同一服务端的 Rust 实现（见 §13）
+  rust/server/                 同一服务端的 Rust 实现（见 §13）
     Cargo.toml
     src/
       main.rs            装配：.env 叠加 → 配置 → 建表/seed → 后台 worker → axum 路由
@@ -353,7 +352,18 @@ kestrel-studio/
       admin/             超管面
       net/ws.rs          RFC6455 帧编解码（无 tungstenite 可用）
       voice/             票据、协议帧、字节泵、通话状态机、上游中继
-  public/               Vite 产物 + logo（构建生成，gitignore）——两个服务端读同一份
+  rust/client/                浏览器客户端：Rust 实现，编译为 WASM（kestrel-client）
+    Cargo.toml
+    public/capture.js   AudioWorklet processor（由 Makefile 在 Vite 构建后复制到 public/）
+    src/
+      lib.rs            宿主可测的核心模块 + wasm32 门控的 DOM 层
+      voice_core.rs     语音帧序列状态机（无 DOM，宿主 cargo test）
+      chat_core.rs      对话页判定层（重放去重、resync、下载计算）
+      audio.rs          getUserMedia / AudioWorklet / PCM 播放
+      voice_page.rs     语音页 DOM 绑定
+      chat_page.rs      对话页 DOM 绑定
+      wire.rs           WS/SSE 线格式与鉴权
+  public/               Vite 产物 + logo + wasm/（构建生成，gitignore）——两个服务端读同一份
   data/                  sqlite 文件（gitignore）
   storage/               生成的图片与视频（gitignore）
 ```
@@ -361,27 +371,27 @@ kestrel-studio/
 决定这个形状的三条约定：
 
 - **Node 侧是 pnpm workspace，依赖声明在用到它的那棵树里**。根 `package.json` 不声明任何依赖，
-  只留 `pnpm -r` 的聚合脚本；这样 roadmap.md §4 P4「删 Node 栈」= 删 `server/` 与 `web/` 的 TS 面
+  只留 `pnpm -r` 的聚合脚本；这样 roadmap.md §4 P4「删 Node 栈」= 删 `nest/server/` 与 `nest/client/` 的 TS 面
   （配置与依赖跟着树走）+ 根清单和锁整个删掉，不会留下需要手工裁剪的依赖列表。
   **Rust 侧不合并 Cargo workspace**：那要把四份 `Cargo.lock` 重写成一份，收益只是少一个 `target/`。
 - **`public/` 与 `data/` `storage/` 留在仓库根**。`public/` 是两个服务端共用的静态目录
   （Nest 走 `useStaticAssets`，Rust 走 `STATIC_DIR`），`data/`/`storage/` 是运行时状态；
   三者都不属于任何一棵源码树。
 - **nest / drizzle 起的进程 cwd 必须是仓库根**。`.env`、`DATABASE_FILE`、`STORAGE_DIR` 都按 cwd
-  解析，cwd 挪进 `server/` 会让本地跑打开一个全新的空库。所以 `server/package.json` 里这几条脚本
-  先 `cd ..` 再带配置指针执行（`nest build -c server/nest-cli.json -p server/tsconfig.json`、
-  `drizzle-kit push --config server/drizzle.config.ts`）——pnpm 在跑脚本前已把本 app 的
-  `node_modules/.bin` 放进 PATH，`cd ..` 不会丢二进制。`vite` / `tsc` / `vitest` 不受这条约束，
-  在本 app 目录直接跑，配置与路径都相对自身解析。连带两条硬规则：`server/nest-cli.json` 的
-  `sourceRoot` 写的是 `server/src`（CLI 把它与 cwd 拼接），`assets` 不写 `outDir`（写了就按 cwd
-  拼成仓库根的 `dist/`；不写则沿用 tsconfig 的 `server/dist`，正是 `main.ts` 找模板的位置）。
+  解析，cwd 挪进 `nest/server/` 会让本地跑打开一个全新的空库。所以 `nest/server/package.json` 里这几条脚本
+  先 `cd ../..` 再带配置指针执行（`nest build -c nest/server/nest-cli.json -p nest/server/tsconfig.json`、
+  `drizzle-kit push --config nest/server/drizzle.config.ts`）——pnpm 在跑脚本前已把本包的
+  `node_modules/.bin` 放进 PATH，`cd ../..` 不会丢二进制。`vite` / `tsc` / `vitest` 不受这条约束，
+  在本包目录直接跑，配置与路径都相对自身解析。连带两条硬规则：`nest/server/nest-cli.json` 的
+  `sourceRoot` 写的是 `nest/server/src`（CLI 把它与 cwd 拼接），`assets` 不写 `outDir`（写了就按 cwd
+  拼成仓库根的 `dist/`；不写则沿用 tsconfig 的 `nest/server/dist`，正是 `main.ts` 找模板的位置）。
 
 ## 10. 配置与凭据
 
 沿用 `bailian-media-mcp` 的策略：`BAILIAN_API_KEY` 环境变量优先，回退读 cc-switch 库中的
 `bailian-token-plan` provider。这样切换 provider 不需要改配置，key 也不会落到仓库文件里。
 
-配置来源有两层，顺序不能反：入口先由 `server/src/config/env-file.ts` 把项目根的 `./.env`（git 忽略，
+配置来源有两层，顺序不能反：入口先由 `nest/server/src/config/env-file.ts` 把项目根的 `./.env`（git 忽略，
 镜像内不存在）**叠加**进 `process.env`——只填没有的键，绝不覆盖真实环境；之后
 `configuration.ts` 才是唯一的读取点。所以线上容器（docker `env_file` 注入、镜像里没有 `.env`）
 与本地（可选的 `.env`）走的是同一套语义，差别只在叠加层有没有文件。
@@ -406,7 +416,7 @@ kestrel-studio/
 "模式"是**每一轮的属性**（见 [roadmap.md](roadmap.md) §2.4.3），而实时语音是一段**持续的双向
 会话**，没有"提交—完成"的轮次边界。塞进模式选择器就得改造轮次模型本身，换来只是省一个入口。
 
-代码在 `server/src/voice/`（协议、上游客户端、编排、网关）与 `web/scripts/voice.ts` + `views/voice.hbs`。
+代码在 `nest/server/src/voice/`（协议、上游客户端、编排、网关）与 `nest/client/scripts/voice.ts` + `views/voice.hbs`。
 上游协议细节与实测数据见 [verification.md](verification.md) §3、§4，本节只写结构。
 
 ### 11.1 链路
@@ -476,7 +486,7 @@ WebSocket 的 upgrade 不经过 Express，所以 `AuthenticatedGuard` 对它无�
 
 ## 12. 账号与权限
 
-多账号，但**只有一级特权**：`users.role` 取 `super` | `user`，`server/src/auth/roles.ts` 是取值、标签与
+多账号，但**只有一级特权**：`users.role` 取 `super` | `user`，`nest/server/src/auth/roles.ts` 是取值、标签与
 可见性判定的唯一真源。不引入角色表，也不引入权限中间件——只有两条规则，写在一处比抽象更可靠。
 
 | 能力 | 普通账号 | 超级管理员 |
@@ -499,11 +509,11 @@ WebSocket 的 upgrade 不经过 Express，所以 `AuthenticatedGuard` 对它无�
 
 | 位置 | 职责 |
 |---|---|
-| `server/src/auth/roles.ts` | 取值、中文标签、`parseRole()`（未知值降级为 `user`）、`isSuperAdmin()` |
-| `server/src/admin/admin.guard.ts` | `/admin` 的门：未登录 → `/login`；非超管 GET → `/`、POST → 403 |
-| `server/src/admin/admin.service.ts` | 账号列表与 CRUD、级联删除、密码哈希与形状校验 |
-| `server/src/admin/admin.controller.ts` | 页面与表单端点，服务端渲染 POST + 302 + `?notice=` 提示 |
-| `server/src/conversation/conversation.service.ts` | 可见性规则本身：`canRead()` / `isOwnedBy()`（共用私有的 `readableBy()`）、`softDeleteConversations()`、硬级联 `deleteConversations()` |
+| `nest/server/src/auth/roles.ts` | 取值、中文标签、`parseRole()`（未知值降级为 `user`）、`isSuperAdmin()` |
+| `nest/server/src/admin/admin.guard.ts` | `/admin` 的门：未登录 → `/login`；非超管 GET → `/`、POST → 403 |
+| `nest/server/src/admin/admin.service.ts` | 账号列表与 CRUD、级联删除、密码哈希与形状校验 |
+| `nest/server/src/admin/admin.controller.ts` | 页面与表单端点，服务端渲染 POST + 302 + `?notice=` 提示 |
+| `nest/server/src/conversation/conversation.service.ts` | 可见性规则本身：`canRead()` / `isOwnedBy()`（共用私有的 `readableBy()`）、`softDeleteConversations()`、硬级联 `deleteConversations()` |
 
 - **两个账号**：`admin`（普通用户，凭据代码内置但**生产环境不建号**）与超管（凭据只来自
   `SUPER_ADMIN_USERNAME` / `SUPER_ADMIN_PASSWORD`，**仓库里不内置超管口令**，缺省即不建号），启动时按需建出，
@@ -543,11 +553,11 @@ WebSocket 的 upgrade 不经过 Express，所以 `AuthenticatedGuard` 对它无�
 实测证据（浏览器里的两次点击、超管侧的标记与回放、库里的行数）见
 [verification.md](verification.md) §6。
 
-## 13. Rust 实现（`rust/`）
+## 13. Rust 实现（`rust/server/`）
 
 同一服务端的第二套实现，语言从 NestJS 换成 Rust。它**不是重写决策的结论**，
 而是一次语言迁移：端点、事件语义、数据模型与权限规则都以上面各节描述的 Nest
-版为契约源，逐条对照移植，`server/src/` 保持原样未改动，两条管线可共存于同一个 SQLite
+版为契约源，逐条对照移植，`nest/server/src/` 保持原样未改动，两条管线可共存于同一个 SQLite
 库（口令格式、会话表、事件日志双向兼容，见 §13.2）。
 
 ### 13.1 为什么若干层是自己写的
@@ -559,7 +569,7 @@ WebSocket 的 upgrade 不经过 Express，所以 `AuthenticatedGuard` 对它无�
 |---|---|---|
 | `bcrypt` | 手写 Blowfish + EksBlowfish，常量表由脚本从 `bcryptjs` 抽取 | `auth/bcrypt.rs`、`auth/blowfish_tables.rs` |
 | `tokio-tungstenite` / `axum` 的 `ws` 特性 | 手写 RFC6455 帧编解码；升级不走 ws 抽象，用 `hyper::upgrade::on`（它对 body 类型泛型，因此 axum handler 内即可接管连接） | `net/ws.rs`、`voice/gateway.rs` |
-| `handlebars` / `tera` / `minijinja` | 页面即函数；模板逐元素对齐 `server/src/view/views/*.hbs`，Markdown 取子集 | `view/templates.rs`、`view/html.rs` |
+| `handlebars` / `tera` / `minijinja` | 页面即函数；模板逐元素对齐 `nest/server/src/view/views/*.hbs`，Markdown 取子集 | `view/templates.rs`、`view/html.rs` |
 | `tower-sessions` / `cookie` | `connect.sid` 签名 cookie + `sessions` 表（JSON 形状与 passport 一致） | `auth/session.rs` |
 | `tower-http` 的 `fs` 特性 | 自带静态托管（ETag / If-None-Match / 穿越防护） | `http/static_files.rs` |
 | rustls 默认 crypto provider（`aws-lc-rs`） | 显式选 `ring`（`tokio-rustls` 关默认特性） | `Cargo.toml` |
@@ -599,7 +609,7 @@ WebSocket 的 upgrade 不经过 Express，所以 `AuthenticatedGuard` 对它无�
 
 语音的两项遗留**不是移植遗漏，而是需要决策或需要真机**，与 Nest 版同状态：
 
-- **打断（barge-in）**：需要改 `web/scripts/voice.ts`（播上一句时按下按钮要先停播再
+- **打断（barge-in）**：需要改 `nest/client/scripts/voice.ts`（播上一句时按下按钮要先停播再
   采集）。客户端是这次迁移刻意不动的一半，所以它要么作为独立的产品改动排期，要么
   维持现状——我不会在服务端单方面加一个客户端不会用的帧。
 - **空闲保活**：源注释给出的是"上游 180 秒无响应即关闭"（`close 1007`），但**没有证
@@ -607,28 +617,28 @@ WebSocket 的 upgrade 不经过 Express，所以 `AuthenticatedGuard` 对它无�
   等于把未经证实的猜测写进唯一一条真·上行链路，因此不做；要做得先在真机上确认它
   有效，且不会让会话被另一端以协议错误关掉。
 
-### 13.4 `crates/proto`、`crates/md` 与 `web/client`：迁移期新增的三个 crate
+### 13.4 `crates/proto`、`crates/md` 与 `rust/client`：迁移期新增的三个 crate
 
-第七期（Nest/Node 退役，见 roadmap.md §4）在 `rust/` 之外立了三个新包：
+第七期（Nest/Node 退役，见 roadmap.md §4）与 `rust/server/` 并列立了三个新包：
 
 | crate | 职责 | 为什么存在 |
 |---|---|---|
-| `crates/proto/`（`kestrel-proto`） | 语音帧 `ClientFrame` / `ServerFrame`、`parse_client_frame`、`TaskKind` | 类型从 `rust/src/voice/protocol.rs` 搬出，服务端与浏览器客户端**编译同一份定义**。原来那套形状在 TS 里是手抄的（服务端自己的注释就写着这一点），而手抄的形状正是语音 `start` 帧事故的温床（implementation-notes.md §8）。现在改字段名会在消费方编译失败 |
-| `web/client/`（`kestrel-client`） | 浏览器端，Rust→WASM | `voice_core` 是纯状态机：时钟与 socket 都由调用方注入，输出 `Effect` 值，因此**帧顺序断言能在宿主目标的 `cargo test` 里跑**，不需要浏览器。这是刻意保留 jsdom 套件那份保证的方式（它当年抓住了那次静默故障，见 verification.md §7） |
+| `crates/proto/`（`kestrel-proto`） | 语音帧 `ClientFrame` / `ServerFrame`、`parse_client_frame`、`TaskKind` | 类型从 `rust/server/src/voice/protocol.rs` 搬出，服务端与浏览器客户端**编译同一份定义**。原来那套形状在 TS 里是手抄的（服务端自己的注释就写着这一点），而手抄的形状正是语音 `start` 帧事故的温床（implementation-notes.md §8）。现在改字段名会在消费方编译失败 |
+| `rust/client/`（`kestrel-client`） | 浏览器端，Rust→WASM | `voice_core` 是纯状态机：时钟与 socket 都由调用方注入，输出 `Effect` 值，因此**帧顺序断言能在宿主目标的 `cargo test` 里跑**，不需要浏览器。这是刻意保留 jsdom 套件那份保证的方式（它当年抓住了那次静默故障，见 verification.md §7） |
 
-`crates/md/`（`kestrel-md`）是同批补的第三个：`rust/src/view/html.rs` 里的 `escape` 与 markdown
+`crates/md/`（`kestrel-md`）是同批补的第三个：`rust/server/src/view/html.rs` 里的 `escape` 与 markdown
 子集整体搬过去，`html.rs` 只剩再导出，模板与测试仍按 `super::html::{escape, markdown}` 取。
 客户端用它而不是 `pulldown-cmark`——后者在浏览器侧实测 +74 KB gz
 （[verification.md](verification.md) §11.5）。而子集还带一个 `marked` 没有的性质：
 **子集之外的内容一律转义而非透传**，模型吐 `<script>` 不会被渲染
-（`rust/src/view/tests.rs` 钉着这条）。代价是语法面收窄——无表格、无删除线，
+（`rust/server/src/view/tests.rs` 钉着这条）。代价是语法面收窄——无表格、无删除线，
 见 [roadmap.md](roadmap.md) §4.1.1 的开放项。
 
-`rust/src/voice/protocol.rs` 仍在，内容只剩再导出与**线名测试**——测试钉的是 JSON 上的
+`rust/server/src/voice/protocol.rs` 仍在，内容只剩再导出与**线名测试**——测试钉的是 JSON 上的
 字段名（`conversationId` 这种），那才是浏览器真正依赖的契约，比类型共享更容易漂。
-`rust/src/task/mod.rs` 同样改为再导出 `TaskKind`，全树引用路径不变。
+`rust/server/src/task/mod.rs` 同样改为再导出 `TaskKind`，全树引用路径不变。
 
-`web/client/` 的 DOM 层（socket、音频、页面渲染）尚未移植，`web/scripts/*.ts` 仍是线上跑
+`rust/client/` 的 DOM 层（socket、音频、页面渲染）尚未移植，`nest/client/scripts/*.ts` 仍是线上跑
 的那一份；两者的切换点见 roadmap.md §4.3 的 P3/P4。
 
 ## 14. 相关文档

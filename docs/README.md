@@ -4,8 +4,9 @@
 调用生成工具、把产物渲染到页面上，可预览可下载。
 技术形态为 NestJS 单进程 SSR + SSE 流式，无独立前端服务。
 
-仓库是 monorepo：`server/`（NestJS 后端）、`web/`（前端与其 WASM 客户端）、
-`rust/`（Rust 服务端）、`crates/`（proto / md 两个共享库），仓库根只放跨 app 的东西
+仓库是 monorepo，按后端技术栈拆包：`nest/server/`（NestJS 后端）、`nest/client/`（Nest
+栈的浏览器脚本，Vite 构建到根 `public/`）、`rust/server/`（Rust 服务端）、`rust/client/`
+（Rust→WASM 浏览器客户端）、`crates/`（proto / md 两个共享库），仓库根只放跨栈的东西
 （pnpm workspace 根清单、`Makefile`、镜像与部署脚本、文档、运行时数据）。
 完整目录与两条拆分约束见 [architecture.md](./architecture.md) §9。
 
