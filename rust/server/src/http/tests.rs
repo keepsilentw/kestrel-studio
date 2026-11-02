@@ -14,6 +14,15 @@ use axum::http::StatusCode;
 use serde_json::json;
 use tower::ServiceExt;
 
+use std::fmt;
+use std::sync::{Arc, Mutex};
+use tracing::field::{Field, Visit};
+use tracing::span;
+use tracing::Event;
+use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
+use tracing_subscriber::registry::Registry;
+use tracing_subscriber::EnvFilter;
+
 use crate::agent::mode::Mode;
 use crate::auth::roles::{Principal, Role};
 use crate::conversation::ConversationEvent;
@@ -583,4 +592,160 @@ async fn assets_follow_ownership_and_the_signature_is_the_only_authority() {
         .await
         .expect("swapped");
     assert_eq!(swapped.status(), StatusCode::FORBIDDEN, "the signature covers the id");
+}
+
+/// Captures whatever the layer stack emits, so the access log can be asserted the
+/// same way the rest of this suite asserts responses: no socket, no log file.
+#[derive(Clone, Default, Debug)]
+struct Capture(Arc<Mutex<Vec<String>>>);
+
+impl Capture {
+    fn lines(&self) -> Vec<String> {
+        self.0.lock().expect("capture lock").clone()
+    }
+
+    fn push(&self, line: String) {
+        self.0.lock().expect("capture lock").push(line);
+    }
+}
+
+/// Field values are flattened into `name=value` text; the assertions below are
+/// about presence, not about the fmt layer's exact rendering.
+#[derive(Default)]
+struct Recorded(Vec<String>);
+
+impl Visit for Recorded {
+    fn record_i64(&mut self, field: &Field, value: i64) {
+        self.0.push(format!("{}={}", field.name(), value));
+    }
+
+    fn record_u64(&mut self, field: &Field, value: u64) {
+        self.0.push(format!("{}={}", field.name(), value));
+    }
+
+    fn record_bool(&mut self, field: &Field, value: bool) {
+        self.0.push(format!("{}={}", field.name(), value));
+    }
+
+    fn record_str(&mut self, field: &Field, value: &str) {
+        self.0.push(format!("{}={}", field.name(), value));
+    }
+
+    fn record_debug(&mut self, field: &Field, value: &dyn fmt::Debug) {
+        self.0.push(format!("{}={:?}", field.name(), value));
+    }
+}
+
+impl Layer<Registry> for Capture {
+    fn on_new_span(&self, attrs: &span::Attributes<'_>, _id: &span::Id, _ctx: Context<'_, Registry>) {
+        let mut fields = Recorded::default();
+        attrs.record(&mut fields);
+        self.push(format!(
+            "span {:?} {} {}",
+            attrs.metadata().level(),
+            attrs.metadata().name(),
+            fields.0.join(" ")
+        ));
+    }
+
+    fn on_event(&self, event: &Event<'_>, _ctx: Context<'_, Registry>) {
+        let mut fields = Recorded::default();
+        event.record(&mut fields);
+        self.push(format!(
+            "event {:?} {} {}",
+            event.metadata().level(),
+            event.metadata().target(),
+            fields.0.join(" ")
+        ));
+    }
+}
+
+/// A read-only browser pass leaves nothing in the database, so the access log is
+/// the only evidence those P1 criteria can get (docs/verification.md §13.6). "It
+/// fires, and it fires at DEBUG only" is asserted here rather than trusted from
+/// tower-http's documented defaults: the default filter is what protects the
+/// production log volume, and the query string is what makes a resume visible.
+#[tokio::test]
+async fn the_access_log_records_the_request_and_stays_out_of_the_default_filter() {
+    let (app, _state) = app().await;
+
+    // `info` is the filter `main.rs` installs, so this is what a normal run sees.
+    let quiet = Capture::default();
+    let guard = tracing::subscriber::set_default(
+        Registry::default().with(quiet.clone().with_filter(EnvFilter::new("info"))),
+    );
+    let page = app
+        .clone()
+        .oneshot(get("/login?probe=1", None))
+        .await
+        .expect("request under info");
+    assert_eq!(page.status(), StatusCode::OK);
+    drop(guard);
+    let quiet_lines = quiet.lines();
+    assert!(
+        quiet_lines.iter().all(|line| !line.contains("tower_http")),
+        "the default filter must keep the access log out of production: {quiet_lines:?}"
+    );
+
+    // The same request with `RUST_LOG=debug`, which is what a grey release runs on.
+    let loud = Capture::default();
+    let guard = tracing::subscriber::set_default(
+        Registry::default().with(loud.clone().with_filter(EnvFilter::new("debug"))),
+    );
+    let page = app
+        .clone()
+        .oneshot(get("/login?probe=1", None))
+        .await
+        .expect("request under debug");
+    assert_eq!(page.status(), StatusCode::OK);
+    drop(guard);
+
+    let lines = loud.lines().join("\n");
+    let lowered = lines.to_lowercase();
+    assert!(lines.contains("method=GET"), "the method is logged:\n{lines}");
+    assert!(
+        lines.contains("uri=/login?probe=1"),
+        "the query string survives — that is what makes `/stream?from=N` readable:\n{lines}"
+    );
+    assert!(lines.contains("status=200"), "the status is logged:\n{lines}");
+    assert!(lowered.contains("debug"), "and it lands at DEBUG, not INFO:\n{lines}");
+}
+
+/// `/api/voice` is registered *after* the trace layer on purpose: it is the one
+/// route that hijacks the connection, and that takeover has never been run on a
+/// machine (docs/architecture.md §13.3). Pinning the exclusion here means a later
+/// edit that folds the route into the traced group fails instead of quietly putting
+/// a body-tracking wrapper in front of the only upgraded socket.
+#[tokio::test]
+async fn the_voice_upgrade_route_stays_out_of_the_access_log() {
+    let (app, _state) = app().await;
+    let capture = Capture::default();
+    let guard = tracing::subscriber::set_default(
+        Registry::default().with(capture.clone().with_filter(EnvFilter::new("debug"))),
+    );
+
+    // A plain GET with no handshake headers is rejected before anything touches the
+    // connection, which is what makes this drivable in process.
+    let rejected = app
+        .clone()
+        .oneshot(get("/api/voice", None))
+        .await
+        .expect("voice route");
+    assert_eq!(rejected.status(), StatusCode::UPGRADE_REQUIRED);
+
+    // Control: the same router, a route that does sit inside the traced group.
+    let page = app
+        .clone()
+        .oneshot(get("/login", None))
+        .await
+        .expect("login route");
+    assert_eq!(page.status(), StatusCode::OK);
+    drop(guard);
+
+    let lines = capture.lines().join("\n");
+    assert!(lines.contains("uri=/login"), "the traced group does log:\n{lines}");
+    assert!(
+        !lines.contains("/api/voice"),
+        "the hijacked route stays untraced until an on-host run proves the 101:\n{lines}"
+    );
 }
