@@ -15,18 +15,30 @@ Remote directory: `/opt/kestrel-studio`. Container: `kestrel-studio`, host port 
 make deploy
 ```
 
-That runs `scripts/deploy.sh`: it packages the source plus `node_modules`,
-uploads them (~5 MB/s), and builds the image **on the host** — where nothing is
-downloaded, because the toolchain and the Node runtime both come from images
-already cached there. First build takes a few minutes (native compile of
-better-sqlite3); later runs reuse the Docker layer cache.
+That is `make build-linux` + `make build-wasm` followed by `scripts/deploy.sh`.
+The script stages the cross-compiled **static musl binary** plus the built
+`public/`, uploads a few MB (~5 MB/s inbound), and builds the image **on the
+host** — where nothing is downloaded and nothing is compiled: the runtime base
+is `scratch`, which Docker never pulls. The build is two `COPY` directives, so
+it finishes in seconds; the resulting image is ~10 MB.
+
+Two preflight failures are by design and happen before anything is uploaded:
+
+- no binary at `/tmp/kestrel-studio-linux/kestrel-studio` (or `KESTREL_LINUX_BINARY`
+  pointing elsewhere) — `make build-linux` did not run;
+- a `rust/server/src/**/*.rs` **newer** than that binary — the binary is stale, so
+  the deploy would serve yesterday's code. Rebuild instead of overriding.
+
+After `docker compose up -d --build` the script polls
+`http://127.0.0.1:${HOST_PORT}/login` on the host for up to 180 s and fails if
+the app never answers.
 
 ## Operational commands
 
 | Command | Effect |
 |---|---|
 | `make deploy` | Full redeploy |
-| `scripts/bootstrap-host.sh` | One-time per fresh host: cache the two base images |
+| `scripts/bootstrap-host.sh` | One-time per fresh host: checks that Docker works. Nothing to cache under the Rust pipeline; pass `NEST_BASE_IMAGES=1` only to roll back to the Node pipeline |
 | `make deploy-status` | Container state |
 | `make deploy-logs` | Follow logs |
 | `make deploy-restart` | Restart container |
@@ -39,24 +51,36 @@ not finish in 60s) while uploads to it run at ~5 MB/s — a 77x asymmetry. Every
 decision below follows from that: download nothing on the host, ship everything
 from the dev machine over the upload path.
 
-**The build runs on the host but downloads nothing.** The Dockerfile is a
-two-stage build over images already cached there:
+**The build runs on the host but downloads nothing.** `FROM scratch` is an empty
+base that Docker never pulls, so the host needs **no image at all** — there is
+nothing to cache, and nothing to compile. Everything else comes from the dev
+machine over the fast upload path: the static binary (`make build-linux`, via
+zig) and the client assets (`make build` / `make build-wasm` → `public/`).
 
-- `golang:1.24` — its image is built on buildpack-deps, so it already carries
-  gcc / g++ / make / python3, exactly the toolchain node-gyp needs. No `apt install`.
-- `node:24-bookworm-slim` — the Node runtime, brought in with `COPY --from`.
+**Static linking is the load-bearing choice.** The host is CentOS 7 (glibc
+2.17); a dynamically linked binary would die with `GLIBC_2.27 not found`. The
+musl ELF needs no libc at all, which is what makes `scratch` usable. Do not
+"simplify" this back into a pulled base image or a host-side install: at 65 KB/s
+of outbound bandwidth, either one reintroduces exactly the downloads this shape
+exists to avoid (the old Node pipeline cached `golang:1.24` +
+`node:24-bookworm-slim` and recompiled better-sqlite3 on the host).
 
-Both are Debian 12 (bookworm), so the copied Node binary is libc-compatible.
-`npm_config_nodedir=/usr/local` points node-gyp at the copied headers; without it
-node-gyp downloads a header tarball, which is the one step that would still need
-the network.
+**TLS trust is compiled in.** `scratch` has no `/etc/ssl/certs`, so the binary
+uses `webpki-roots`. If outbound HTTPS ever starts failing inside the
+container, the root store is the suspect — not a missing CA bundle on the host.
 
-**node_modules ships in the build context.** Installing them on the host would
-take ~25 minutes at 65 KB/s. They are installed on macOS, which is why the
-Dockerfile recompiles better-sqlite3 for linux during the build.
+**`/tmp` comes from compose's `tmpfs`.** `scratch` has no `/tmp`, and SQLite
+writes temporary b-tree files there; without the mount that shows up only under
+load as "unable to open temporary file". Keep it in `docker-compose.yml`.
 
-**Do not "simplify" this back to a single-stage build on a pulled base image.**
-That reintroduces exactly the downloads this shape exists to avoid.
+**No `USER` directive, on purpose.** `data/` and `storage/` are host-mounted
+volumes previously written as root, and `scratch` has no `/etc/passwd` to map a
+name against. Changing ownership is its own migration, not a side effect.
+
+**The container has no shell.** `docker exec` into it will fail — there is no
+/bin/sh in `scratch`. Inspect via `docker logs`, host-side files
+(`/opt/kestrel-studio/...`), and HTTP probes; that is also why the verification
+list below is written that way.
 
 **`.dockerignore` patterns must be anchored.** Unanchored names match at any
 depth and silently delete same-named directories inside node_modules. A bare
@@ -64,17 +88,24 @@ depth and silently delete same-named directories inside node_modules. A bare
 `Cannot find module './storage/disk'`, reported misleadingly by NestJS as
 "platform-express is not installed". See docs/implementation-notes.md §6.
 
+Note that the build context is no longer the repository: `deploy.sh` assembles
+it in `/tmp/kestrel-studio-deploy` from a whitelist (`public`,
+`.build/linux-x86_64/kestrel-studio`, `Dockerfile`, `docker-compose.yml`,
+`.dockerignore`, `Makefile`). Most `.dockerignore` entries are therefore
+insurance for manual `docker compose build` from a full checkout — the anchoring
+rule still applies if you add one.
+
 **Node cannot be installed on the host directly.** The server runs CentOS 7
 (glibc 2.17); Nest 12 / Vite 8 need Node 20+ (glibc 2.28+). Verified: the official
 linux-x64 binary dies with `GLIBC_2.27 not found`. This is also why pm2 with a
 system Node is not an option — and it would still need to compile better-sqlite3.
 Docker is the only viable runtime.
 
-**Base images come from a mirror.** Docker Hub is unreachable from the host; run
-`scripts/bootstrap-host.sh` once per fresh host to cache them.
-
-**Docker Hub is unreachable from the server** (`registry-1.docker.io` returns
-nothing), so the base image is pulled from a mirror. Measured on the host:
+**Rollback only: base images come from a mirror.** The Rust pipeline pulls
+nothing, so this section does not apply to a normal deploy. It matters when
+rolling back to the Node pipeline (`NEST_BASE_IMAGES=1
+scripts/bootstrap-host.sh`). Docker Hub is unreachable from the server
+(`registry-1.docker.io` returns nothing), so images are pulled from a mirror:
 
 | Mirror | Result |
 |---|---|
@@ -88,8 +119,11 @@ Use `dockerproxy.net`. Because Docker stores layers by digest, retrying through
 a different mirror reuses whatever layers already landed — switching mirrors is
 never wasted work.
 
-npm traffic is a separate path and is fast here; the Dockerfile points it at
-`registry.npmmirror.com`.
+**Rollback only: node_modules.** `deploy.sh` stopped uploading it on 2026-10-30.
+The copy under `/opt/kestrel-studio/node_modules` (353 MB) is from **2026-09-27**
+and predates the monorepo split, so it does not match the Nest tree's layout
+today: a rollback must reinstall on the dev machine and ship a fresh
+`node_modules`, not reuse the host's. See docs/deployment.md §1.1.
 
 **Do not touch `/etc/docker/daemon.json` or restart the docker daemon.** The host
 runs other production containers plus 1Panel's openresty; restarting the daemon
@@ -116,16 +150,116 @@ to fall back to for the API key. To rotate the key, edit the file on the host
 directly and `make deploy-restart`. To rotate the super admin password, use
 `/admin/users/:id` — a restart never resets it.
 
-## Troubleshooting
+## Cutting over between the two server implementations
 
-Build fails on `pnpm install` / native compile:
+The repository holds two same-endpoint server implementations over one SQLite
+file. **Production has been `rust/server/` since 2026-11-02 13:24** (three
+deploys that afternoon; the running one started 13:47 — `ENTRYPOINT
+[/app/kestrel-studio]`, image ~10 MB). `nest/server/` stays in the tree as the
+contract source and the rollback option until roadmap.md §4 P4.
+
+What is known from the host, not inferred (docs/verification.md §13):
+
+- The Rust server answers `/login`, serves `public/` from its own static handler,
+  guards `/admin`, mounts `/api/voice/ticket`, and completed a real streaming
+  turn whose 37 events landed with a contiguous `seq` and a `turn_done`.
+- Not yet exercised on the Rust path: image/video generation tasks, a real voice
+  call, `/admin` page contents, SSE reconnect-with-replay, browser console noise.
+  Those need a logged-in browser, so they only get settled by a human pass.
+- **Sessions do not survive a change of sides.** The cookie signing scheme
+  differs — both are HMAC-SHA256 + base64url-no-pad, but `cookie-signature` signs
+  the token **without** the `s:` prefix while `rust/server/src/auth/session.rs`
+  signs `"s:" + token` — so the same token yields a different digest and old
+  cookies are rejected rather than mis-trusted: whoever takes traffic logs every
+  user out once. Happened on 2026-11-02 as predicted; tell users before it
+  happens again instead of letting it look like data loss.
+- Row shapes differ, and **reading is asymmetric**. Passwords stay bcrypt `$2b$`
+  and both sides verify them. But `sessions.sess` is `{"cookie":{…},
+  "passport":{"user":<id>}}` from Nest (passport stores only the id) and
+  `{"cookie":{…},"user":<id>}` from Rust: Rust accepts both positions, Nest only
+  knows `passport.user`. **A rollback to Nest logs out everyone who signed in on
+  Rust** — it is not a data problem, but it is not transparent either.
+  `sessions.expire` is ISO-8601 text either way (Rust also parses the epoch-millis
+  rows it wrote before `09c975b`).
+- One writer at a time. Two containers cannot share port 8848 and the ordering
+  rule in docs/deployment.md §7 (stop the old before starting the new) applies
+  to any cutover, including a rollback.
+
+## Verifying a deploy (read-only, no shell in the container)
 
 ```bash
-ssh lavo-test "cd /opt/kestrel-studio && docker compose build --no-cache 2>&1 | tail -50"
+# what is running, and how heavy it is
+ssh lavo-test 'docker ps --filter name=kestrel-studio --format "{{.Image}} {{.Status}} {{.Ports}}"
+  docker image inspect kestrel-studio:latest --format "created={{.Created}} entrypoint={{.Config.Entrypoint}}"
+  docker logs --tail 15 kestrel-studio 2>&1
+  docker stats --no-stream kestrel-studio | tail -1'
+
+# endpoint surface, probed from the host
+ssh lavo-test 'for p in /login /assets/main.css /capture.js /wasm/kestrel_client_bg.wasm /api/voice/ticket /admin; do
+  printf "%-32s " "$p"; curl -s -o /dev/null -w "%{http_code} %{size_download}B\n" "http://127.0.0.1:8848$p"; done'
+
+# assets really are what this machine built
+md5 public/assets/main.css
+ssh lavo-test "md5sum /opt/kestrel-studio/public/assets/main.css"
+
+# public entry through openresty, resolved locally so it works even without DNS
+ssh lavo-test 'curl -s -o /dev/null -w "%{http_code} -> %{redirect_url}\n" \
+  --resolve try.kestrel.justwork.link:443:127.0.0.1 https://try.kestrel.justwork.link/admin'
+
+# did work land in the database
+ssh lavo-test 'sqlite3 "file:/opt/kestrel-studio/data/kestrel-studio.db?mode=ro" \
+  "select (select count(*) from conversation_events), (select count(*) from messages), (select count(*) from assets);"'
 ```
 
-Container starts but the app exits: the key is usually the cause — check
-`make deploy-logs` for `No Bailian API key found`.
+Expected on 2026-11-02: `kestrel_studio listening on http://localhost:8848` plus
+`Bailian credentials resolved` and `expired sessions cleared=N` in the logs, RSS
+around **1.2 MiB**, `/login` 200, `/assets/main.css` 200 with an md5 equal to the
+local build, `/capture.js` 200, the wasm 200 (**shipped but not referenced by any
+template yet**), `/api/voice/ticket` 405, `/admin` 302 to `/login`, and
+`https://try.kestrel.justwork.link/admin` 302 to the login page.
+
+Open the database with `mode=ro` while the app holds it. A plain open would also
+let `sqlite3` checkpoint the WAL on close — harmless and even useful, but then
+don't be surprised when `kestrel-studio.db-wal` shrinks and the main file grows
+(docs/deployment.md §7 already records this).
+
+## Troubleshooting
+
+`deploy.sh` stops with **"no /tmp/kestrel-studio-linux/kestrel-studio"** or
+**"… is newer than … — run `make build-linux` again"**: the cross-compile did not
+run, or it ran before the last source edit. Both are preflight guards against
+shipping yesterday's code — rebuild, do not edit the check. `make build-linux`
+itself needs three things: `zig`, `cargo-zigbuild`, and the
+`x86_64-unknown-linux-musl` compile target. It checks each one and prints the
+install command. There are **no** `scripts/cross/` shims any more — that
+hand-written approach was dropped on 2026-10-30 because the link step never
+worked (docs/implementation-notes.md §14).
+
+Image build tries to pull a base image: someone moved the `Dockerfile` off
+`FROM scratch`, or the compose context is not the directory `deploy.sh`
+assembled. The host cannot reach Docker Hub, so a pull is always a bug here.
+
+Container starts but the app exits: read `make deploy-logs` first. The three
+known fatal configurations are
+`No Bailian API key found. Set BAILIAN_API_KEY, or keep the bailian-token-plan provider in cc-switch.`,
+`SESSION_SECRET must be set when NODE_ENV=production`, and — if compose lost the
+`tmpfs: /tmp` line — SQLite's "unable to open temporary file", which only shows
+up once a query needs a temp b-tree.
+
+Every user got logged out by a deploy that changed nothing else: the serving
+implementation changed sides, or `SESSION_SECRET` was regenerated by a recreated
+`.env`. Both are covered above; check which before touching user data.
+
+Assets 404 or stale after a deploy: the image sets `STATIC_DIR=/app/public`
+explicitly so a layout change fails loudly instead of 404-ing everything —
+compare the md5 of `public/assets/main.css` against the host copy, then hard
+refresh before suspecting the app.
+
+SSE appears to arrive in one burst instead of streaming: that is the reverse
+proxy's `proxy_buffering`, not the app. The site fragment settings are in
+docs/deployment.md §3; the same fragment also needs `location = /api/voice` with
+`Upgrade`/`Connection` for voice to work. (Unrelated: a `GET` to
+`/api/voice/ticket` returning 405 is correct — that route only takes `POST`.)
 
 App healthy inside the container but unreachable from outside: pass the port
 check first (`ssh lavo-test "curl -sf -o /dev/null http://127.0.0.1:8848/login && echo ok"`),

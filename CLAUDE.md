@@ -9,7 +9,8 @@ Web 生成式媒体 Agent：用户在网页给一句话，LLM 流式思考、调
 此外还有两条并列入口：实时语音 `/voice`（见下）与超管的管理面 `/admin`。
 账号分两级（`super` / `user`）：会话默认各自隔离，超管可**只读**查看普通账号的会话，见 `docs/architecture.md` §12。
 
-`kestrel/`（Rust）是 Agent harness 内核；本项目是它面向生成式媒体的 Web 化实现，沿用「Agent 循环 + 工具注册表」的分层思路，语言换成 NestJS。
+`kestrel/`（Rust）是 Agent harness 内核；本项目是它面向生成式媒体的 Web 化实现，沿用「Agent 循环 + 工具注册表」的分层思路，语言先换成 NestJS，
+2026-10-27 起同一服务端又移植了一份 Rust 实现（`rust/server/`），**2026-11-02 起线上跑的就是这一份**。
 
 设计文档在 `docs/`，**动手前先按需读**：`architecture.md`（系统是什么，少变）、`roadmap.md`（将变成什么，常改）、`implementation-notes.md`（实现期踩坑台账，只增不减）、`deployment.md`（服务器侧）、`verification.md`（带日期的实测证据，引用前先看日期）。文档索引与维护约定见 `docs/README.md`。
 
@@ -64,30 +65,46 @@ cwd 拼接），且它的 `assets` **不能写 `outDir`**（写了就按 cwd 拼
 | `make build-rust` / `run-rust` | 构建 release 二进制 / 本机前台运行（不走 pm2） |
 | `make build-wasm` | `wasm-pack build --target web` 构建到 `rust/client/pkg/`，再连同 `capture.js` 暂存到 `public/wasm/`；模板暂未切换到 WASM |
 | `make build-linux` | 交叉编译 `x86_64-unknown-linux-musl` 静态二进制到 `/tmp/kestrel-studio-linux/`（`make deploy` 的输入；需 `zig` + `cargo-zigbuild`） |
-| `make deploy*` | 部署到 lavo-test。**deploy 现在组装 Rust 静态二进制 + `public/`（`FROM scratch`），不再上传 node_modules**；它会先跑 `build-linux` 与 `build-wasm`（后者会先构建 Nest 客户端资源，再补回 `capture.js`） |
+| `make deploy*` | 部署到 lavo-test。**线上从 2026-11-02 起就是这条路径**：组装 Rust 静态二进制 + `public/`（`FROM scratch`），不再上传 node_modules；先跑 `build-linux` 与 `build-wasm`（后者会先构建 Nest 客户端资源，再补回 `capture.js`），并在上传前检查二进制是否存在、是否比 `rust/server/src` 陈旧 |
 
 命令面只保留**跨包编排**：单个包的 typecheck/test 直接 `pnpm --dir nest/server run typecheck` / `cargo check --manifest-path rust/server/Cargo.toml --tests`，不再为每个包生成 Make 目标。`make start` 只依赖 `build-web` + `build-nest`——Rust 二进制是另一条路径（`run-rust` / `deploy`），不进入 pm2 条目。
 
+**2026-11-02 12:01 目标名收短过一轮**（提交 `b9db776`），旧文档里出现的旧名按此对照读，**不要照抄执行**：
+`rust-build` → `build-rust`、`rust-build-linux` / `build-rust-server-linux` → `build-linux`、
+`build-nest-server` → `build-nest`、`build-nest-client` → `build-web`、`build-rust-server` → `build-rust`、
+`build-rust-client` → `build-wasm`、`web-watch` → `watch`、`typecheck`（含全部 `typecheck-*`）→ 并入
+`check`、`test-nest-*` / `test-rust-*` → 并入 `test`、`clean-*` → 并入 `clean`。
+旧名见 `docs/verification.md` §8 / §9 / §11 与 `docs/implementation-notes.md` §14 / §17——那些是带日期的
+证据记录，按上面「目录」节末尾的历史写法约定原样保留，读的时候对照现名，不要照抄执行。
+
 要点：
 
+- **本地跑的是 Nest，线上跑的是 Rust**。`make start` / `make dev` / `make watch` 都是 Nest 那一份
+  （pm2 常驻，端口 9949）；`make run-rust` 用**同一个 9949** 前台跑 Rust，所以先 `make stop`
+  才能起它。两条路径读同一份 `.env`、同一个 `data/` 库。涉及线上结论时以 Rust 侧为准，
+  本地观察不能替它背书。
 - 访问 `http://localhost:9949`。建库时 seed 账号（bcrypt 哈希入库，且**只在账号缺失时创建**，
   所以改过的密码不会被重启重置）：`admin` / `123456` 是**本地**引导账号（代码内置，
   `NODE_ENV=production` 时不建号）；超管（多一个 `/admin`）的凭据来自
   `SUPER_ADMIN_USERNAME` / `SUPER_ADMIN_PASSWORD`，**仓库里没有内置超管口令**，
   两个变量缺任一个就不建超管、`/admin` 不可达。这条约束存在的原因是仓库要公开：
   内置凭据等于给线上实例发可用登录。
-- **Rust 实现（`rust/server/`）是并行的第二套服务端**，质量门是 `make check` +
-  `make test`（含 `cargo check --tests` / `cargo test`）。它**未接管构建与部署**：线上仍是 Nest 容器，`nest/server/src/` 一行未改。
+- **Rust 实现（`rust/server/`）是线上在跑的那一套服务端**（2026-11-02 起，`make deploy` 走交叉编译的
+  静态 musl 二进制 + `FROM scratch` 镜像），质量门是 `make check` +
+  `make test`（含 `cargo check --tests` / `cargo test`）。`nest/server/` 仍是它的契约源与回滚底牌，
+  `nest/server/src/` 至今一行未改；**改服务端行为要两侧同步**，否则线上与契约源静默分叉。
   离线 registry 缺 `bcrypt` / `tungstenite` / 模板引擎等件，相关自研与原因见
   `docs/architecture.md` §13，踩坑台账见 `docs/implementation-notes.md` §10-§12。
   **2026-10-30 两点更正与一条决策**：(1)「开发机无出站网络」是**执行环境的网络沙箱**
   造成的误判，这台机器能正常拉 crates.io（`docs/verification.md` §10.1），真实约束只有
   服务器侧零下载；(2) 已**决定退役 Nest/Node 技术栈**，Web 客户端改 Rust→WASM，分期与
-  判据见 `docs/roadmap.md` §4——**在 P1（Rust 真跑并端到端实测）通过前不删任何 Node 文件**；
+  判据见 `docs/roadmap.md` §4——**在 P1（Rust 真跑并端到端实测）整体通过前不删任何 Node 文件**；P1 于 2026-11-02 部分通过（交付链已切，Node 文件一个没删）。
   (3) 客户端改 WASM 的踩坑（web-sys feature 门、CLI 版本配对、AudioWorklet 那 20 行
   删不掉的 JS）见 `docs/implementation-notes.md` §13。
-- **无端到端证据**：开发环境禁止启动服务，`hyper::upgrade` 接管与 `tokio-rustls`
-  真拨号、浏览器控制台零噪音这三处仍是未知，勿当作已验证。
+- **端到端只验到一部分**：`/login`、静态资源、鉴权跳转、公网 HTTPS 反代、一轮真模型流式对话
+  （事件连续落库到 `turn_done`）已在**线上**确认，见 `docs/verification.md` §13（2026-11-02）。
+  仍未验证的：`hyper::upgrade` 接管与 `tokio-rustls` 真拨号（语音）、`/admin` 页面内容、
+  SSE 断线续传、出图 / 视频任务、浏览器控制台零噪音——这几条都要登录态，只能人工在浏览器里走。
   **2026-10-30 明确并重申（覆盖此前任何相反的计划）**：**禁止在本机启动 Docker**，
   **禁止在本机启动服务做测试**。这两条不是临时限制，也不因迁移任务而豁免。
   本仓库**不保留任何 CI 配置**（2026-10-30 写过一份 GitHub Actions 烟测定义，
@@ -114,13 +131,24 @@ cwd 拼接），且它的 `assets` **不能写 `outDir`**（写了就按 cwd 拼
 
 ## 架构
 
-单个 Nest 进程，SSR + SSE，**没有独立前端服务**。三条边界是理解全局的关键：
+单个进程内做 SSR + SSE，**没有独立前端服务**。三条边界是理解全局的关键。
+
+**服务端现在有两份同端实现**：线上跑的是 `rust/server/`（2026-11-02 起），`nest/server/` 是它的
+契约源与回滚底牌，两边共用同一个 SQLite 库。本节的端点、事件语义、权限规则按 Nest 版描述，
+**改服务端行为要两侧同步改**，否则线上与契约源会静默分叉——移植期的对照关系与差异记在
+`docs/architecture.md` §13。
 
 ### 1. 两条渲染路，互不重叠
 
 hbs 只渲染首屏骨架（登录态、历史会话侧栏、页面外壳、模式选择器），`nest/server/src/view/views/chat.hbs`；
 **从第一个 token 起，主体区全部由客户端 JS 拼 DOM**，服务端不吐 HTML 片段。
 守住这条边界，不要在 hbs 里塞流式占位逻辑。
+
+**但线上渲染的骨架出自 `rust/server/src/view/templates.rs`**（2026-11-02 起）。那份 Rust 模板是
+按这些 hbs 逐元素移植的，**改骨架要两边同时改**——只改 `.hbs` 不会改变线上页面，只改 Rust 会让
+契约源与线上分叉。骨架的 id 契约两侧都钉着：`rust/server/src/view/tests.rs` 一边从
+`nest/client/scripts/main.ts` 解析 `requireElement` 取 id，一边从 `rust/client/*.rs` 的源码取 id，
+然后断言模板逐个带着。
 
 前端是无框架的原生 TS + Vite：`nest/client/scripts/main.ts`（提交轮次、EventSource 订会话事件流并按事件绘图 DOM、图片预览、下载弹窗）＋ `nest/client/styles/main.css`。
 Vite 只做打包，产物固定为 `public/assets/main.js` / `main.css`（由 `nest/client/vite.config.mts` 指定，`outDir` 指向仓库根的 `public/`），模板以 `/assets/main.js` 模块化引入；`body[data-conversation-id]`、`body[data-start-seq]`、`[data-mode]`、`[data-task-id]` 等 data 属性是两条路的交接面（`start-seq` 是首屏画到时的事件日志游标，脚本作为流首连的 `?from=`）。
@@ -181,14 +209,17 @@ Vite 只做打包，产物固定为 `public/assets/main.js` / `main.css`（由 `
 - `admin/` — 超管管理面：`admin.guard.ts`（未登录 → `/login`；非超管 GET → `/`、POST → 403）、`admin.service.ts`（账号 CRUD + 级联删库外文件）、`admin.controller.ts`（纯表单 + 302 + `?notice=`）。它自己不写任何可见性查询，只用 `ConversationService`。
 - `view/view.controller.ts` — hbs 页面：`GET /login`、`GET /`（`?c=` 指定会话）、`GET /voice`；共用的模板预处理（markdown、轮次锚点、时间格式化）在 `view/render.ts`，管理页也用它。
 
-### 语音：第二条传输通路（`nest/server/src/voice/` + `nest/client/scripts/voice.ts`）
+### 语音：第二条传输通路（中继 `rust/server/src/voice/`，契约源 `nest/server/src/voice/`；客户端 `nest/client/scripts/voice.ts`）
 
 `/voice` 是一条**独立于轮次/SSE 的通路**，不是第五个模式（设计与理由见 `docs/architecture.md` §11）。链路：
 
 ```
-浏览器 ⇄(wss /api/voice)⇄ Nest 中继 ⇄(wss …/api-ws/v1/realtime)⇄ 百炼 realtime-plus
+浏览器 ⇄(wss /api/voice)⇄ 中继（线上是 Rust 那一份）⇄(wss …/api-ws/v1/realtime)⇄ 百炼 realtime-plus
 ```
 
+- **注意**：中继的 Rust 移植含 `hyper::upgrade` 接管与 `tokio-rustls` 真拨号，2026-11-02 的切流
+  **一次都没跑过语音**（线上只验到 `/api/voice/ticket` 返回 405，即路由挂着、GET 不接受）。
+  这条通路的行为证据仍停留在 Nest 时代（`docs/verification.md` §4、§7）。
 - **服务端代理是必须的**：凭据不能进浏览器。服务端只转发与编排，不做音频编解码。
 - **线上还需要一个单独的 nginx location**（`location = /api/voice`），因为现有那个片段为了让 SSE
   保持普通长连接而清空了 `Connection`，会一并杀掉 WS 的 upgrade。细节与理由见 `docs/deployment.md` §3。
@@ -291,9 +322,10 @@ provider 工厂在此之前就已经直接调 `loadConfig()` 了。`nest/server/
 ## 部署
 
 目标是 `lavo-test`（CentOS 7 + Docker），域名 `try.kestrel.justwork.link`，远端目录 `/opt/kestrel-studio`。
-完整操作手册与排障流程见 `.claude/skills/deploy/SKILL.md`，服务器侧细节见 `docs/deployment.md`。三条最容易误改的约束：
+完整操作手册与排障流程见 `.claude/skills/deploy/SKILL.md`，服务器侧细节见 `docs/deployment.md`。最容易误改的几条约束：
 
-- 服务器出站带宽约 65 KB/s、入站约 5 MB/s，**相差 77 倍**。因此镜像在服务器上构建但**不下载任何东西**：工具链来自已缓存的 `golang:1.24`，Node 运行时从 `node:24-bookworm-slim` 多阶段 `COPY --from`，`node_modules` 从开发机打包上传。**不要「简化」回单阶段拉公共基础镜像**。
+- 服务器出站带宽约 65 KB/s、入站约 5 MB/s，**相差 77 倍**。因此服务器侧**不下载任何东西**：服务端二进制在开发机交叉编译成 `x86_64-unknown-linux-musl` 静态 ELF（`make build-linux`），前端资源在开发机构建成 `public/`，运行时基础镜像用 `scratch`（Docker 从不拉取它，所以机上没有任何要缓存的镜像），TLS 根证书靠编进二进制的 `webpki-roots`。**不要「简化」回在服务器上装依赖 / 拉公共基础镜像**——那条路在 65 KB/s 下走不通（旧 Node 管线曾在服务器上重编 better-sqlite3、上传约 300 MB 的 `node_modules`，2026-10-30 已废）。
+- 切流有代价：**Rust 与 Nest 的 cookie 签名口径不同**（同一种 HMAC-SHA256，被签的字符串一个含 `s:` 前缀一个不含），任何一侧接管流量都会让已登录会话全部失效，必须提前告知使用者（2026-11-02 实际发生过一次）。
 - Node 装不了在宿主机上（glibc 2.17 vs 需要 2.28+），所以 pm2 方案不可行，Docker 是唯一运行时。
 - `.env` 只存在于服务器，`deploy.sh` **永不覆盖已存在的**（重生成 `SESSION_SECRET` 会把所有人登出，且服务器上没有 cc-switch 库可回退取 key）；轮换 key 直接改服务器文件再 `make deploy-restart`。
 
