@@ -2,6 +2,12 @@
 
 > 只增不减的台账：搭建过程中实际撞到并解决的问题，留档以免重装时重复排查。
 > 部署环节的坑（构建、端口、反代）见 [deployment.md](deployment.md)。
+>
+> **路径口径（2026-11-02 目录拆分）**：条目按发生时的目录书写，`src/`、`__tests__/web/`、
+> `client/`、`proto/`、`md/`、根目录的 `vite.config.mts` / `tsconfig*.json` 现分别位于
+> `server/src/`、`web/__tests__/`、`web/client/`、`crates/proto/`、`crates/md/`、`web/` 与
+> `server/`。根目录仍保留 `package.json`、`pnpm-lock.yaml`、`vitest.config.mts`。
+> 现行结构见 [architecture.md](./architecture.md) §9。
 
 ## 1. 依赖安装
 
@@ -311,3 +317,54 @@ brew 报 `wasm-pack ... 10 files, 6.4MB` 安装成功后 `/opt/homebrew/Cellar/w
 对策很笨但有效：**新建文件或装完工具后立刻独立验一次**（`find` / `--version`），
 别把工具的退出码当存在性证明；`cargo test` 报 "failed to load source ... No such file"
 就是这种消失的第一个信号。
+
+## 17. 目录拆成 monorepo：三处"路径按 cwd 解析"的暗坑（2026-11-02）
+
+把 `src/` 挪进 `server/`、`client/` 挪进 `web/client/`、`proto/` `md/` 挪进 `crates/`，
+代码语义一行没改，坏的全在**按工作目录解析的路径**上。三条都记下来，因为它们都不会
+在 `tsc` / `cargo check` 里报出来。
+
+| 现象 | 根因 | 处理 |
+|---|---|---|
+| 若把构建命令改成 `cd server && nest build`，本地跑起来会打开一个**空数据库**，`.env` 也不生效 | `loadEnvFile()`、`DATABASE_FILE`、`STORAGE_DIR` 全按 `process.cwd()` 解析，cwd 一挪语义就变 | **cwd 一律留在仓库根**，改用 CLI 自己的配置指针：`nest build -c server/nest-cli.json -p server/tsconfig.json`、`drizzle-kit push --config server/drizzle.config.ts` |
+| `.hbs` 模板被拷到仓库根 `dist/` 而不是 `server/dist/`，页面 500 | `nest-cli.json` 里 `assets[].outDir` 与 `sourceRoot` 都是**与 cwd 拼接**的；原来那句 `"outDir": "dist"` 只是恰好等于编译器的 outDir，换个布局就成了错的绝对目标 | `sourceRoot` 写 `server/src`；`assets` **删掉 `outDir`**，让它沿用 tsconfig 的 `server/dist`。顺带一条：`nest-cli.json` 由 `JSON.parse` 读取，**写注释会让构建直接失败**（tsconfig 才是 JSONC） |
+| `Failed to lookup view "chat" in views directory ".../src/view/views"`，两个测试文件整文件崩掉 | `server/__tests__/{view,admin}/*.controller.test.ts` 里 `VIEWS_DIR = join(process.cwd(), 'src', 'view', 'views')` 把源码位置写死成"仓库根有 src/"；构建产物路径由 `__dirname` 推导所以没事，**只有测试按 cwd 拼** | 抽成 `server/__tests__/views-dir.ts`，锚在 `import.meta.url` 上而不是 cwd 上，两处共用 |
+
+还有一条**关于验证顺序**的教训，比上面三条更值钱：第一次跑 `make test` 报的是
+`listen EPERM: operation not permitted`（沙箱禁止 bind socket），6 个文件全死在 bootstrap，
+`VIEWS_DIR` 那个真故障被完全遮住——因为那两个文件在能监听端口之前就不会走到渲染。
+同一批测试在允许 bind 的环境里跑出 43 个失败才是真信号。**结论：环境层报错会冒充成
+"改动没破坏东西"或"改动破坏了一片"，先看报错是不是 EPERM/网络/权限，再决定信不信这个结果。**
+
+本次拆分实跑过的证据（同一天）：`tsc --noEmit` 三份配置全过；`vitest run` 30 files /
+**510 passed**（含 6 个会真起 HTTP 监听的文件）；`cargo test`（rust）**161 passed / 0 failed / 2 ignored**，
+其中三条契约测试是运行时去读 `../web/scripts/main.ts`、`../web/client/src/voice_page.rs`、
+`../web/client/src/chat_page.rs` 的，能过就说明新路径在 cargo 的 CWD（package 根）下成立；
+`make clean && make build` 后产物落位 `server/dist/main.js` + `server/dist/view/views/*.hbs`（8 个模板 +
+partials）与仓库根 `public/assets/{main.js,main.css,voice.js}` + `public/{capture.js,logo.svg}`。
+**仍未验证**：服务真跑起来后的浏览器控制台（本机禁止起服务）。
+
+### 17.1 同日第二步：Node 侧换成真 pnpm workspace
+
+第一步刻意没做的事——把依赖从根 `package.json` 下沉到 `server/` 与 `web/`——代价是一次
+`pnpm install`：重写根 `pnpm-lock.yaml`（全仓只有这一份锁）并重装 `node_modules`，需要出站网络。
+目录形状稳定之后再付这笔成本，拆法变成：根清单不声明依赖、只留 `pnpm -r build|typecheck|test`
+三条聚合脚本，`vitest.config.mts` 也拆成两份 app 内配置（根不再留测试编排文件）。
+
+**nest 脚本为什么开头是 `cd ..`**：pnpm 执行 `package.json` 脚本时 cwd 恒为该 package 目录，
+而本项目的 `.env`、`DATABASE_FILE`、`STORAGE_DIR` 按 cwd 解析——直接在 `server/` 里 `nest start`
+会静默打开一个 `server/data/` 下的空库。所以 `server/package.json` 的 nest / drizzle 脚本先
+`cd ..` 再带 `-c server/nest-cli.json -p server/tsconfig.json`。这条路能走通的前提是：pnpm 在
+启动脚本前就把 `server/node_modules/.bin` 注入 PATH，`cd` 之后二进制仍然可解析；反过来若把
+`@nestjs/cli` 留在根、命令也留在根，虽然省掉 `cd`，但依赖归属又回到根，P4 删 Node 栈时删不干净。
+`vite` / `tsc` / `vitest` 没这个约束（配置与路径都相对自身解析），因此在本 app 目录直接跑。
+
+**拆测试 runner 后要数总数，不能只看"跑过了"**：include 模式从 `server/__tests__/**`（根 runner
+里）变成 `__tests__/**`（app 内 runner）时，写错一个层级不会报错，只会少跑文件——它会安静地
+变成 "No test files found"，或者更糟：安静地跑了一部分。本次核对的是**用例总数守恒**：
+拆前单 runner 30 files / 510 tests，拆后 `server` 28 files / 461 tests + `web` 2 files / 49 tests
+= 510，一条没丢。两轮 runner 的代价约 1 秒启动开销。
+
+复跑证据：`pnpm install`（重写锁）、`make typecheck`（两个 app 全过）、`make test`
+（461 + 49）、`make clean && make build`（`server/dist/main.js` + `server/dist/view/views/*.hbs`、
+仓库根 `public/assets/*` + `public/{capture.js,logo.svg}`）全绿；Rust 侧本轮零改动。

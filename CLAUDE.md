@@ -13,6 +13,38 @@ Web 生成式媒体 Agent：用户在网页给一句话，LLM 流式思考、调
 
 设计文档在 `docs/`，**动手前先按需读**：`architecture.md`（系统是什么，少变）、`roadmap.md`（将变成什么，常改）、`implementation-notes.md`（实现期踩坑台账，只增不减）、`deployment.md`（服务器侧）、`verification.md`（带日期的实测证据，引用前先看日期）。文档索引与维护约定见 `docs/README.md`。
 
+## 目录（monorepo，2026-11-02 起）
+
+代码按 app 分树，每棵树带上自己的构建与类型配置；仓库根只留**跨 app** 的东西。
+
+| 目录 | 内容（每棵树自带 `package.json` / `Cargo.toml` 与自己的配置） |
+|---|---|
+| `server/` | NestJS 后端：`src/`、`__tests__/`（node 环境）、`tsconfig.json` / `tsconfig.test.json` / `nest-cli.json` / `drizzle.config.ts`，产物 `server/dist/` |
+| `web/` | 前端：`scripts/`、`styles/`、`public/`（静态资源）、`__tests__/`（jsdom 环境）、`tsconfig.json`、`vite.config.mts`、`vitest.config.mts`，产物写到仓库根 `public/` |
+| `web/client/` | 浏览器客户端的 Rust 实现（`kestrel-client`，Rust→WASM，roadmap.md §4 P3） |
+| `rust/` | Rust 服务端（`kestrel-studio`，见架构文档 §13） |
+| `crates/proto/` `crates/md/` | 服务端与浏览器**共享**的 Rust 库：线类型与 Markdown 子集 |
+| 仓库根 | `package.json`（**workspace 根，不声明任何依赖**，只留三条聚合脚本）、`pnpm-lock.yaml`（全仓一份）、`pnpm-workspace.yaml`（`packages: [server, web]` + `allowBuilds`）、`Makefile`、`Dockerfile` / `compose` / `scripts/`、`docs/`、`public/`（产物）、`data/` `storage/`（运行时） |
+
+**拆分的三条口径**：(1) Node 侧是 pnpm workspace：**依赖声明在用到它的那棵树里**，根 `package.json`
+不声明依赖，只有 `pnpm -r build|typecheck|test` 三条聚合脚本，所以 roadmap.md §4 P4 删 Node 栈时
+根不会留下需要手工裁剪的清单（`server/` 与 `web/` 的 TS 面各自连配置带依赖一起消失）。
+Rust 侧**不**合并 Cargo workspace：那要把四份 `Cargo.lock` 重写成一份，收益只是少一个 `target/`。
+(2) `public/`、`data/`、`storage/` 留在根：`public/` 是两个服务端共用的静态目录，后两者是运行时状态。
+(3) **nest / drizzle 起的进程 cwd 必须是仓库根**——`.env`、`DATABASE_FILE`、`STORAGE_DIR` 都按 cwd
+解析，cwd 挪进 `server/` 会让本地跑打开一个全新的空库。所以 `server/package.json` 的相关脚本先
+`cd ..` 再带 `-c server/nest-cli.json -p server/tsconfig.json` 执行（pnpm 已把 app 自己的
+`node_modules/.bin` 放进 PATH，`cd ..` 不会丢二进制）。`vite`、`tsc`、`vitest` 不受影响，
+在 app 目录里直接跑，因为它们的配置与路径都相对自身解析。
+
+由 (3) 派生的两条硬规则：`server/nest-cli.json` 的 `sourceRoot` 写的是 `server/src`（CLI 把它与
+cwd 拼接），且它的 `assets` **不能写 `outDir`**（写了就按 cwd 拼成仓库根的 `dist/`，模板会拷到
+错误目录；不写则沿用 tsconfig 的 `server/dist`）。`nest-cli.json` 由 `JSON.parse` 读取，
+**不接受注释**（tsconfig 才是 JSONC）。
+
+历史文档（`verification.md`、`implementation-notes.md`）里的旧路径按原样保留，它们是带日期的
+事实记录；读作 `server/src/…`、`web/__tests__/…`、`web/client/…`、`crates/proto/…` 即可。
+
 ## 命令
 
 **Makefile 是命令入口**，`make help` 列全部；不要绕过它直接调 pnpm 脚本。
@@ -28,7 +60,7 @@ Web 生成式媒体 Agent：用户在网页给一句话，LLM 流式思考、调
 | `make typecheck` | 三份配置各跑一次 `tsc --noEmit`（后端 / 前端脚本 / 测试） |
 | `make test` | 单元测试（`vitest run`），纯模块，无 DI |
 | `make test-watch` | 单元测试 watch 模式 |
-| `make clean` | 清 `dist/` 与 `public/`，保留 `data/` `storage/` |
+| `make clean` | 清 `server/dist/` 与 `public/`，保留 `data/` `storage/` |
 | `make rust-check` / `rust-test` | Rust 实现（`rust/`）的类型检查与单元测试 |
 | `make rust-build` / `rust-run` | 构建 release 二进制 / 本机前台运行（不走 pm2） |
 | `make rust-build-linux` | 交叉编译 `x86_64-unknown-linux-musl` 静态二进制到 `/tmp/kestrel-studio-linux/`（`make deploy` 的输入；需 `zig` + `cargo-zigbuild`） |
@@ -44,7 +76,7 @@ Web 生成式媒体 Agent：用户在网页给一句话，LLM 流式思考、调
   两个变量缺任一个就不建超管、`/admin` 不可达。这条约束存在的原因是仓库要公开：
   内置凭据等于给线上实例发可用登录。
 - **Rust 实现（`rust/`）是并行的第二套服务端**，质量门是 `make rust-check` +
-  `make rust-test`。它**未接管构建与部署**：线上仍是 Nest 容器，`src/` 一行未改。
+  `make rust-test`。它**未接管构建与部署**：线上仍是 Nest 容器，`server/src/` 一行未改。
   离线 registry 缺 `bcrypt` / `tungstenite` / 模板引擎等件，相关自研与原因见
   `docs/architecture.md` §13，踩坑台账见 `docs/implementation-notes.md` §10-§12。
   **2026-10-30 两点更正与一条决策**：(1)「开发机无出站网络」是**执行环境的网络沙箱**
@@ -66,18 +98,18 @@ Web 生成式媒体 Agent：用户在网页给一句话，LLM 流式思考、调
   `CARGO_TARGET_DIR=/tmp/...`；`.gitignore` 虽已覆盖 `rust/target/`，但提交一律用
   `git add -u <path>` 而不是 `git add <path>`，避免未跟踪产物被顺手带进公开仓库。
 - **pm2 与 watch 模式争 8848 端口**：跑 `make dev` 前先 `make stop`；`make dev` 会自己检测并警告。
-- **质量门是 `make typecheck` + `make test`**。测试用 vitest，分两个 project（见 `vitest.config.mts`）：
-  - `server`（node 环境）—— `__tests__/server/**`，按 src 的模块结构镜像存放（测试文件不进 `src/`，这是约定）。走 **SWC** 而非默认的 esbuild，因为 esbuild 不实现 `emitDecoratorMetadata`，而应用有约 19 处构造参数依赖它；没有 SWC 就起不了 `Test.createTestingModule()`。这也是当初不用 ts-jest 的原因：ts-jest 要 TS 的 programmatic compiler API，而 TS 7 已移除（本项目钉在 TS 6.0.3 正是同一根因）。
-  - `web`（jsdom 环境）—— `__tests__/web/**`，测 `web/scripts/main.ts` 的 DOM 行为。`__tests__/web/test-setup.ts` 补了 jsdom 缺失的 `scrollIntoView`。
+- **质量门是 `make typecheck` + `make test`**。测试用 vitest，两个 app 各一份配置、各跑一轮 runner（`server/vitest.config.mts`、`web/vitest.config.mts`；合计 30 files / 510 tests，与拆分前单 runner 同数）：
+  - `server`（node 环境）—— `server/__tests__/**`，按 src 的模块结构镜像存放（测试文件不进 `src/`，这是约定）。走 **SWC** 而非默认的 esbuild，因为 esbuild 不实现 `emitDecoratorMetadata`，而应用有约 19 处构造参数依赖它；没有 SWC 就起不了 `Test.createTestingModule()`。这也是当初不用 ts-jest 的原因：ts-jest 要 TS 的 programmatic compiler API，而 TS 7 已移除（本项目钉在 TS 6.0.3 正是同一根因）。
+  - `web`（jsdom 环境）—— `web/__tests__/**`，测 `web/scripts/main.ts` 的 DOM 行为。`web/__tests__/test-setup.ts` 补了 jsdom 缺失的 `scrollIntoView`。
   - 测试里没有类型断言（全局 TS 规则禁止），所以守卫、控制器、登录链路都是**起真实 HTTP 服务再发请求**验证的，不是伪造 `ExecutionContext` 一类对象。
-  - 覆盖到的：纯模块、`ToolRegistry`、`ConversationService` / `ConversationEventsService` / `TaskService` / `TaskWorker`（真 SQLite 内存库 + 生产 DDL）、`AuthService`、`ensureAdminUser`、`chat` / `view` / `asset-frame` 控制器（含各端点的归属校验、签名帧的 403/404 边界、登录/登出会话链路、提交 202/409 与事件流的续传/断档）。供应商交互仍由注入边界 stub 掉。`local.strategy` / `session.serializer` / `login-redirect.filter` 没有独立测试文件，但被登录链路测试**行为性覆盖**（策略真被实例化并驱动、序列化由 cookie 往返证明、过滤器由"错误密码 → 302 /login?error=1"证明）。语音侧：服务端只测纯逻辑（票据存储、帧解析），中继按同样的边界归 `docs/verification.md` §4；**浏览器客户端测帧序列**（`__tests__/web/voice.test.ts`，jsdom + 假 socket：按下取票、`onopen` 发 `start`、ready 前后音频排队与补发、commit 时机）。这一条是踩过坑才加的——只验"控制台干净"没抓住客户端漏发 `start` 帧、服务端静默等待的故障，见 `docs/implementation-notes.md` §8。账号面（`admin/`）测到守卫的两条分支与非超管的 403、`canRead` 的完整角色矩阵、账号 CRUD 与级联删除、管理页的真实渲染（含"密码框旁必须有可见账号名"这条浏览器契约）。软删除单独测了三件事：属主看不见、超管看得见、数据一条不少（消息/资产行/磁盘文件都断言了）。
-  - **模板与客户端脚本的契约由一对测试守住**：`__tests__/web/main.test.ts` 用手抄的 DOM fixture 测行为，`__tests__/server/view/view.controller.test.ts` 渲染真模板并断言 `main.ts` 用 `requireElement` 取的那些 id 都在。改模板 id 会让后者失败。
+  - 覆盖到的：纯模块、`ToolRegistry`、`ConversationService` / `ConversationEventsService` / `TaskService` / `TaskWorker`（真 SQLite 内存库 + 生产 DDL）、`AuthService`、`ensureAdminUser`、`chat` / `view` / `asset-frame` 控制器（含各端点的归属校验、签名帧的 403/404 边界、登录/登出会话链路、提交 202/409 与事件流的续传/断档）。供应商交互仍由注入边界 stub 掉。`local.strategy` / `session.serializer` / `login-redirect.filter` 没有独立测试文件，但被登录链路测试**行为性覆盖**（策略真被实例化并驱动、序列化由 cookie 往返证明、过滤器由"错误密码 → 302 /login?error=1"证明）。语音侧：服务端只测纯逻辑（票据存储、帧解析），中继按同样的边界归 `docs/verification.md` §4；**浏览器客户端测帧序列**（`web/__tests__/voice.test.ts`，jsdom + 假 socket：按下取票、`onopen` 发 `start`、ready 前后音频排队与补发、commit 时机）。这一条是踩过坑才加的——只验"控制台干净"没抓住客户端漏发 `start` 帧、服务端静默等待的故障，见 `docs/implementation-notes.md` §8。账号面（`admin/`）测到守卫的两条分支与非超管的 403、`canRead` 的完整角色矩阵、账号 CRUD 与级联删除、管理页的真实渲染（含"密码框旁必须有可见账号名"这条浏览器契约）。软删除单独测了三件事：属主看不见、超管看得见、数据一条不少（消息/资产行/磁盘文件都断言了）。
+  - **模板与客户端脚本的契约由一对测试守住**：`web/__tests__/main.test.ts` 用手抄的 DOM fixture 测行为，`server/__tests__/view/view.controller.test.ts` 渲染真模板并断言 `main.ts` 用 `requireElement` 取的那些 id 都在。改模板 id 会让后者失败。
   - **不做 UT 的范围是刻意划定的，不要再提议补**：agent 轮次循环（`agent/agent.service.ts`）与供应商客户端（`bailian/responses-client.ts`）——它们的行为由活的端点定义（非标准帧、reasoning 事件名、超时），伪造供应商只会把我们的假设重新编码一遍，且在供应商真的变了时照样通过。那部分证据带日期记在 `docs/verification.md`。同样不测的还有 `chat` / `view` 控制器与 `media` 的 HTTP、落盘路径。
 - 改动前端后按全局规则用 Chrome DevTools MCP 验控制台。两个页面都已访查过：
   `/voice` **零条目**；对话页零错误零警告，另有 1 条 Chrome *issue*（`loading="lazy"` 的资产
   `<img>` 缺尺寸，属既有代码），记在 `docs/roadmap.md` §3。
   用 MCP 时**新开标签页**（`new_page`），别动用户自己的会话；用户已把待调试站点打开时除外。
-- `.hbs` 模板不在 TS 编译产物里，由 `nest-cli.json` 的 `assets` 拷进 `dist/view/views`；watch 模式下自动同步，一次性构建则必须重新 `make build-server`。
+- `.hbs` 模板不在 TS 编译产物里，由 `server/nest-cli.json` 的 `assets` 拷进 `server/dist/view/views`；watch 模式下自动同步，一次性构建则必须重新 `make build-server`。
 
 ## 架构
 
@@ -85,12 +117,12 @@ Web 生成式媒体 Agent：用户在网页给一句话，LLM 流式思考、调
 
 ### 1. 两条渲染路，互不重叠
 
-hbs 只渲染首屏骨架（登录态、历史会话侧栏、页面外壳、模式选择器），`src/view/views/chat.hbs`；
+hbs 只渲染首屏骨架（登录态、历史会话侧栏、页面外壳、模式选择器），`server/src/view/views/chat.hbs`；
 **从第一个 token 起，主体区全部由客户端 JS 拼 DOM**，服务端不吐 HTML 片段。
 守住这条边界，不要在 hbs 里塞流式占位逻辑。
 
 前端是无框架的原生 TS + Vite：`web/scripts/main.ts`（提交轮次、EventSource 订会话事件流并按事件绘图 DOM、图片预览、下载弹窗）＋ `web/styles/main.css`。
-Vite 只做打包，产物固定为 `public/assets/main.js` / `main.css`（由 `vite.config.mts` 指定），模板以 `/assets/main.js` 模块化引入；`body[data-conversation-id]`、`body[data-start-seq]`、`[data-mode]`、`[data-task-id]` 等 data 属性是两条路的交接面（`start-seq` 是首屏画到时的事件日志游标，脚本作为流首连的 `?from=`）。
+Vite 只做打包，产物固定为 `public/assets/main.js` / `main.css`（由 `web/vite.config.mts` 指定，`outDir` 指向仓库根的 `public/`），模板以 `/assets/main.js` 模块化引入；`body[data-conversation-id]`、`body[data-start-seq]`、`[data-mode]`、`[data-task-id]` 等 data 属性是两条路的交接面（`start-seq` 是首屏画到时的事件日志游标，脚本作为流首连的 `?from=`）。
 **管理页（`/admin` 系）刻意不引任何客户端脚本**：纯服务端表单 + 302 + `?notice=` 提示，因此它们的模板不进 `main.ts` 的 id 契约，也没有控制台噪音。
 `web/` 有自己的 `tsconfig.json`（DOM lib、`noEmit`），所以类型检查要跑两次。
 
@@ -101,7 +133,7 @@ Vite 只做打包，产物固定为 `public/assets/main.js` / `main.css`（由 `
 | 提交 | `POST /api/v1/conversations/:id/turns` | 普通 JSON，`202 {conversationId, messageId}` 即返回；轮次在服务端后台跑，断开不取消 |
 | 会话事件流 | `GET /api/v1/conversations/:id/stream` | 长连接，承载**一切**：轮次增量（reasoning/text/tool/asset/done）、后台任务进度、追加的消息；事件带会话内 `seq`，支持 `Last-Event-ID` 续传 |
 
-服务端流用 `src/common/sse.ts` 的 `SseWriter` **裸写 `@Res()`**，不用 `@Sse()` 装饰器——
+服务端流用 `server/src/common/sse.ts` 的 `SseWriter` **裸写 `@Res()`**，不用 `@Sse()` 装饰器——
 它带不了心跳注释帧与自定义头。每 15s 发 `: ping` 注释帧保活（工具调用期间连接静默几十秒），
 并带 `X-Accel-Buffering: no`（加压缩中间件会破坏 SSE）。
 
@@ -111,7 +143,7 @@ Vite 只做打包，产物固定为 `public/assets/main.js` / `main.css`（由 `
 发布的事件会掉缝）。轮次不本地拼装：用户回声、助手占位、增量全从流里画，DOM 按
 `messageId` 键控；游标低于保留窗口时服务端发 `resync`，客户端重载页面重建。
 
-事件名真源是 `src/common/sse.ts` 的闭合联合类型：`connected` `resync` `user_message`
+事件名真源是 `server/src/common/sse.ts` 的闭合联合类型：`connected` `resync` `user_message`
 `turn_started` `reasoning` `text` `tool_call` `tool_result` `asset` `turn_done` `turn_error`
 `task_updated` `message_added`（语义表见 `docs/architecture.md` §6；带 id 的都进日志可重放）。
 
@@ -119,7 +151,7 @@ Vite 只做打包，产物固定为 `public/assets/main.js` / `main.css`（由 `
 
 - **图片是同步的**：`generate_image` 在轮次内完成（单次工具超时 120s），产物以 `asset` 事件进事件日志并推给前端。
 - **视频是异步的**：`generate_video` 提交后**立刻返回** task id 并结束该轮，落 `generation_tasks` 表；
-  `src/task/task.worker.ts` 后台退避轮询（8s 间隔，任务上限 20min），成功后**立刻**把字节镜像到 `storage/`，
+  `server/src/task/task.worker.ts` 后台退避轮询（8s 间隔，任务上限 20min），成功后**立刻**把字节镜像到 `storage/`，
   再往会话追加一条新的 assistant 消息并经事件日志推 `task_updated` / `message_added`。
 
   两条硬约束决定了这个形状：视频渲染要几分钟（塞不进 SSE 轮次），且**供应商返回的媒体 URL 是短时效的**——错过成功那一刻就再也取不回。因此 `assets.source_url` 只作审计，**不作持久引用**。
@@ -128,7 +160,7 @@ Vite 只做打包，产物固定为 `public/assets/main.js` / `main.css`（由 `
 
 ### 模块职责
 
-`AppModule`（`src/app.module.ts`）装配：`config` 读环境变量 → `database` drizzle + 建表 + seed → `auth` / `conversation` / `media` / `task` / `agent` / `chat` / `view`。
+`AppModule`（`server/src/app.module.ts`）装配：`config` 读环境变量 → `database` drizzle + 建表 + seed → `auth` / `conversation` / `media` / `task` / `agent` / `chat` / `view`。
 
 - `agent/turn-runner.service.ts` — 轮次的提交口与登记表：同步建用户消息 + 空 assistant 占位行并记 `user_message`/`turn_started`，然后把 `AgentService.run` 挂后台立即返回；**一个会话同时只跑一轮**（第二次提交 409，防重复计费）；`onApplicationBootstrap` 收尾上个进程留下的空占位行（`abandonStalePlaceholders`，否则孤儿用户消息会触发重提交付费任务）。
 - `agent/agent.service.ts` — 轮次引擎：组装 instructions 与工具声明，最多 `MAX_TOOL_ROUNDS = 5` 次 LLM 往返防死循环，把每条增量发布到会话事件日志（不再持有连接）。
@@ -148,7 +180,7 @@ Vite 只做打包，产物固定为 `public/assets/main.js` / `main.css`（由 `
 - `admin/` — 超管管理面：`admin.guard.ts`（未登录 → `/login`；非超管 GET → `/`、POST → 403）、`admin.service.ts`（账号 CRUD + 级联删库外文件）、`admin.controller.ts`（纯表单 + 302 + `?notice=`）。它自己不写任何可见性查询，只用 `ConversationService`。
 - `view/view.controller.ts` — hbs 页面：`GET /login`、`GET /`（`?c=` 指定会话）、`GET /voice`；共用的模板预处理（markdown、轮次锚点、时间格式化）在 `view/render.ts`，管理页也用它。
 
-### 语音：第二条传输通路（`src/voice/` + `web/scripts/voice.ts`）
+### 语音：第二条传输通路（`server/src/voice/` + `web/scripts/voice.ts`）
 
 `/voice` 是一条**独立于轮次/SSE 的通路**，不是第五个模式（设计与理由见 `docs/architecture.md` §11）。链路：
 
@@ -160,7 +192,7 @@ Vite 只做打包，产物固定为 `public/assets/main.js` / `main.css`（由 `
 - **线上还需要一个单独的 nginx location**（`location = /api/voice`），因为现有那个片段为了让 SSE
   保持普通长连接而清空了 `Connection`，会一并杀掉 WS 的 upgrade。细节与理由见 `docs/deployment.md` §3。
 - **鉴权走一次性票据**，不在 upgrade 里碰 session：`POST /api/voice/ticket`（挂 `AuthenticatedGuard`）
-  签发单次使用、60s 有效的票据；WS 用它握手。理由与同形先例见 `src/common/signed-url.ts`
+  签发单次使用、60s 有效的票据；WS 用它握手。理由与同形先例见 `server/src/common/signed-url.ts`
   ——守卫够不着调用方时改用短时效令牌。
 - **推挽模式下 `commit` 之后必须显式 `response.create`**，服务端不会自动应答；`turn_detection`
   推挽要写 `null`（`'none'` 会被拒）。两条都在 `docs/verification.md` §4 有实测记录。
@@ -183,7 +215,7 @@ Vite 只做打包，产物固定为 `public/assets/main.js` / `main.css`（由 `
 | `GET /api/v1/assets/:id/download` | session 守卫 | 页面内下载 |
 | `GET /api/v1/assets/:id/frame` | HMAC 签名（`?exp=&sig=`），**故意不挂守卫** | 图生视频时交给供应商自己去取首帧 |
 
-签名逻辑在 `src/common/signed-url.ts`：以 `SESSION_SECRET` 对 `assetId.expiresAt` 签 HMAC，TTL 2h，`timingSafeEqual` 比对。
+签名逻辑在 `server/src/common/signed-url.ts`：以 `SESSION_SECRET` 对 `assetId.expiresAt` 签 HMAC，TTL 2h，`timingSafeEqual` 比对。
 供应商要能访问到它，所以图生视频强依赖 `PUBLIC_BASE_URL` 指向公网地址；`isPubliclyReachable()` 会在提交前拦掉 localhost 并给出真实原因，否则要等几分钟后拿一个供应商侧的下载错误。
 
 ## 编码约定
@@ -192,40 +224,40 @@ Vite 只做打包，产物固定为 `public/assets/main.js` / `main.css`（由 `
 - **`loadConfig()` 是普通函数，不是 DI**。`@nestjs/config` 虽然写在 `dependencies` 里，但全仓库没有任何 `ConfigModule` / `ConfigService` 用法；别顺手引入。
 - **两个守卫是刻意的**（`auth/guards.ts`）：`AuthenticatedGuard` 给 JSON 端点返 401，`ViewAuthGuard` 给 HTML 路由 302 到 `/login`。即便挂了守卫，controller 里仍会再查一次 `req.user === undefined`。
 - **文案按受众分语言**：给用户与供应商的字符串用中文（`'未登录'`、任务状态标签），**回灌给模型的字符串用英文**（`'prompt is required.'`、工具输出）。HTTP 层只有守卫抛 Nest 异常，controller 一律手写 `res.status(...).json(...)`。
-- **模型给的参数一律不信**：走 `src/common/args.ts` 的 `readString` / `readNumber` / `readOptionalNumber` / `clamp`，路由与 query 走 `common/http.ts` 的 `readPositiveInt`。
+- **模型给的参数一律不信**：走 `server/src/common/args.ts` 的 `readString` / `readNumber` / `readOptionalNumber` / `clamp`，路由与 query 走 `server/src/common/http.ts` 的 `readPositiveInt`。
 - **归属校验是手写的、没有拦截器**：每个碰会话的端点都自己调 `isOwnedBy` / `findAssetForUser`。新增端点必须照做。
 
 ## 数据与 schema
 
-**两处要同时改**：`src/database/schema.ts`（drizzle 类型）与 `src/database/database.module.ts` 里的手写 `DDL`。
+**两处要同时改**：`server/src/database/schema.ts`（drizzle 类型）与 `server/src/database/database.module.ts` 里的手写 `DDL`。
 `CREATE TABLE IF NOT EXISTS` 加不了列，而 `data/` 是 docker volume 会跨部署存活，所以**首次发布后新增的列**还要进 `ADDED_COLUMNS` 数组（`ensureColumns` 会 `ALTER TABLE` 补上）。`messages.mode` 目前**只在 `ADDED_COLUMNS` 里**、不在 DDL 里，于是新库与老库经不同路径到达同一形态——加新列时别只补一处。正例是 `users.role` 与 `conversations.deleted_at`：两处都写了，老库分别由 `ALTER TABLE … DEFAULT 'user'` 与 `ADD COLUMN … INTEGER`（可空）补上，既有数据自动落到正确形态。
 
 - `sessions` 表由 `better-sqlite3-session-store` 独占管理，**故意不建模进 drizzle**，避免两个写入方共管一张表。
 - **`conversation_events` 是派生数据**（流日志，不是第二个真源）：`seq` 是**会话内**计数——全局 id 会把「新会话第一条」与「已被裁剪」混淆（见 `docs/architecture.md` §5）。新**整表**只需进 DDL（`IF NOT EXISTS` 对老库也建表），`ADDED_COLUMNS` 只服务于老表补列；硬删除级联里别漏它。
-- 需要数据迁移的 schema 变更走 `pnpm db:push`（drizzle-kit，schema 路径写死在 `drizzle.config.ts`）。
+- 需要数据迁移的 schema 变更走 `pnpm db:push`（drizzle-kit 在 `server/` 里执行，schema 路径写死在 `server/drizzle.config.ts`，产物目录是 `server/drizzle/`）。
 - 建表逻辑由 `database.module.ts` 的 `applySchema(connection)` 统一施加，测试复用它而不是复制 DDL。**测试里请自己 `new Database(':memory:')`**：`openDatabase()` 会把值过一遍 `resolve()`，所以 `DATABASE_FILE=:memory:` 会变成一个真的叫 `:memory:` 的文件，而不是内存库。
 - `reasoning` 与 `tool_calls`（JSON 文本）单独存列，目的是刷新或重进会话能**完整回放思考过程**，而不只剩最终文本。
 - 图片/视频二进制不入库，只存元数据 + 磁盘路径（`storage/`）。落盘文件名是随机串、扩展名按 kind 白名单兜底（不信任 URL），provider 的 URL 从不外泄（会过期）。
-- **`assets.file_path` 存的是文件名，不是路径**，读取时由 `src/media/asset-path.ts` 的 `resolveAssetPath()` 按当前 `STORAGE_DIR` 展开（旧行的绝对路径若还在原处仍兼容）。写库时用 `storedAssetName()`。**不要把绝对路径塞进数据**：项目搬一次目录，历史资产就会对属主也 404，见 `docs/implementation-notes.md` §7。
+- **`assets.file_path` 存的是文件名，不是路径**，读取时由 `server/src/media/asset-path.ts` 的 `resolveAssetPath()` 按当前 `STORAGE_DIR` 展开（旧行的绝对路径若还在原处仍兼容）。写库时用 `storedAssetName()`。**不要把绝对路径塞进数据**：项目搬一次目录，历史资产就会对属主也 404，见 `docs/implementation-notes.md` §7。
 - 正文字段的 markdown 是**服务端用 `marked` 渲染**成 HTML 交给模板三花括号输出的，客户端在每个 `text` delta 上增量重渲染；`reasoning` 按纯文本追加，不解析。
 
 ## 配置
 
-`src/config/configuration.ts` 是唯一的读取点，`loadConfig()` 到处被直接调用（不是 Nest 的 ConfigService 注入）。
+`server/src/config/configuration.ts` 是唯一的读取点，`loadConfig()` 到处被直接调用（不是 Nest 的 ConfigService 注入）。
 
-入口 `src/main.ts` 在**第一次读环境之前**调 `loadEnvFile()`（`src/config/env-file.ts`），把项目根的
+入口 `server/src/main.ts` 在**第一次读环境之前**调 `loadEnvFile()`（`server/src/config/env-file.ts`），把项目根的
 `./.env` 叠进 `process.env`。三条规则要记住：**已存在的变量一律不覆盖**（容器里由 docker `env_file`
 注入，镜像内也没有 `.env`，所以真实环境永远赢；`PORT=3000 make dev` 也不会被本地文件顶掉）；
 文件不存在不是错误；值按字面取（第一个 `=` 之后全部保留，含 `#`，只剥掉成对包裹的引号）。
 没用 `@nestjs/config` 的 `ConfigModule`，因为它在模块初始化期才写环境，而 `main.ts` 与各
-provider 工厂在此之前就已经直接调 `loadConfig()` 了。`drizzle.config.ts` 不走这条路，
+provider 工厂在此之前就已经直接调 `loadConfig()` 了。`server/drizzle.config.ts` 不走这条路，
 它直接读 `process.env.DATABASE_FILE`。
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `PORT` | 8848 | |
 | `NODE_ENV` | 未设置 | `production`（Dockerfile 设）时不 seed 本地引导账号 `admin` |
-| `SESSION_SECRET` | 非 production 下每进程随机；`NODE_ENV=production` 时缺失直接启动失败 | 同时是资产签名密钥（`src/common/signed-url.ts:19`） |
+| `SESSION_SECRET` | 非 production 下每进程随机；`NODE_ENV=production` 时缺失直接启动失败 | 同时是资产签名密钥（`server/src/common/signed-url.ts:19`） |
 | `DATABASE_FILE` | `data/kestrel-studio.db` | |
 | `STORAGE_DIR` | `storage` | |
 | `PUBLIC_BASE_URL` | `https://try.kestrel.justwork.link` | 图生视频的帧 URL 前缀 |
@@ -238,8 +270,8 @@ provider 工厂在此之前就已经直接调 `loadConfig()` 了。`drizzle.conf
 
 ## 容易踩的坑
 
-- **任何新 tsconfig 都要显式写 `types`。** TS 6 起 `types` 未指定**不再**自动包含 `node_modules/@types`（编译器里是 `usesWildcardTypes` = `some(options.types, t => t === "*")`，未指定即空）。本项目一直能用 Node 全局量，靠的是模块图顺带解析：`src/main.ts` import `express` → `@types/express` → `@types/node`。所以一个只以测试文件为根的 program 不 import express，`process` / `Buffer` / `node:*` 全部变成未解析名。`tsconfig.test.json` 里的 `"types": ["node"]` 是必需的，不是风格选择。
-- **`src/alias-bootstrap.ts` 必须是入口的第一个 import**。TS 不为产物重写 `@/*` 别名，运行时靠它注册解析钩子；任何在它之前被 require 的模块都会漏掉别名。因此它显式传 `baseUrl`（TS 7 移除了 `baseUrl`，tsconfig-paths 读 tsconfig 会抛 `ERR_INVALID_ARG_TYPE`），`start:prod` 也就不需要 `-r tsconfig-paths/register`。
+- **任何新 tsconfig 都要显式写 `types`。** TS 6 起 `types` 未指定**不再**自动包含 `node_modules/@types`（编译器里是 `usesWildcardTypes` = `some(options.types, t => t === "*")`，未指定即空）。本项目一直能用 Node 全局量，靠的是模块图顺带解析：`server/src/main.ts` import `express` → `@types/express` → `@types/node`。所以一个只以测试文件为根的 program 不 import express，`process` / `Buffer` / `node:*` 全部变成未解析名。`server/tsconfig.test.json` 里的 `"types": ["node"]` 是必需的，不是风格选择。
+- **`server/src/alias-bootstrap.ts` 必须是入口的第一个 import**。TS 不为产物重写 `@/*` 别名，运行时靠它注册解析钩子；任何在它之前被 require 的模块都会漏掉别名。因此它显式传 `baseUrl`（TS 7 移除了 `baseUrl`，tsconfig-paths 读 tsconfig 会抛 `ERR_INVALID_ARG_TYPE`），`start:prod` 也就不需要 `-r tsconfig-paths/register`。
 - **登录必须显式 `req.logIn()`**。`@nestjs/passport` 的 `AuthGuard.canActivate` 只把结果挂到 `request.user`，**从不写 session**；漏了这一步会表现为「登录 302 成功但没有 Set-Cookie，后续全部 401」。见 `auth/auth.controller.ts`。
 - **`PORT` 不放 `.env`，由 compose 注入**。`.env` 是「只写一次、永不覆盖」（保护 `SESSION_SECRET`），里面任何可变项都会变成永久生效的过期值；compose 的 `environment` 优先级高于 `env_file`。
 - **`.dockerignore` 的每条路径都要带前导斜杠锚定**；`deploy.sh` 的打包用**显式白名单**而非 `tar --exclude`。未锚定的 `storage` 会在任意深度匹配，静默删掉 `node_modules/.pnpm/multer@*/node_modules/multer/storage`，运行时表现为 `Cannot find module './storage/disk'`，而 NestJS 会把它转述成误导性的「`@nestjs/platform-express` 没装」。踩坑全过程见 `docs/implementation-notes.md` §6。

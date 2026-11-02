@@ -2,6 +2,13 @@
 
 > 带日期的证据台账。**结论会过时**——端点行为、模型行为都可能变，引用前先确认日期与适用范围。
 > 设计决策本身见 [architecture.md](./architecture.md)。
+>
+> **路径口径（2026-11-02 目录拆分）**：本文是带日期的事实记录，条目里的 `src/`、`__tests__/`、
+> `client/`、`proto/`、`md/` 与 `cargo test --manifest-path client/Cargo.toml` 这类命令都按
+> 当时的目录书写，现分别读作 `server/src/`、`server/__tests__/` 与 `web/__tests__/`、
+> `web/client/`、`crates/proto/`、`crates/md/`（命令加 `--manifest-path web/client/Cargo.toml`）。
+> 现行结构见 [architecture.md](./architecture.md) §9。**记录的数字与结论本身未经重测**，
+> 目录改动只挪文件，不构成新的验证。
 
 ## 1. 前提实测结论（2026-09-20）
 

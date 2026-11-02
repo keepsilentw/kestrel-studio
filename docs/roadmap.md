@@ -14,7 +14,7 @@
 |---|---|---|---|
 | 一 | 上述一期内容 | 已完成 | 端到端已验证（[verification.md](verification.md) §2） |
 | 二 | 抽出 `/api/v1` + 对话级 SSE（含断线续传）+ 三模式 | 直接服务多端目标，不依赖内核决策，做完不返工 | **已全部落地**（2026-10-21）：三模式早先完成；`/api/v1` + 提交/订阅分离 + `seq` 续传见 [architecture.md](./architecture.md) §4.2，实测证据见 [verification.md](./verification.md) §8 |
-| 三 | 异步任务子系统 + 视频能力 | 独立子系统，与内核决策解耦 | **已落地**，见 `src/task/`（提交即返回、后台轮询、成功即镜像、追加消息并推送）；端到端未记录 |
+| 三 | 异步任务子系统 + 视频能力 | 独立子系统，与内核决策解耦 | **已落地**，见 `server/src/task/`（提交即返回、后台轮询、成功即镜像、追加消息并推送）；端到端未记录 |
 | 四 | **语音会话**（独立入口 + 工具调用） | 与内核决策无关，走 §2.4.1 之外的一条独立通路。设计已迁至 [architecture.md](./architecture.md) §11 | **已落地**，本地与线上端到端实测均通过（[verification.md](verification.md) §4） |
 | 五 | 内核选型落地（保持 TS 增强 / 引入 Rust sidecar） | 前面各期完成后，内核的真实收益才有可比基准 | 未开始 |
 | 六 | **语言迁移**：服务端改用 Rust（`rust/`） | 与第五期无关的独立变量：先换宿主语言，内核选型才有对照物 | **代码已落地**（2026-10-27），见 [architecture.md](./architecture.md) §13；**未接管构建与部署、未端到端实测**（verification.md §9） |
@@ -199,7 +199,7 @@ openai 面须置 compat 位 `stream_include_usage = true`，否则全程 `usage:
   得先知道图片尺寸，而尺寸由模型选，暂无好办法，先记着。
 - 语音的遗留项（设计与已落地的部分见 [architecture.md](./architecture.md) §11）：
   - **真实麦克风采集尚未验证**。客户端到服务端的帧序列已有测试与实测覆盖
-    （`web/scripts/voice.test.ts`、[verification.md](verification.md) §7），剩下的是
+    （`web/__tests__/voice.test.ts`、[verification.md](verification.md) §7），剩下的是
     `getUserMedia` 那一步——它要弹权限框，需由人在 `/voice` 页按住按钮走一遍。
   - **打断（barge-in）未做**：上一句还在播时按住说话不会中断它。
   - **空闲保活未做**：上游 180 秒无响应即关闭会话（close code `1007`），现由客户端提示
@@ -227,7 +227,7 @@ Web 客户端由 TypeScript + Vite 改为 **Rust→WASM**（选型 B），markdo
 
 | 代价 | 结论 | 说明 |
 |---|---|---|
-| ~~首屏载荷涨 10 倍~~ | **不成立，实测持平** | wasm-opt 后当前范围是 **24.4 KB gz**，现客户端是 **21.0 KB gz**。此前的 303 KB / 95 KB 两个数字都不作数：前者是 wasm-opt 之前的中间产物，后者 74 KB 来自 `pulldown-cmark`，已改为共享服务端的手写子集（`md/`）|
+| ~~首屏载荷涨 10 倍~~ | **不成立，实测持平** | wasm-opt 后当前范围是 **24.4 KB gz**，现客户端是 **21.0 KB gz**。此前的 303 KB / 95 KB 两个数字都不作数：前者是 wasm-opt 之前的中间产物，后者 74 KB 来自 `pulldown-cmark`，已改为共享服务端的手写子集（`crates/md/`）|
 | JS 地板 | 约 20 行，**删不掉** | `AudioWorkletProcessor` 子类必须在 worklet 全局作用域 `registerProcessor`，那里跑不了 wasm 宿主。语音采集那小段 JS 只能作为静态资源入库（`public/capture.js`） |
 
 真实代价改记为两条：一是**客户端从此没有类型检查与 jsdom 测试之外的运行时护栏**，
@@ -238,11 +238,11 @@ Web 客户端由 TypeScript + Vite 改为 **Rust→WASM**（选型 B），markdo
 
 | 项 | 现状 | 决策点 |
 |---|---|---|
-| GFM 表格与删除线 | `marked` 支持，`md/` 子集不支持。切换后助手画的表格会以竖线原文显示 | 要么给 `md/` 补语法（同时在 `rust/src/view/tests.rs` 加断言，两侧一起改），要么接受并观察助手是否真用表格。**没有第三选**：只在一侧补等于重新制造口径分裂 |
+| GFM 表格与删除线 | `marked` 支持，`crates/md/` 子集不支持。切换后助手画的表格会以竖线原文显示 | 要么给 `crates/md/` 补语法（同时在 `rust/src/view/tests.rs` 加断言，两侧一起改），要么接受并观察助手是否真用表格。**没有第三选**：只在一侧补等于重新制造口径分裂 |
 | DOM 层的真实体积 | 未测（客户端还没有任何 DOM 代码） | 若 DOM 层使 gz 涨到不可接受，退路是"服务端吐 HTML、客户端不做 markdown"，那是链路改动而非引擎替换 |
 
 顺带修掉的一个长期风险：markdown 目前有**三处**渲染口径——Nest 服务端 SSR
-（`src/view/render.ts` 用 `marked`）、Nest 客户端（`web/scripts/main.ts` 同一个 `marked`，
+（`server/src/view/render.ts` 用 `marked`）、Nest 客户端（`web/scripts/main.ts` 同一个 `marked`，
 所以这两处天然一致）、以及 Rust 服务端 `view/html.rs` 的**手写子集**。历史上这个
 边界出过一次问题（用户轮次不该按 markdown 解析，提交 `e7b2911`）。改 B 之后
 SSR 与客户端共用同一个 `pulldown-cmark` 配置，「实时渲染与重载回放不一致」这一类
@@ -262,7 +262,7 @@ Rust 服务端从未真跑、客户端要重写、部署镜像要换形态。
 | P1 | Rust 服务端第一次**真运行**（不在本机） | 本机禁止启动 Docker、禁止为本机起服务做测试，且仓库不保留 CI 配置（CLAUDE.md），所以判据只剩一个去处：**目标主机上的灰度实例**——与现有 Nest 容器并存、占另一个端口，跑通 `/login` 200、静态资源、SSE 续传、出图 / 视频任务 / 语音 / `/admin` 只读回放 + 控制台零噪音。需用户授权并人工执行 |
 | P2 | 交付链换 Rust | 开发机构建静态 musl 二进制 → `FROM scratch` 运行镜像（服务器零下载，TLS 根证书已有 `webpki-roots`）；先确认宿主机架构；灰度前备份 SQLite 库；已知副作用：**cookie 签名算法不同，切流时全员重新登录一次** |
 | P3 | 客户端 Rust→WASM | 装 `wasm-pack`（不能用 brew 的 wasm-bindgen CLI，版本 0.2.111 vs crate 0.2.129）；按页拆 `main` / `voice` 两个 wasm 模块；**语音帧序列逻辑与 DOM 分离**，使 `start`/`commit`/排队补发那组断言能在 `cargo test` 里跑（jsdom 测试要退役，而它正是抓住线上"永远停在正在连接…"的那个测试）；`AudioWorklet` 的 JS 留在静态资源里 |
-| P4 | 删除 Node 栈 | `src/`、`__tests__/`、`package.json`、`pnpm-lock.yaml`、`pnpm-workspace.yaml`、`vite.config.mts`、`tsconfig*.json`、`drizzle.config.ts`、`nest-cli.json`、Makefile 的 Node targets、Dockerfile 的 node 阶段一并移除；删前打 tag，提交按文件面拆分先给计划 |
+| P4 | 删除 Node 栈 | `server/`（整棵树，含自己的 `package.json` 与 `vitest.config.mts`）、`web/` 的 TS 面（`scripts/`、`styles/`、`__tests__/`、`package.json`、`tsconfig.json`、`vite.config.mts`、`vitest.config.mts`，**留下 `web/client/`**）、根的 `package.json` + `pnpm-lock.yaml` + `pnpm-workspace.yaml`（workspace 依赖已下沉到两棵树，根清单没有需要手工裁剪的残留）、Makefile 的 Node targets、Dockerfile 的 node 阶段一并移除；删前打 tag，提交按文件面拆分先给计划 |
 
 P3 的 DOM 契约测试要同步改：现有 Rust 测试从 `web/scripts/main.ts` 解析
 `requireElement` 得到 17 个 id 来反向钉模板；客户端变成 Rust 后，这份清单应从
@@ -273,11 +273,28 @@ Rust 客户端源码本身取得，跨语言解析那层可以去掉。
 | 期 | 状态 |
 |---|---|
 | P2 | **交叉编译通了**：`make rust-build-linux` 产出 9.2 MB 的 `x86_64-unknown-linux-musl` 静态 ELF；`Dockerfile` 换成 `FROM scratch`、compose 加 `tmpfs /tmp`、`deploy.sh` 不再上传 node_modules（约 300 MB → 几 MB）、`bootstrap-host.sh` 不再需要缓存基础镜像。目标机实测为 x86_64 / CentOS 7.9 / Docker 26.1.4。**未做**：镜像没构建过、二进制没运行过、没有部署（都需另行授权）。证据见 [verification.md](verification.md) §11.1-§11.2 |
-| P3 | **两个页面的代码基本到位**。语音页：`client/src/{wire,audio,voice_page}.rs` + `web/public/capture.js`（`40181fd`）。对话页：判定层 `chat_core.rs`（31 条宿主测试，`a2019a8`）+ 渲染层 `chat_page.rs`（订阅、绘制、模式选择、提交、图片预览、删除确认 `a9074d5`、轮次索引）。类型单一来源扩到事件流：`proto/src/event.rs` 收了 `ConversationEvent` / `MessageView` / `AssetView` / `ToolCallRecord` / `Mode` / `TaskStatus`（`b59e8ed`），服务端的提示词与工具表用 `ModePrompt` trait 留在原处。契约测试补到两条：`/voice` 骨架与对话骨架分别按 `voice_page.rs`、`chat_page.rs` 源码里读出的 id 校验（rust 侧 161 条通过）。**仍未验证**：`initVoice` / `initChat` 无人调用，模板仍加载 `voice.js` / `main.js`。**对话页还差两项**：下载对话框（canvas 重编码——`chat_core` 的 `plan_download` / `format_bytes` 已测但暂无调用方）、历史下拉刷新。两处走法记在此处以免后人重推：删除确认用 `[data-delete-conversation]` 与 `[data-delete-choice]` 的 document 级委托，删的是当前会话就回空舞台、删别的行就摘掉该行，并在 `close` 事件里清掉待删 id（Esc 不是确认）；轮次索引按 `.turn-index-link[data-target]` 绑骨架已有行、`user_message` 落地时补新行，高亮跟随阅读位置而非最后一次点击（`request_animation_frame` 合帧，阈值取滚动容器顶 +24 px——必须高于 `.turn` 的 12 px `scroll-margin-top`，否则刚滚到的那一轮仍亮着上一条） |
+| P3 | **两个页面的代码基本到位**。语音页：`web/client/src/{wire,audio,voice_page}.rs` + `web/public/capture.js`（`40181fd`）。对话页：判定层 `chat_core.rs`（31 条宿主测试，`a2019a8`）+ 渲染层 `chat_page.rs`（订阅、绘制、模式选择、提交、图片预览、删除确认 `a9074d5`、轮次索引）。类型单一来源扩到事件流：`crates/proto/src/event.rs` 收了 `ConversationEvent` / `MessageView` / `AssetView` / `ToolCallRecord` / `Mode` / `TaskStatus`（`b59e8ed`），服务端的提示词与工具表用 `ModePrompt` trait 留在原处。契约测试补到两条：`/voice` 骨架与对话骨架分别按 `voice_page.rs`、`chat_page.rs` 源码里读出的 id 校验（rust 侧 161 条通过）。**仍未验证**：`initVoice` / `initChat` 无人调用，模板仍加载 `voice.js` / `main.js`。**对话页还差两项**：下载对话框（canvas 重编码——`chat_core` 的 `plan_download` / `format_bytes` 已测但暂无调用方）、历史下拉刷新。两处走法记在此处以免后人重推：删除确认用 `[data-delete-conversation]` 与 `[data-delete-choice]` 的 document 级委托，删的是当前会话就回空舞台、删别的行就摘掉该行，并在 `close` 事件里清掉待删 id（Esc 不是确认）；轮次索引按 `.turn-index-link[data-target]` 绑骨架已有行、`user_message` 落地时补新行，高亮跟随阅读位置而非最后一次点击（`request_animation_frame` 合帧，阈值取滚动容器顶 +24 px——必须高于 `.turn` 的 12 px `scroll-margin-top`，否则刚滚到的那一轮仍亮着上一条）。**2026-11-02 起这些文件在 `web/client/` 下**，crate 本身未变 |
 | P1 | **未开始**。本机不跑服务、不起 Docker（硬规则），所以运行时证据一律外移，见上表的 (a)/(b)。P2/P3 的可逆性不受影响：Nest 管线一行未删，回滚路径写在 deployment.md §1.1 |
 
 顺序偏离原计划一处，值得记下来：**P2/P3 先于 P1 动了**。P1 的判据仍然是硬闸——
 在它通过之前，P4（删除 Node 栈）不得执行，交付链也不得实际切换（`make deploy` 未跑）。
+
+**2026-11-02 目录前置**：仓库拆成 monorepo 形态——`server/`（Nest 后端 + 它的
+tsconfig / nest-cli / drizzle 配置）、`web/`（前端代码 + vite / tsconfig + WASM 客户端
+`web/client/`）、`rust/`（Rust 服务端，位置不变）、`crates/`（`proto/`、`md/` 两个共享库），
+完整映射见 [architecture.md](./architecture.md) §9。**只挪目录与改引用，未动任何代码语义**；
+P4 的删除清单因此收敛成「删两棵树」，见上表。质量门当天全跑过：`tsc --noEmit` 三份、
+`vitest run` 30 files / 510 passed、`cargo test`（rust）161 passed、
+`cargo check --target wasm32-unknown-unknown`（web/client）、`make clean && make build`
+（产物落位 `server/dist` 与仓库根 `public/`）——过程与踩到的三处 cwd 暗坑记在
+implementation-notes.md §17。`make deploy` 仍未跑（P1 硬闸没变）。
+
+同日第二步：Node 侧改成**真 pnpm workspace**——依赖从根 `package.json` 下沉到
+`server/package.json` 与 `web/package.json`（根不声明依赖，只留 `pnpm -r` 聚合脚本），
+`vitest.config.mts` 也跟着拆成两份 app 内配置，根不再留测试编排文件。代价按约定经授权重写
+了 `pnpm-lock.yaml`（一次 `pnpm install`）。**Rust 侧不合并 Cargo workspace**：四份
+`Cargo.lock` 合成一份的收益只是少一个 `target/`。质量门复跑：typecheck 两个 app 通过、
+vitest **server 461 + web 49 = 510**（与拆分前单 runner 同数，一条没丢）、`make build` 产物落位不变。
 
 本表原先把 P1 写成"本机起服务跑通"，那与项目既有规则冲突，2026-10-30 已改正。
 **本机可验证的上限**（不动 Docker、不起服务，因此始终可做）：编译、单元测试、
