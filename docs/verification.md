@@ -751,3 +751,88 @@ $ cargo check --target wasm32-unknown-unknown --manifest-path client/Cargo.toml 
 （容器能否起、`/login` 是否 200、SSE 首帧、静态资源 ETag）不在本机取得。
 唯一去处是**目标主机上的灰度实例**，由用户授权后人工执行。曾写过一份远端 CI 烟测定义，
 按要求删除，且删除前从未运行过——**不要把它当作已存在的验证手段**。
+
+## 13. 线上切至 Rust 服务端（2026-11-02）
+
+一句话：roadmap.md §4.3 的 **P1 判据部分通过**。交付链、容器启动、鉴权、静态资源、
+公网反代、一轮真实流式对话都已在 Rust 二进制上跑通；出图 / 视频 / 语音 / `/admin` 内容 /
+SSE 断线续传这五条仍未走。以下全部来自 `ssh lavo-test` 的只读探测。
+
+### 13.1 容器与进程事实
+
+| 项 | 事实 |
+|---|---|
+| 容器 | `kestrel-studio` `Up`，`0.0.0.0:8848->8848` |
+| 镜像 | `kestrel-studio:latest` **10.2 MB**（同机留下的最后一个 Nest 镜像是 1.27 GB） |
+| 入口 | `ENTRYPOINT [/app/kestrel-studio]`；`.build/linux-x86_64/kestrel-studio` 9,701,056 B，`file` 判定 `ELF 64-bit, statically linked, stripped` |
+| 启动日志 | `Bailian credentials resolved` / `expired sessions cleared=0` / `kestrel-studio listening on http://localhost:8848` |
+| 占用 | `docker stats` RSS **1.219 MiB**（3.56 GiB 限额的 0.03%） |
+| 当天部署 | 三次：镜像 `13:24:03` / `13:45:00` / `13:47:03`，在跑的是最后一个 |
+
+静态 musl 二进制在 CentOS 7（glibc 2.17）上直接运行，印证了 deployment.md §1 那条
+「静态链接是承重选择」；`scratch` 里没 `/etc/ssl/certs` 也没影响——出站取凭据正常。
+
+### 13.2 容器内 HTTP 探测
+
+```bash
+for p in /login /assets/main.css /capture.js /wasm/kestrel_client_bg.wasm /api/voice/ticket /admin; do
+  ssh lavo-test "curl -s -o /dev/null -w '%{http_code} %{size_download}B' http://127.0.0.1:8848$p"
+done
+```
+
+| 路径 | 结果 | 含义 |
+|---|---|---|
+| `/login` | 200，909 B，`text/html` | SSR 页面在 |
+| `/assets/main.css` | 200，16153 B，md5 `a1ba5ddb932569db087f8b95615aaef1` | 与开发机当天 `make build` 产物**逐字节相同**，自带静态托管可用 |
+| `/capture.js` | 200，1687 B | WASM 客户端那块「删不掉的 JS 地板」已上线 |
+| `/wasm/kestrel_client_bg.wasm` | 200，340600 B，`application/wasm` | 产物已随 `public/` 上线，但模板没有引用它（P3 的已知状态） |
+| `/api/voice/ticket` | 405 | 路由已挂载，GET 不接受，符合预期 |
+| `/admin` | 302 → `/login` | 角色守卫在 |
+
+### 13.3 公网入口（openresty 反代）未因切换而回归
+
+在宿主机上用 `--resolve try.kestrel.justwork.link:443:127.0.0.1` 打本机：`/login` 200、
+`/assets/main.css` 200、`/admin` 302 → `https://try.kestrel.justwork.link/login`、`/` 302；
+80 端口 301 → https。反代那三处配置（`proxy_buffering off`、独立的 `location = /api/voice`、
+上游写 `172.17.0.1:8848`）一行未动，仍然通。
+
+### 13.4 会话与数据面：线上确认（兼容性只有一个方向）
+
+```bash
+sqlite3 "file:/opt/kestrel-studio/data/kestrel-studio.db?mode=ro" \
+  "select (select count(*) from users), (select count(*) from sessions), \
+          (select count(*) from conversations), (select count(*) from messages), \
+          (select count(*) from assets);"
+```
+
+- 库现状：2 用户（`user` / `super`）· 3 会话行 · 7 会话 · 44 消息 · 17 资产 · 2 视频任务。
+- **一轮真模型流式对话经 Rust 落地**：会话 7 的用户轮 + 助手轮时间戳 13:45:53–54，
+   `conversation_events` 37 行、`seq` 从 1 连续到 37、末行 `turn_done`。13:24 起线上就是
+   Rust 容器（同机最后一个 Nest 镜像构建于 9-27），所以这一轮不可能出自 Nest；但具体是 13:24
+   还是 13:45 那版分不出来——compose 每次重建都会移除旧容器，`docker ps -a` 只剩 13:47 那个。
+  事件流仍是「先插 `seq` 再扇出」，与 Nest 期写的旧行同表同形状。
+- `sessions` 当天新增的 3 行形状是 `{"cookie":{"expires":…,"originalMaxAge":604800000},"user":2}`
+  —— principal 在**顶层 `user`，值是裸 id**，这是 Rust 侧写的。Nest 侧走 passport，
+  `serializeUser` 只把 id 交出去，所以它的行是 `{"cookie":{…},"passport":{"user":<id>}}`，
+  principal 嵌一层。Rust 的两个位置都读（`auth/session.rs`），Nest 读不到 Rust 的顶层 `user`
+  ——**回滚方向不兼容**，这一点在回滚前要先确认。`expire` 列存 ISO-8601 文本
+  （与 better-sqlite3-session-store 一致），Rust 读写两侧都认（architecture.md §13.2）。
+- **切流会登出所有人**：两边都用 `HMAC-SHA256` + base64url-no-pad，但**被签的字符串不同**——
+  express-session（`cookie-signature`）签的是**不含** `s:` 前缀的 token，本服务签的是
+  `"s:" + token`（`auth/session.rs::sign`）。同一个 token 在两侧算出的摘要必然不同，所以 Nest 期的
+  旧 cookie 在本服务上验不过，属**被拒绝**而非**被误信**。线上表现与之一致：13:24 之后表里出现的
+  3 行全部是重新登录写进来的，没有一条旧会话延续的痕迹。这是「代码事实 + 表现一致」，
+  不是一条抓到的拒绝日志——本服务不把 cookie 验签失败写进日志。
+
+### 13.5 仍未覆盖（别当已验证）
+
+1. **出图与视频任务**：`generation_tasks` 最新两行仍是 2026-09-22 的，Rust 的任务子系统
+   在新链路上一次没跑过（后台轮询、成功即镜像、追加消息并推送这三步都还是 Nest 期的证据）。
+2. **语音**：真拨号、101 接管、`/api/voice` 经反代的 upgrade——§12.2 那条「浏览器里一次
+   都没跑过」现在仍然成立。
+3. **`/admin` 的内容**：只验到守卫跳转，账号列表 / 会话只读回放没进去（需登录态）。
+4. **SSE 断线续传**：本轮只验到「一轮跑完且事件连续落库」，没验到「断开后带 `last-event-id`
+   重放」。§8 那份实测是 Nest 期做的。
+5. **浏览器控制台零噪音**：切换后没有任何一次浏览器侧观察。
+
+2–5 都需要登录态或真人操作，只能接着在这台机器上人工走。

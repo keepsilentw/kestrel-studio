@@ -18,7 +18,7 @@
 |---|---|
 | 服务端可执行文件 | 开发机交叉编译的 **x86_64-unknown-linux-musl 静态二进制**（`make build-linux`），随构建上下文上传 |
 | 运行时基础镜像 | `scratch`——Docker 对它有特殊处理、**永远不需要拉取**，所以服务器上没有任何要缓存的镜像 |
-| 前端资源 | 开发机构建的 `public/`（P3 换成 WASM 产物） |
+| 前端资源 | 开发机构建的 `public/`。里面已含 `wasm/` 产物，但模板仍引 Nest 构建的 `assets/main.js` 与 `assets/voice.js`，wasm 目前无人加载（切换见 roadmap.md §4.3 的 P3/P4） |
 | TLS 根证书 | 编进二进制的 `webpki-roots`（scratch 里没有 `/etc/ssl/certs`） |
 | `/tmp` | compose 的 `tmpfs`：scratch 没有 `/tmp`，而 SQLite 需要临时 b-tree 时会去那里写文件 |
 | C 交叉编译工具链 | 开发机上的 `zig`（自带 musl sysroot）；`ring` 的 C/asm 与 `libsqlite3-sys` 的 bundled SQLite 都靠它 |
@@ -28,9 +28,18 @@
 从 node_modules 的约 300 MB 降到几 MB，服务器侧不再有编译步骤（原来那一步是用 golang 镜像
 里的工具链重编 better-sqlite3，因为上传的 node_modules 来自 macOS，二进制是 darwin-arm64）。
 
-`scripts/cross/` 下的四个垫片是交叉编译的一部分：`cc` crate 与 rustc 会按 Rust 三元组
-去寻 `x86_64-linux-musl-gcc` 这类名字，垫片把它们转给 `zig cc`，并把 Rust 风格的
-`--target=x86_64-unknown-linux-musl` 换成 zig 认识的 `x86_64-linux-musl`。
+交叉编译靠的是 `cargo zigbuild` + `zig`（zig 自带 musl sysroot，所以 `ring` 的 C/asm 与
+`libsqlite3-sys` 打包的 SQLite 都不需要另装交叉 gcc）。三个前置件缺一个就停：`zig`、
+`cargo-zigbuild`、`rustup target add x86_64-unknown-linux-musl`——`make build-linux` 会逐个
+检查并给出装法。产物落到仓库外（`/tmp/kestrel-studio-linux/kestrel-studio`），并要求
+`file -b` 显示 `statically linked`。**曾经试过手写垫片**（`scripts/cross/` 下四个转名脚本）：
+C 侧编得过、链接过不去，2026-10-30 当天删掉换成 zigbuild，全过程与根因见
+[implementation-notes.md](implementation-notes.md) §14——`scripts/cross/` 现在**不存在**，
+看到旧文档提到它不要再去找。
+
+**2026-11-02 13:24 起线上就是这套形态**（当天三次部署，在跑的是 13:47 那版）：镜像 10.2 MB
+（Nest 时代 1.27 GB）、静态 ELF 直接跑、`docker stats` RSS 1.2 MiB，`/login` / 静态资源 /
+鉴权跳转 / 公网反代 / 一轮真实流式对话均已确认，证据见 [verification.md](verification.md) §13。
 
 ### 1.1 回滚到 Node 管线
 
@@ -39,6 +48,33 @@ P4 之前 Nest 代码仍在仓库里。回滚 = 把 `Dockerfile` / `docker-compo
 `NEST_BASE_IMAGES=1 scripts/bootstrap-host.sh`。旧管线的两个基础镜像
 （node:24-bookworm-slim、golang:1.24）在 lavo-test 上**已经缓存过**，只有全新机器才需要拉。
 
+**盘上那份 Nest 残留不能直接用。** `/opt/kestrel-studio` 里还留着 2026-09-27 上传的
+`node_modules/`（353 MB）、`dist/`、`src/`、`package.json`、`nest-cli.json`、
+`tsconfig.json`、`vite.config.mts`，但：
+
+1. `deploy.sh` 自 10-30 起**不再上传 `node_modules`**，回滚时得把那份旧文件重新塞进构建上下文；
+2. 仓库在 11-02 已按后端技术栈拆包（依赖下沉到 `nest/server/` 与 `nest/client/` 两份清单），
+   而盘上那份是**拆分前的根 `node_modules`**，与退回后的目录布局不一定对得上；
+3. 那份是 macOS 上装的，linux 侧的 better-sqlite3 仍需在构建时重编——这正是旧 Dockerfile
+   两阶段在做的事。
+
+所以回滚的真实前提是：退回切换前的提交后**在开发机重装依赖并按旧脚本重新打包上传**，
+不要以为跑一次 `bootstrap-host.sh` 就能起来。旧的 `kestrel-studio` Nest 镜像（1.27 GB /
+1.3 GB 那几层 `<none>`）仍在宿主机上，但 `kestrel-studio:latest` 已被 Rust 镜像占掉，
+用它回滚需要先确认那份 compose 配置与 `.env` 的 `PORT` 仍然匹配——未经实测，别当保险。
+
+**回滚还会再登出一次所有人**：Nest 只认 `sess.passport.user`，读不懂 Rust 写在顶层 `user` 的行
+（反向是通的，Rust 两个位置都认）。所以凡是在 Rust 上登录过的会话，退回 Nest 后都要重新登录。
+机制与实测见 [verification.md](verification.md) §13.4 与 architecture.md §13.2。
+
+### 1.2 切换的实际后果（2026-11-02 已发生一次）
+
+Rust 与 Nest 的 session cookie **签名口径不同**，任何一侧接管网上的流量都会让已有登录态失效，
+表现为所有人重新登录一次。差别不在算法——两边都是 `HMAC-SHA256` + base64url-no-pad，
+差在**被签的字符串**：express-session（`cookie-signature`）签不含 `s:` 前缀的 token，Rust 签
+`"s:" + token`，所以同一个 token 算出的摘要必然不同。加上 §1.1 说的 sess 行形状只有单向读得通，
+结论是**两个方向的切换都会登出所有人**。这不是数据损坏，但**必须提前告知使用者**，不能当成意外。
+
 ### 相关约束
 
 - **Node 不能直接装在宿主机上。** 服务器是 CentOS 7（glibc 2.17），
@@ -46,7 +82,8 @@ P4 之前 Nest 代码仍在仓库里。回滚 = 把 `Dockerfile` / `docker-compo
   `GLIBC_2.27 not found`。这也是 pm2 方案不可行的原因。Docker 是唯一可行运行时。
 - **基础镜像来自镜像站。** 服务器上 Docker Hub 不可达，用 `dockerproxy.net`
   （实测 `hub.rat.dev` 超时、`docker.nju.edu.cn` 直接失败、`docker.m.daocloud.io` 与
-  `docker.1ms.run` 卡住）。首次需跑 `scripts/bootstrap-host.sh` 缓存两个基础镜像。
+  `docker.1ms.run` 卡住）。这条约束**目前只剩回滚用得上**：现行 Rust 管线的运行时基础是
+  `scratch`，Docker 从不拉取它，新宿主机不需要缓存任何镜像。
 - **不要动 `/etc/docker/daemon.json`，不要重启 docker daemon。** 该机还跑着其他生产
   容器与 1Panel 的 openresty，重启会全部拉挂。镜像站按镜像逐个消费。
 
@@ -136,8 +173,8 @@ kestrel-studio 的站点配置：`/opt/1panel/www/conf.d/try.kestrel.justwork.li
 
 | 命令 | 效果 |
 |---|---|
-| `make deploy` | 完整重新部署（`scripts/deploy.sh`） |
-| `scripts/bootstrap-host.sh` | 每台新宿主机执行一次，缓存两个基础镜像 |
+| `make deploy` | 完整重新部署：先 `build-linux` + `build-wasm`，再跑 `scripts/deploy.sh` |
+| `scripts/bootstrap-host.sh` | 每台新宿主机执行一次，检查 Docker 可用；只有回滚 Node 管线时才需要它拉两个基础镜像（`NEST_BASE_IMAGES=1`） |
 | `make deploy-status` | 查看容器状态 |
 | `make deploy-logs` | 跟随容器日志 |
 | `make deploy-restart` | 重启容器 |

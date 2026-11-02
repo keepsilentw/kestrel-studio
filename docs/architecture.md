@@ -20,7 +20,7 @@
 | 层 | 选型 | 理由 |
 |---|---|---|
 | 服务端 | NestJS 12 + Express | 指定 |
-| 服务端（第二实现） | Rust：axum 0.8 + sqlx + tokio | 与 Nest 版并行的同端实现，见 §13；尚未接管构建与部署 |
+| 服务端（第二实现） | Rust：axum 0.8 + sqlx + tokio | 与 Nest 版并行的同端实现，见 §13。**2026-11-02 起线上跑的是这一套**，Nest 版仍在仓库里作为回滚底牌 |
 | 渲染 | hbs (Handlebars) | 单进程 SSR，无独立前端服务，8G 机器内存友好 |
 | 前端 | 原生 TS + Vite 打包 | 无框架，Vite 只做 TS/CSS 打包，产物由 Nest 静态托管 |
 | 传输 | 对话级 SSE（GET + EventSource）+ 持久事件日志 | 提交与订阅分开；seq 续传见 §4.2。轮次事件曾挂在 POST 响应上，已改 |
@@ -143,7 +143,7 @@ hbs 只负责渲染首屏骨架：登录态判断、历史会话侧栏、页面�
 | 表 | 字段 |
 |---|---|
 | `users` | id, username, password_hash, role, created_at |
-| `sessions` | sid, sess, expire —— 由 better-sqlite3-session-store 独占管理，不纳入 drizzle schema |
+| `sessions` | sid, sess, expire —— Nest 侧由 better-sqlite3-session-store 独占管理，不纳入 drizzle schema；Rust 侧由 `auth/session.rs` 读写同一张表，形状差异见 §13.2 |
 | `conversations` | id, user_id, title, deleted_at, created_at, updated_at |
 | `messages` | id, conversation_id, role, content, reasoning, tool_calls, mode, created_at |
 | `assets` | id, message_id, kind, file_path, source_url, mime, bytes, created_at |
@@ -152,8 +152,9 @@ hbs 只负责渲染首屏骨架：登录态判断、历史会话侧栏、页面�
 
 设计要点：
 
-- 登录会话由 better-sqlite3-session-store 独占写入 `sessions` 表。drizzle schema 故意不建模它，
-  避免两个写入方共管同一张表。
+- 登录会话由 better-sqlite3-session-store 独占写入 `sessions` 表（Rust 服务在跑时写的是它自己
+  那份实现，同表不同形状，两侧都读得懂，见 §13.2）。drizzle schema 故意不建模它，
+  避免两个写入方共管同一张表——代价是没有类型检查兜底，格式变更只能靠对拍测试钉住。
 - **`conversation_events.seq` 是会话内计数，不是全局 id**：全局 id 会把「新会话的
   第一条事件」与「重放窗口已被裁剪」混淆（前者该重放，后者该 resync）。
   保留窗口每会话最新 2000 条，轮次结束时裁剪；会话硬删除时随会话级联。
@@ -296,7 +297,7 @@ kestrel-studio/
     implementation-notes.md  实现期环境踩坑台账
     deployment.md         服务器部署与运维
     verification.md       端点实测与端到端验证
-  nest/server/               NestJS 后端（Node 栈，迁移期仍是线上进程；roadmap.md §4 P4 删除它）
+  nest/server/               NestJS 后端（Node 栈，契约源与回滚底牌；2026-11-02 起线上不再跑它，roadmap.md §4 P4 删除它）
     package.json        本包的依赖与脚本；nest / drizzle 脚本先 `cd ../..`（cwd 必须是仓库根）
     vitest.config.mts   node 环境的测试配置（`pnpm --dir nest/server test`）
     tsconfig.json       后端；tsconfig.test.json 覆盖测试
@@ -337,7 +338,7 @@ kestrel-studio/
   crates/               服务端与浏览器**共享**的 Rust 库（谁都不能自己抄一份）
     proto/               线类型 kestrel-proto：语音帧、会话事件、TaskKind、Mode
     md/                  线渲染 kestrel-md：HTML 转义 + Markdown 子集
-  rust/server/                 同一服务端的 Rust 实现（见 §13）
+  rust/server/                 同一服务端的 Rust 实现（见 §13），2026-11-02 起是线上在跑的那一套
     Cargo.toml
     src/
       main.rs            装配：.env 叠加 → 配置 → 建表/seed → 后台 worker → axum 路由
@@ -417,13 +418,16 @@ kestrel-studio/
 会话**，没有"提交—完成"的轮次边界。塞进模式选择器就得改造轮次模型本身，换来只是省一个入口。
 
 代码在 `nest/server/src/voice/`（协议、上游客户端、编排、网关）与 `nest/client/scripts/voice.ts` + `views/voice.hbs`。
+**2026-11-02 起线上跑的是那份 Rust 移植**（`rust/server/src/voice/`，线类型来自 `crates/proto/`），
+Nest 那一份是契约源；两者的帧语义按 §13 逐条对照。本节的链路图与协议描述对两边都成立，
+但**Rust 侧的语音通路至今一次都没实跑过**（见 §13.3 与 verification.md §13.5），别把它当已验证。
 上游协议细节与实测数据见 [verification.md](verification.md) §3、§4，本节只写结构。
 
 ### 11.1 链路
 
 ```mermaid
 flowchart LR
-  B["浏览器<br/>麦克风 / 扬声器"] -->|"wss /api/voice"| N["Nest 中继<br/>会话与工具编排"]
+  B["浏览器<br/>麦克风 / 扬声器"] -->|"wss /api/voice"| N["中继（线上=Rust）<br/>会话与工具编排"]
   N -->|"wss /api-ws/v1/realtime"| Q["百炼 realtime-plus"]
   N --> Tools["ToolRegistry<br/>与文本路径共用"]
   Tools --> Media["MediaService"]
@@ -558,7 +562,12 @@ WebSocket 的 upgrade 不经过 Express，所以 `AuthenticatedGuard` 对它无�
 同一服务端的第二套实现，语言从 NestJS 换成 Rust。它**不是重写决策的结论**，
 而是一次语言迁移：端点、事件语义、数据模型与权限规则都以上面各节描述的 Nest
 版为契约源，逐条对照移植，`nest/server/src/` 保持原样未改动，两条管线可共存于同一个 SQLite
-库（口令格式、会话表、事件日志双向兼容，见 §13.2）。
+库——但**不是全都能双向**：口令格式与事件日志双向兼容，会话表只有 Nest → Rust 这一个方向通
+（Rust 读得懂 passport 的行，反过来不行），细节见 §13.2。
+
+**2026-11-02 起这一套是线上在跑的服务端**（`make deploy` → 10.2 MB 的 `scratch` 镜像），
+实测与未覆盖项见 [verification.md](verification.md) §13。本节以下所有「Nest 版」的描述
+仍是契约源，没有因为切换而改写。
 
 ### 13.1 为什么若干层是自己写的
 
@@ -589,9 +598,22 @@ WebSocket 的 upgrade 不经过 Express，所以 `AuthenticatedGuard` 对它无�
 
 - **口令**：默认写 bcrypt `$2b$` cost 10，与 `bcryptjs` 一致；同时接受
   `$pbkdf2-sha256$`（迁移期一度作为默认写入的格式）。两侧服务对同一行都能验签。
-- **会话**：cookie 名与值前缀沿用 `connect.sid` / `s:`，存储表 `sessions(sid, sess, expire)`
-  的 `sess` 里 principal 键名沿用 passport 的 `user`。签名算法不同，因此切换时旧
-  cookie 是**被拒绝**而非被误信（表现为重新登录）。
+- **会话**：cookie 名与值前缀沿用 `connect.sid` / `s:`，存储表仍是 `sessions(sid, sess, expire)`。
+  两侧写的 `sess` JSON 形状不同，而**读取能力是不对称的**（2026-11-02 线上实测 + 两侧源码核对，
+  verification.md §13.4）：Nest 走 passport 的 `serializeUser`，principal 落在
+  `{"passport":{"user":<id>}}`；本服务写在顶层 `{"cookie":{…},"user":<id>}`。
+  **本服务两个位置都认**（`user` 与 `passport.user`），所以 Nest 期的旧行它读得懂；
+  Nest 只认 `passport.user`，**读不到本服务写的行**。也就是说：Rust → Nest 的方向（回滚）会让
+  所有在 Rust 上登录的人重新登录一次，这不是可选项而是必然结果，回滚前要说清楚。
+- **`expire` 列**：Nest 的 better-sqlite3-session-store 把它声明为 TEXT 并写 ISO-8601。本服务
+  照写同一格式（`auth/session.rs::expire_string`），同时**兼容本服务早期写过的 epoch-millis**
+  （`parse_expire`，提交 `09c975b`）：列里可能同时存在两种文本，SQL 的字符串比较会把它们排错序，
+  所以过期判定在 Rust 侧逐行解析，而不是在 `DELETE … WHERE expire < ?` 里比。
+- **签名口径不同**：两边都是 `HMAC-SHA256` + base64url-no-pad，但 express-session
+  （`cookie-signature`）签的是**不含** `s:` 前缀的 token，本服务把 `"s:" + token` 整串去签
+  （`auth/session.rs::sign`）。同一个 token 在两侧算出的摘要必然不同，因此切换时旧 cookie 是
+  **被拒绝**而非被误信，表现为全员重新登录一次。2026-11-02 的线上表现与之一致（切流后表里
+  只有新登录写入的行），但那是一次「代码事实 + 表现一致」的核对，不是一条抓到的拒绝日志。
 - **数据模型与事件**：DDL 与 `ADDED_COLUMNS` 逐条照搬；事件日志仍是"先插 `seq`
   再扇出"，重放帧直接吐库里的 `payload` 原文，不重新序列化，故与实时帧逐字节相同。
 
@@ -602,16 +624,21 @@ WebSocket 的 upgrade 不经过 Express，所以 `AuthenticatedGuard` 对它无�
 工具、媒体与后台任务、`/api/v1` + 可续传 SSE + 签名帧 + 下载、SSR 页面与模板/客户端
 契约测试、admin 面、语音的票据/协议/帧泵/状态机/上游握手。
 
-尚未完成：**未接管构建与部署**（`Dockerfile` 仍是 Nest 管线；`make build-rust` / `make run-rust` 只做本地
-构建与检查）；**没有端到端实测**（开发环境禁止启动服务）；语音的 `connect()` 真拨号
-与 101 接管未上机验证；上游工具派发轮次在循环内 `await`，与 Nest 的 promise 链串形
+**已接管构建与部署**（2026-11-02 起线上就是这个服务端）：`Dockerfile` 只有 `FROM scratch`
+一条路径，`make deploy` 先 `build-linux` 再 `build-wasm` 再上传（`make build-rust` /
+`make run-rust` 仍是只给本地用的 check/test/build 与前台运行）。端到端**部分**实测过——
+`/login`、静态资源、鉴权跳转、公网反代、一轮真模型流式对话已在线上确认
+（[verification.md](verification.md) §13）；**仍未实测的是出图 / 视频任务、语音的
+`connect()` 真拨号与 101 接管、`/admin` 页面内容、SSE 断线续传、浏览器控制台零噪音**。
+另有一处与 Nest 的实现差异未消除：上游工具派发轮次在循环内 `await`，与 Nest 的 promise 链串
 式不同（后果是一次工具调用期间 `stop` 会被延后）。
 
 语音的两项遗留**不是移植遗漏，而是需要决策或需要真机**，与 Nest 版同状态：
 
 - **打断（barge-in）**：需要改 `nest/client/scripts/voice.ts`（播上一句时按下按钮要先停播再
   采集）。客户端是这次迁移刻意不动的一半，所以它要么作为独立的产品改动排期，要么
-  维持现状——我不会在服务端单方面加一个客户端不会用的帧。
+  维持现状——我不会在服务端单方面加一个客户端不会用的帧。线上跑的仍是那份 TS（模板没切
+  WASM），切换之后同一处改动要落到 `rust/client/src/voice_page.rs` 与 `audio.rs`。
 - **空闲保活**：源注释给出的是"上游 180 秒无响应即关闭"（`close 1007`），但**没有证
   据表明客户端 ping 帧会被计为活动**。在无法触达该端点的环境里加一个周期性 Ping，
   等于把未经证实的猜测写进唯一一条真·上行链路，因此不做；要做得先在真机上确认它
@@ -638,8 +665,10 @@ WebSocket 的 upgrade 不经过 Express，所以 `AuthenticatedGuard` 对它无�
 字段名（`conversationId` 这种），那才是浏览器真正依赖的契约，比类型共享更容易漂。
 `rust/server/src/task/mod.rs` 同样改为再导出 `TaskKind`，全树引用路径不变。
 
-`rust/client/` 的 DOM 层（socket、音频、页面渲染）尚未移植，`nest/client/scripts/*.ts` 仍是线上跑
-的那一份；两者的切换点见 roadmap.md §4.3 的 P3/P4。
+`rust/client/` 的 DOM 层（socket、音频、两个页面的渲染）代码已移植、wasm 产物已随 `public/`
+上线（线上 `/wasm/kestrel_client_bg.wasm` 返回 200，见 verification.md §13.2），但模板仍引
+`/assets/main.js` 与 `/assets/voice.js`，`initChat` / `initVoice` 零调用点——所以**线上跑的
+仍是 `nest/client/scripts/*.ts` 那份**。切换点见 roadmap.md §4.3 的 P3/P4。
 
 ## 14. 相关文档
 

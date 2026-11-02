@@ -17,8 +17,8 @@
 | 三 | 异步任务子系统 + 视频能力 | 独立子系统，与内核决策解耦 | **已落地**，见 `nest/server/src/task/`（提交即返回、后台轮询、成功即镜像、追加消息并推送）；端到端未记录 |
 | 四 | **语音会话**（独立入口 + 工具调用） | 与内核决策无关，走 §2.4.1 之外的一条独立通路。设计已迁至 [architecture.md](./architecture.md) §11 | **已落地**，本地与线上端到端实测均通过（[verification.md](verification.md) §4） |
 | 五 | 内核选型落地（保持 TS 增强 / 引入 Rust sidecar） | 前面各期完成后，内核的真实收益才有可比基准 | 未开始 |
-| 六 | **语言迁移**：服务端改用 Rust（`rust/server/`） | 与第五期无关的独立变量：先换宿主语言，内核选型才有对照物 | **代码已落地**（2026-10-27），见 [architecture.md](./architecture.md) §13；**未接管构建与部署、未端到端实测**（verification.md §9） |
-| 七 | **Nest/Node 技术栈退役**：服务端与 Web 客户端全部改 Rust（客户端走 Rust→WASM） | 六期把服务端迁完了，剩下的 Node 面只剩构建链与客户端；一期一期内核不掺和 | **决策已定**（2026-10-30，§4）。分期见 §4.3，**未开工** |
+| 六 | **语言迁移**：服务端改用 Rust（`rust/server/`） | 与第五期无关的独立变量：先换宿主语言，内核选型才有对照物 | **代码已落地**（2026-10-27），见 [architecture.md](./architecture.md) §13；**已接管交付链并上线**（2026-11-02，§4.4 与 verification.md §13）；离线对拍证据见 verification.md §9 |
+| 七 | **Nest/Node 技术栈退役**：服务端与 Web 客户端全部改 Rust（客户端走 Rust→WASM） | 六期把服务端迁完了，剩下的 Node 面只剩构建链与客户端；一期一期内核不掺和 | **决策已定**（2026-10-30，§4）。分期见 §4.3：P2 已上线、P3 代码到位但模板未切、P1 部分通过、**P4 未开工** |
 
 二期至四期无论内核如何选型都不会白做。
 
@@ -209,11 +209,19 @@ openai 面须置 compat 位 `stream_include_usage = true`，否则全程 `usage:
   [deployment.md](deployment.md) §8）。`role` 补列与超管账号的创建都发生在**进程启动时**，
   所以本机那个常驻的 pm2 实例要等重启才会出现 `/admin` 与超管账号。
 - 后端链路与前端控制台均已实测，本地与线上均通过，详见 [verification.md](verification.md)。
-- **Rust 实现（`rust/server/`）未接管任何交付路径**：线上仍是 Nest 容器；`make build-rust` / `make run-rust`
-  只做本地 check/test/build，`Dockerfile` 未加 Rust 阶段——离线 registry 缺件要在
-  服务器上重现，先把 crate 缓存问题解掉再说。
-- **Rust 侧没有端到端**：开发环境禁止启动服务，因此 §13.3 列的三处（真拨号、101
-  接管、浏览器控制台零噪音）仍是未知；一次真机运行即可消掉。
+  注意这条说的是**功能面**（Nest 时代验的）；服务端的宿主语言此后换过一次，见下两条。
+- **线上已是 Rust 服务端**（2026-11-02 13:24 接管，当天共三次部署，在跑的是 13:47 那版；
+  10.2 MB 的 `scratch` 镜像，`make deploy` 先跑 `build-linux` 再跑 `build-wasm`）。
+  已过与未过的判据逐条列在
+  [verification.md](verification.md) §13.5：**出图 / 视频任务 / 语音 / `/admin` 内容 /
+  SSE 断线续传 / 浏览器控制台零噪音仍未在新链路上实测**，它们都要登录态，只能人工在浏览器里走。
+- 切换的代价按预测发生了一次：**cookie 的签名口径不同（同 HMAC-SHA256，被签的字符串一个含 `s:`
+  前缀一个不含），切流当天全员被登出**——细节与线上表现见 [verification.md](verification.md) §13.4。
+  只要这条口径再变一次，代价就会重现，所以切流前必须告知使用者，别让它再变成意外。
+  方向还不对称：Nest 读不懂 Rust 写的 sess 行，所以**回滚也要登出一次**（§4.3 的 P2 行）。
+- **P3 的 wasm 产物已随 `public/` 上线却无人引用**：模板仍引 `/assets/main.js`、
+  `/assets/voice.js`（`rust/server/src/view/templates.rs`），`initChat` / `initVoice`
+  仍是零调用点。切换动作按计划留给 P4 之前的一次独立改动。
 
 ## 4. Nest 退役与 WASM 客户端（2026-10-30 决策）
 
@@ -260,7 +268,7 @@ Rust 服务端从未真跑、客户端要重写、部署镜像要换形态。
 | 期 | 内容 | 完成判据 |
 |---|---|---|
 | P1 | Rust 服务端第一次**真运行**（不在本机） | 本机禁止启动 Docker、禁止为本机起服务做测试，且仓库不保留 CI 配置（CLAUDE.md），所以判据只剩一个去处：**目标主机上的灰度实例**——与现有 Nest 容器并存、占另一个端口，跑通 `/login` 200、静态资源、SSE 续传、出图 / 视频任务 / 语音 / `/admin` 只读回放 + 控制台零噪音。需用户授权并人工执行 |
-| P2 | 交付链换 Rust | 开发机构建静态 musl 二进制 → `FROM scratch` 运行镜像（服务器零下载，TLS 根证书已有 `webpki-roots`）；先确认宿主机架构；灰度前备份 SQLite 库；已知副作用：**cookie 签名算法不同，切流时全员重新登录一次** |
+| P2 | 交付链换 Rust | 开发机构建静态 musl 二进制 → `FROM scratch` 运行镜像（服务器零下载，TLS 根证书已有 `webpki-roots`）；先确认宿主机架构；灰度前备份 SQLite 库；已知副作用：**cookie 的签名口径不同，切流时全员重新登录一次**——而且这个方向是不对称的（Nest 读不懂 Rust 写在顶层 `user` 的 sess 行），所以**回滚同样会登出一次**，见 verification.md §13.4 与 deployment.md §1.1 |
 | P3 | 客户端 Rust→WASM | 装 `wasm-pack`（不能用 brew 的 wasm-bindgen CLI，版本 0.2.111 vs crate 0.2.129）；按页拆 `main` / `voice` 两个 wasm 模块；**语音帧序列逻辑与 DOM 分离**，使 `start`/`commit`/排队补发那组断言能在 `cargo test` 里跑（jsdom 测试要退役，而它正是抓住线上"永远停在正在连接…"的那个测试）；`AudioWorklet` 的 JS 留在静态资源里 |
 | P4 | 删除 Node 栈 | `nest/server/`（整棵树，含自己的 `package.json` 与 `vitest.config.mts`）、`nest/client/` 的 TS 面（`scripts/`、`styles/`、`__tests__/`、`package.json`、`tsconfig.json`、`vite.config.mts`、`vitest.config.mts`，**留下 `rust/client/`**）、根的 `package.json` + `pnpm-lock.yaml` + `pnpm-workspace.yaml`（workspace 依赖已下沉到两棵树，根清单没有需要手工裁剪的残留）、Makefile 的 Node targets、Dockerfile 的 node 阶段一并移除；删前打 tag，提交按文件面拆分先给计划 |
 
@@ -268,16 +276,21 @@ P3 的 DOM 契约测试要同步改：现有 Rust 测试从 `nest/client/scripts
 `requireElement` 得到 17 个 id 来反向钉模板；客户端变成 Rust 后，这份清单应从
 Rust 客户端源码本身取得，跨语言解析那层可以去掉。
 
-### 4.4 进度（2026-10-30）
+### 4.4 进度（2026-10-30 定档，P1/P2 于 2026-11-02 更新）
 
 | 期 | 状态 |
 |---|---|
-| P2 | **交叉编译通了**：`make build-linux` 产出 9.2 MB 的 `x86_64-unknown-linux-musl` 静态 ELF；`Dockerfile` 换成 `FROM scratch`、compose 加 `tmpfs /tmp`、`deploy.sh` 不再上传 node_modules（约 300 MB → 几 MB）、`bootstrap-host.sh` 不再需要缓存基础镜像。目标机实测为 x86_64 / CentOS 7.9 / Docker 26.1.4。**未做**：镜像没构建过、二进制没运行过、没有部署（都需另行授权）。证据见 [verification.md](verification.md) §11.1-§11.2 |
+| P2 | **已实装并上线**。交叉编译：`make build-linux` 产出 9.2 MB 的 `x86_64-unknown-linux-musl` 静态 ELF；`Dockerfile` 换成 `FROM scratch`、compose 加 `tmpfs /tmp`、`deploy.sh` 不再上传 node_modules（约 300 MB → 几 MB）、`bootstrap-host.sh` 不再需要缓存基础镜像。目标机实测为 x86_64 / CentOS 7.9 / Docker 26.1.4。**2026-11-02 当天三次 `make deploy`（13:24 / 13:45 / 13:47）后，线上就是这个形态**：镜像 10.2 MB、静态 ELF 在 glibc 2.17 上直接跑、RSS 1.2 MiB、旧 cookie 按预测被拒绝。证据见 [verification.md](verification.md) §11.1-§11.2 与 §13.1 |
 | P3 | **两个页面的代码基本到位**。语音页：`rust/client/src/{wire,audio,voice_page}.rs` + `rust/client/public/capture.js`（`40181fd`）。对话页：判定层 `chat_core.rs`（31 条宿主测试，`a2019a8`）+ 渲染层 `chat_page.rs`（订阅、绘制、模式选择、提交、图片预览、删除确认 `a9074d5`、轮次索引）。类型单一来源扩到事件流：`crates/proto/src/event.rs` 收了 `ConversationEvent` / `MessageView` / `AssetView` / `ToolCallRecord` / `Mode` / `TaskStatus`（`b59e8ed`），服务端的提示词与工具表用 `ModePrompt` trait 留在原处。契约测试补到两条：`/voice` 骨架与对话骨架分别按 `voice_page.rs`、`chat_page.rs` 源码里读出的 id 校验（rust 侧 161 条通过）。**仍未验证**：`initVoice` / `initChat` 无人调用，模板仍加载 `voice.js` / `main.js`。**对话页还差两项**：下载对话框（canvas 重编码——`chat_core` 的 `plan_download` / `format_bytes` 已测但暂无调用方）、历史下拉刷新。两处走法记在此处以免后人重推：删除确认用 `[data-delete-conversation]` 与 `[data-delete-choice]` 的 document 级委托，删的是当前会话就回空舞台、删别的行就摘掉该行，并在 `close` 事件里清掉待删 id（Esc 不是确认）；轮次索引按 `.turn-index-link[data-target]` 绑骨架已有行、`user_message` 落地时补新行，高亮跟随阅读位置而非最后一次点击（`request_animation_frame` 合帧，阈值取滚动容器顶 +24 px——必须高于 `.turn` 的 12 px `scroll-margin-top`，否则刚滚到的那一轮仍亮着上一条）。**2026-11-02 起这些文件在 `rust/client/` 下**，crate 本身未变 |
-| P1 | **未开始**。本机不跑服务、不起 Docker（硬规则），所以运行时证据一律外移，见上表的 (a)/(b)。P2/P3 的可逆性不受影响：Nest 管线一行未删，回滚路径写在 deployment.md §1.1 |
+| P1 | **部分通过（2026-11-02，用户在 lavo-test 上人工执行）**。已过的判据：`/login` 200、静态资源（`main.css` 与开发机构建产物 md5 相同，`capture.js` 与 wasm 也在）、公网 HTTPS 经 openresty、`/admin` 与 `/` 的鉴权跳转、`/api/voice/ticket` 路由挂载、**一轮真模型流式对话**事件 37 行连续到 `turn_done`。**未过**：出图 / 视频任务、语音 upgrade 与真拨号、`/admin` 页面内容、SSE 断线续传、浏览器控制台零噪音——逐条见 [verification.md](verification.md) §13.5，全部需要登录态，只能人在浏览器里走。本机不跑服务、不起 Docker（硬规则）不变，运行时证据的来源也只有目标主机这一条。可逆性：Nest 管线一行未删（P4 未开工），回滚写在 deployment.md §1.1，但盘上那份 node_modules 是 9-27 的残留，回滚要重新上传，见该节 |
 
-顺序偏离原计划一处，值得记下来：**P2/P3 先于 P1 动了**。P1 的判据仍然是硬闸——
-在它通过之前，P4（删除 Node 栈）不得执行，交付链也不得实际切换（`make deploy` 未跑）。
+顺序偏离原计划两处，都记下来。一是 **P2/P3 先于 P1 动了**；二是**11-02 在 P1 只部分通过的
+情况下就把交付链切了**——本节原先那句「P1 未通过之前交付链不得实际切换」被实际执行推翻。
+当时判断可以切的理由只有一个：`/login`、静态资源、鉴权、公网反代、一轮真实流式对话这些
+**主干已经在线上跑通**，而未过的五条（出图 / 视频 / 语音 / 管理页内容 / 续传）在 Nest 时代
+验过、切流不会让它们凭空变得更坏。代价也已经量化：切流当天全员被登出一次。
+剩下的硬闸现在只对 **P4（删除 Node 栈）** 生效：P1 整体通过之前，`nest/server/` 整棵树与
+`nest/client/` 的 TS 面一行都不删——它们是目前唯一的回滚底牌，删掉就没有底牌了。
 
 **2026-11-02 目录前置**：仓库先拆成 monorepo 形态——`server/`（Nest 后端 + 它的
 tsconfig / nest-cli / drizzle 配置）、`web/`（前端代码 + vite / tsconfig + WASM 客户端
@@ -287,7 +300,9 @@ P4 的删除清单因此收敛成「删两棵树」，见上表。质量门当�
 `vitest run` 30 files / 510 passed、`cargo test`（rust）161 passed、
 `cargo check --target wasm32-unknown-unknown`（web/client）、`make clean && make build`
 （产物落位 `server/dist` 与仓库根 `public/`）——过程与踩到的三处 cwd 暗坑记在
-implementation-notes.md §17。`make deploy` 仍未跑（P1 硬闸没变）。
+implementation-notes.md §17。当天 13:24 起 `make deploy` 跑了三次，线上换为 Rust 镜像
+（本节 P1/P2 两行与 verification.md §13）——原先写在这里的「`make deploy` 仍未跑」是
+13:24 之前的事实。
 
 同日第二步：Node 侧改成**真 pnpm workspace**——依赖从根 `package.json` 下沉到
 `server/package.json` 与 `web/package.json`（根不声明依赖，只留 `pnpm -r` 聚合脚本），
@@ -304,10 +319,16 @@ vitest **server 461 + web 49 = 510**（与拆分前单 runner 同数，一条没
 本表原先把 P1 写成"本机起服务跑通"，那与项目既有规则冲突，2026-10-30 已改正。
 **本机可验证的上限**（不动 Docker、不起服务，因此始终可做）：编译、单元测试、
 `cargo check --target wasm32-unknown-unknown`、`wasm-pack build` 的静态产物与体积。
-真相在运行时的部分，只能来自 CI 或目标主机。
+真相在运行时的部分，只能来自目标主机——那份 CI 配置已按要求删除，且不得重建。
 
 P1 的载体只剩目标主机。同日曾写过一份 `.github/workflows/ci.yml`（远端 runner 起容器
 烟测 + 汇报 wasm 体积 + 过渡期跑 Nest 的 typecheck/vitest），**按用户要求已删除，
 不要重建**；它删除前也从未运行过，所以其中任何步骤都未经证实。因此 P1 目前没有自动化，
 只有"用户在服务器上人工灰度"这一条路，真供应商那一段（出图 / 视频 / 语音 / `/admin`）
 本来也只能在这条路上做。
+
+**2026-11-02 这条路真的走了一次**：当天 13:24 / 13:45 / 13:47 三次 `make deploy`，线上换为
+Rust 容器，`/login`、静态资源、鉴权跳转、公网 HTTPS、一轮真模型流式对话（37 个事件连续落库到
+`turn_done`）都已确认——P1 因此是**部分通过**，逐条证据与剩下未覆盖的五项见
+[verification.md](verification.md) §13。剩余五项里出图 / 视频 / 语音 / `/admin` 内容都需要登录态，
+必须由人在浏览器里操作，探测脚本代替不了。

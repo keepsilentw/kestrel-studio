@@ -2,7 +2,9 @@
 
 `kestrel-studio` 是一个 Web 生成式媒体 Agent：用户在网页里给一句话，LLM 流式思考、
 调用生成工具、把产物渲染到页面上，可预览可下载。
-技术形态为 NestJS 单进程 SSR + SSE 流式，无独立前端服务。
+技术形态为**单进程 SSR + SSE 流式**，无独立前端服务。服务端有两份同端实现：
+`nest/server/`（NestJS，契约源与回滚底牌）与 `rust/server/`（Rust，**2026-11-02 起线上在跑的**），
+两边共用同一个 SQLite 库，差异与互操作点见 [architecture.md](./architecture.md) §13。
 
 仓库是 monorepo，按后端技术栈拆包：`nest/server/`（NestJS 后端）、`nest/client/`（Nest
 栈的浏览器脚本，Vite 构建到根 `public/`）、`rust/server/`（Rust 服务端）、`rust/client/`
