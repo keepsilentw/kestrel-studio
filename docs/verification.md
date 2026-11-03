@@ -1120,5 +1120,14 @@ roadmap.md §4.1.1。
 
 验证：`cargo test`（rust/server）**167 passed / 0 failed / 2 ignored**（新增 1 条测试）；
 `cargo check --manifest-path crates/md/Cargo.toml` 与 `wasm-pack build` 均 0 warning。
-**未做**：线上未部署（要下一次 `make deploy` 才生效，同样不会登出任何人），浏览器侧照旧没有
-运行时观察（模板仍不引 wasm，SSR 那侧的表格渲染要在页面上看才算验过）。
+
+**当天 10:18 已部署**（先 `sqlite3 .backup` 出 `data/backup-20261103-pre-tables.db`，integrity ok）：
+镜像 10:18:07、二进制 9,766,128 B（比上一版 +7,792 B，与 md 增量同量级）、
+`public/wasm/kestrel_client_bg.wasm` 373,426 B —— 与上面那张表的 raw 一致，说明线上跑的就是本次构建的产物。
+健康复测：`/login` 200、`/assets/main.css` 200、`/wasm/…` 200、`/admin` 302、公网 HTTPS 200；
+`sessions` 仍是那 3 行、`expired sessions cleared=0`，**同侧部署没有登出任何人**（§13.4 的换侧才会计）；
+启动日志三行、无 error/warn，且日志是纯文本（§13.8 的修复在线上生效）。
+
+**仍未观察到的**：表格里那个 `<table>` 在**线上页面上**的样子——SSR 的会话页需要登录态，我没有凭据，
+也不该去拿。渲染逻辑有 13 条断言钉着、部署产物也确认是新的，但"在浏览器里看到一张渲染出来的表"
+这一步仍属于操作者观察。
