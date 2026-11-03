@@ -261,6 +261,61 @@ fn the_markdown_subset_matches_what_the_assistant_actually_writes() {
         "<p><code>a **b** c</code></p>",
         "code spans are protected from the emphasis pass"
     );
+    assert_eq!(markdown("~~旧值~~"), "<p><del>旧值</del></p>");
+    assert_eq!(
+        markdown("| 名字 | 分数 |\n| :-- | ---: |\n| 阿隼 | 98 |"),
+        "<table>\n<thead>\n<tr><th style=\"text-align:left\">名字</th><th style=\"text-align:right\">分数</th></tr>\n</thead>\n<tbody>\n<tr><td style=\"text-align:left\">阿隼</td><td style=\"text-align:right\">98</td></tr>\n</tbody>\n</table>",
+        "GFM table with per-column alignment, rendered the way marked does it"
+    );
+}
+
+/// The table subset's deliberate limits, pinned as behaviour rather than comment.
+///
+/// Each one is a place where this renderer and `marked` can disagree on purpose, so a
+/// future edit that "fixes" one of them has to say why out loud.
+#[test]
+fn the_table_rules_that_keep_prose_from_turning_into_a_table() {
+    // A pipe in prose is not a table; only the delimiter row makes one.
+    assert_eq!(markdown("名字 | 分数"), "<p>名字 | 分数</p>");
+    assert_eq!(markdown("2 | 3"), "<p>2 | 3</p>");
+    assert_eq!(
+        markdown("名字 | 分数\n阿隼 | 98"),
+        "<p>名字 | 分数\n阿隼 | 98</p>",
+        "two pipe rows still need the --- line between them; soft-wrapped prose stays one paragraph"
+    );
+
+    // One column is only a table when fenced on both sides (GFM's own rule).
+    assert_eq!(markdown("a\n| - |"), "<p>a\n| - |</p>", "a lone delimiter row is not a table either");
+    assert_eq!(
+        markdown("| a |\n| - |\n| **b** |"),
+        "<table>\n<thead>\n<tr><th>a</th></tr>\n</thead>\n<tbody>\n<tr><td><strong>b</strong></td></tr>\n</tbody>\n</table>"
+    );
+
+    // The header fixes the width: extra cells go, missing ones become empty.
+    let rows = markdown("| a | b |\n| - | - |\n| 1 | 2 | 3 |\n| 4 |");
+    assert!(rows.contains("<tr><td>1</td><td>2</td></tr>"), "{rows}");
+    assert!(rows.contains("<tr><td>4</td><td></td></tr>"), "{rows}");
+
+    // `\|` is the documented way to keep a pipe inside a cell…
+    let escaped = markdown("| a | b |\n| - | - |\n| x \\| y | z |");
+    assert!(escaped.contains("<td>x | y</td>"), "{escaped}");
+    // …and an unescaped one inside a code span still splits, because the split runs
+    // before any inline pass and cannot see code spans. The reference implementation
+    // behaves the same way; the leftover backticks stay literal text, which is the
+    // visible cost of not escaping.
+    let split = markdown("| a | b |\n| - | - |\n| `x | y` |");
+    assert!(split.contains("<tr><td>`x</td><td>y`</td></tr>"), "{split}");
+
+    // The subset's core property survives the new block: cells are escaped, not
+    // forwarded, even inside a table.
+    let unsafe_cell = markdown("| a |\n| - |\n| <script>x</script> |");
+    assert!(!unsafe_cell.contains("<script>"), "{unsafe_cell}");
+    assert!(unsafe_cell.contains("&lt;script&gt;"), "{unsafe_cell}");
+
+    // A table interrupts a paragraph; the row before it stays its own block.
+    let after = markdown("说明文字\n| a | b |\n| - | - |\n| 1 | 2 |");
+    assert!(after.starts_with("<p>说明文字</p>"), "{after}");
+    assert!(after.contains("<table>"), "{after}");
 }
 
 /// The ids the WASM voice page looks up, read out of **its own source** — the

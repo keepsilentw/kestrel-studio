@@ -31,10 +31,14 @@ use wasm_bindgen::prelude::*;
 /// which is where `marked` (the client's old engine) differed: a model emitting
 /// raw `<script>` got it rendered.
 ///
-/// Consequence to keep in mind: GFM tables and strikethrough are **not** in the
-/// subset, so a table now shows as literal pipe characters instead of markup. If
-/// the assistant starts writing tables, add them to the subset here and in the
-/// server's tests at once — never on one side only.
+/// GFM tables (with `:---` alignment) and strikethrough joined the subset on
+/// 2026-11-03, so there is no longer a syntax `marked` rendered and this one showed
+/// as pipes. What still differs from `marked` is the point of the subset: anything it
+/// does not parse is **escaped**, never forwarded. The deliberate limits around tables
+/// (one-column rows must be fenced, `\|` is the only in-cell pipe, extra cells are
+/// dropped) are documented on the helpers in `kestrel-md` and pinned by
+/// `rust/server/src/view/tests.rs` — one implementation, so no second side to keep in
+/// step.
 #[wasm_bindgen(js_name = renderMarkdown)]
 pub fn render_markdown(source: &str) -> String {
     kestrel_md::markdown(source)
