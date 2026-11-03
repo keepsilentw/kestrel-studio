@@ -231,8 +231,8 @@ openai 面须置 compat 位 `stream_include_usage = true`，否则全程 `usage:
   每请求一行 method + uri + status + latency，**级别 DEBUG**，所以默认的 `info` 过滤下一行都不打、
   生产日志量不变（线上实测：打了若干请求之后去色计数仍为 0）；开关是 compose 里的
   `RUST_LOG=${RUST_LOG:-info}`，用法与四条限制见 deployment.md §2.1，实现与测试见
-  verification.md §13.7，ANSI 那个 grep 陷阱见 §13.8。开关与清单都备好了，但**当天决定不跑这轮
-  走查**（见上一条与 §4.4 的 P1 行），所以它现在是排障手段，不是待办。
+  verification.md §13.7，ANSI 那个 grep 陷阱见 §13.8。开关已在宿主机拨档验过（`client=` 字段两个方向都对，见 verification.md §17），但走查本身
+  当天决定不跑（见上一条与 §4.4 的 P1 行），所以它现在是排障手段，不是待办。
   注意 `/api/voice` 刻意排除在外（它是唯一劫持连接的路径，接管未上机验过之前不在它前面放碰
   response body 的件），这条排除有测试钉住。
 

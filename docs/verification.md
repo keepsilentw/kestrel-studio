@@ -1190,12 +1190,23 @@ roadmap.md §4.1.1。
 - 默认值 `nest` 使渲染结果与切换前**逐字节相同**——原来那条断言 `http::tests` 里的
   `<script type="module" src="/assets/main.js">` 仍然是绿的，这就是"默认不改行为"的证明。
 
+宿主机上的复测（当天 10:54 部署 `nest` 档，随后各拨一次）：
+
+| 检查 | 结果 |
+|---|---|
+| 部署后默认档 | `image=10:54:34`、二进制 9,770,096 B、compose 注入 `CLIENT_BUNDLE=nest`、启动日志 `client="nest"`；`/login` 200、`/assets/main.css` 200、`/admin` 302、公网 HTTPS 200 |
+| 拨到 wasm | `CLIENT_BUNDLE=wasm docker compose up -d` → `client="wasm"`、`/login` 200 |
+| 拨回 | 同一条命令去掉变量 → `client="nest"`、`/login` 200、`/admin` 302 |
+| 会话 | 三次重建（部署 + 两向拨档）之后 `sessions` 仍是 3 行、`expired sessions cleared=0` —— **换客户端不登人**，这条现在是实测而不是推断 |
+| 顺带 | 日志已是纯文本（`client="nest"` 可直接 grep），§13.8 那个修复在线上确认 |
+
 **没有的证据**（别把上面的通过当成这些已过）：
 
 1. `initChat` / `initVoice` 在真实浏览器里的行为——一次都没有。开关只是让这一步**可以**用一条命令
    灰度，不是已经灰度过。
-2. 服务端把 `client=wasm` 传到位之后页面长什么样：会话页要登录态，我这边没有凭据。部署后能确证的
-   只有启动日志里的 `client=nest|wasm` 这个字段。
+2. `client=wasm` 传到位之后**页面本身**长什么样：会话页要登录态，我没有凭据。宿主机上能确证到
+   "这个值真的进了进程"（上面那张拨档表），再往下——loader 是否执行、`initChat` 画得对不对——
+   需要一次带登录态的浏览器观察。
 3. 是否真有一张 `<table>` 渲染出来（§16 的语法补齐后同样还没在页面上看过）。
 
 要补第 1、2、3 条：服务器上 `CLIENT_BUNDLE=wasm docker compose up -d`，浏览器开 `/`，看控制台与
