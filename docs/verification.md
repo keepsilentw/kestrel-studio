@@ -1172,7 +1172,7 @@ roadmap.md §4.1.1。
 **仍未观察到的**：表格里那个 `<table>` 在**线上页面上**的样子——SSR 的会话页需要登录态，我没有凭据，
 也不该去拿。渲染逻辑有 13 条断言钉着、部署产物也确认是新的，但"在浏览器里看到一张渲染出来的表"
 这一步仍属于操作者观察。
-## 17. 浏览器包切换开关（2026-11-03，已实现；线上当前 `nest`，`wasm` 试跑一次后已拨回）
+## 17. 浏览器包切换开关（2026-11-03，已实现；线上档位随 §20 变动，当前 `wasm`）
 
 `CLIENT_BUNDLE` 决定 `/` 与 `/voice` 加载哪份客户端：`nest`（线上现状）或 `wasm`（P3 那份）。
 运维口径与回滚在 deployment.md §2.2，这里只记实现与证据边界。
@@ -1278,7 +1278,26 @@ docker logs --since 2026-11-03T11:00:00 kestrel-studio 2>&1 \
 
 验证边界：`cargo test`（client）37 passed、`cargo check --target wasm32-unknown-unknown` 0 warning、
 `make build-wasm` 通过（133,983 B gz，比修之前 +239 B）。**修复后没有在浏览器里跑过**——13:08 已把档位
-拨回 `nest`，线上目前还是那份 TS 客户端；要再验一次必须重新部署 + 再拨一次灰度。
+拨回 `nest`，线上目前还是那份 TS 客户端；要再验一次必须重新部署 + 再拨一次灰度。（后续：13:21 部署了
+修复版、13:23 重新拨到 `wasm`，机器证据见 §20；浏览器复验在那之前仍未做。）
 
 顺带对出来的两个 parity 缺口（**本次未修**，等确认）：`main.ts` 还有「textarea 随输入长高」（974）与
 「点击下拉外部自动收起」（984），WASM 版都没做。不影响正确性，只影响手感。
+
+## 20. 修复版上线并第二次拨到 `wasm`（2026-11-03 13:21 / 13:23，机器证据）
+
+两步都在宿主机侧跑，所以这张表能证明的只到「线上跑的是哪份包」这一层。
+
+| 时刻 | 动作 | 证据 |
+|---|---|---|
+| 13:21 | 先备份，再 `make deploy`（它不转发 `CLIENT_BUNDLE`，故按默认 `nest` 起） | 备份 `data/backup-20261103-pre-clientfix.db`（163,840 B，与 12:00 那份同尺寸）；镜像 `bca8647b23f1`；启动日志 `client="nest"`；`/login` 200、`/assets/main.css` 200（md5 `edcb8146…` 与本机 `public/assets/main.css` 相同）、`/admin` 302、`/` 302；公网 HTTPS 经 `--resolve` 打 `try.kestrel.justwork.link` 也是 200 且 md5 相同；重启后 WARN/ERROR 计数 0；`sessions` 3、`conversations` 8、`messages` 46，与部署前一致 |
+| 13:23 | `CLIENT_BUNDLE=wasm RUST_LOG=debug docker compose up -d` | 容器 Recreated → `Up`；启动日志 `client="wasm"`；`/wasm/kestrel_client.js` 200 · 56,942 B · `text/javascript`，`/wasm/kestrel_client_bg.wasm` 200 · 374,373 B · `application/wasm`；两者 md5（`7f84eaa3…`、`5d59f758…`）与本机 `make build-wasm` 的产物逐字节相同 |
+
+边界，别把这张表读成「修复已生效」：
+
+- §19 那两条的判据在浏览器里——新会话要落到不带 `?c=` 的 `/`，Enter 要发送、Shift+Enter 要换行。
+  日志只能证明页面跑的是 wasm 那份，证不了这两条。
+- 容器是 `FROM scratch`，**镜像里没有 `sh`**，`docker exec` 这条路永远不通，探测只能在宿主机侧 curl；
+  §13.2 那些探针因此长成那样。
+- `debug` 是取证档位。只关日志保留灰度：`CLIENT_BUNDLE=wasm docker compose up -d`；两者一起退回：
+  `docker compose up -d`（无需重建，也不登出任何人）。
