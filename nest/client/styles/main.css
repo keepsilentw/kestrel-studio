@@ -1194,6 +1194,19 @@ body {
   font-size: 13px;
 }
 
+/* What the WASM bootstrap prints when the module does not start
+   (`WASM_LOADER` in rust/server/src/view/templates.rs). The stylesheet is shared by
+   both clients while the CLIENT_BUNDLE switch exists, so the class lives here —
+   roadmap.md §4.3 P4 moves the file, and it must move with it. */
+.client-error {
+  margin: 12px 0 0;
+  padding: 10px 14px;
+  color: var(--danger);
+  background: #fdecea;
+  border-radius: 10px;
+  font-size: 14px;
+}
+
 /* Marks a conversation its owner hid: the super admin still reads it, so the
    admin lists say which ones those are. */
 .admin-tag {

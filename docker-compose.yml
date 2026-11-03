@@ -27,6 +27,7 @@ services:
     environment:
       - PORT=${HOST_PORT:-8848}
       - RUST_LOG=${RUST_LOG:-info}
+      - CLIENT_BUNDLE=${CLIENT_BUNDLE:-nest}
     # The runtime base is `scratch`, which has no /tmp. SQLite creates temporary
     # files there whenever a query needs a temp b-tree, so the absence would only
     # show up as a rare "unable to open temporary file" under load. A tmpfs keeps
