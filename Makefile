@@ -68,6 +68,7 @@ endef
 .PHONY: check test test-watch
 .PHONY: clean run-rust build-linux
 .PHONY: deploy deploy-status deploy-logs deploy-restart deploy-down
+.PHONY: census census-prod
 
 help:
 	@echo "kestrel-studio — 可用命令:"
@@ -92,6 +93,7 @@ help:
 	@echo "    make check                  全部包（Nest 三份 tsconfig + 两个 cargo check）"
 	@echo "    make test                   全部包单元测试（Nest 两轮 vitest + 两个 cargo test）"
 	@echo "    make test-watch             Nest 后端测试 watch"
+	@echo "    make census / census-prod   数一遍助手消息里的 markdown 构造（子集取舍的哨兵，只读）"
 	@echo "    make clean                  清全部产物（保留 data/ 与 storage/）"
 	@echo ""
 	@echo "  Rust / 部署"
@@ -266,6 +268,17 @@ build-linux:
 # `public/`; templates still load the TS client (roadmap §4 P3).
 deploy: build-linux build-wasm
 	./scripts/deploy.sh
+
+# The subset in crates/md is a deliberate choice, so "does the assistant actually
+# write tables / images / task lists" is a question to measure, not to remember.
+# Open the live database read-only: the server holds it, and this must never write.
+census:
+	sqlite3 "file:$(CURDIR)/data/kestrel-studio.db?mode=ro" ".read scripts/markdown-census.sql"
+
+# The same census against the production copy. The SQL goes in over stdin so nothing
+# is left behind on the host.
+census-prod:
+	ssh $(DEPLOY_HOST) 'sqlite3 "file:$(DEPLOY_DIR)/data/kestrel-studio.db?mode=ro"' < scripts/markdown-census.sql
 
 deploy-status:
 	ssh $(DEPLOY_HOST) "cd $(DEPLOY_DIR) && docker compose ps"
