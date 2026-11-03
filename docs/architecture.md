@@ -688,8 +688,7 @@ Nest 侧没有对应件（`main.ts` 不挂 morgan、也不开 `useLoggerConfig`�
 客户端用它而不是 `pulldown-cmark`——后者在浏览器侧实测 +74 KB gz
 （[verification.md](verification.md) §11.5）。而子集还带一个 `marked` 没有的性质：
 **子集之外的内容一律转义而非透传**，模型吐 `<script>` 不会被渲染
-（`rust/server/src/view/tests.rs` 钉着这条）。代价是语法面收窄——无表格、无删除线，
-见 [roadmap.md](roadmap.md) §4.1.1 的开放项。
+（`rust/server/src/view/tests.rs` 钉着这条）。语法面曾收窄（无表格、无删除线），2026-11-03 补齐 GFM 表格（含 `:---` 对齐）与删除线，代价是客户端包 +2.1 KB gz，四条与 `marked` 的刻意差异与实现一起记在 [verification.md](verification.md) §16。
 
 2026-11-02 又把历史下拉的行类型 `ConversationSummary` 从 `rust/server/src/conversation/repo.rs` 搬了过来（server 侧改成再导出），因为 WASM 客户端的 `refresh_history` 现在要解析它——同一条规矩：改字段名在消费方编译失败。注意它是**蛇形**（`updated_at`），因为这个端点从来就这么答，模块里那套 camelCase 只属于日志 payload。
 
