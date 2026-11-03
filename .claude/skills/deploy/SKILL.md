@@ -185,6 +185,27 @@ What is known from the host, not inferred (docs/verification.md §13):
   rule in docs/deployment.md §7 (stop the old before starting the new) applies
   to any cutover, including a rollback.
 
+## The browser bundle switch (`CLIENT_BUNDLE`)
+
+A third environment variable, and a different kind of one: it decides which client `/` and
+`/voice` load, **without touching the server, the session or the cookie**.
+
+```bash
+ssh lavo-test "cd /opt/kestrel-studio && CLIENT_BUNDLE=wasm docker compose up -d"   # grey
+ssh lavo-test "cd /opt/kestrel-studio && docker compose up -d"                      # back to nest
+```
+
+- `make deploy` does not forward it, so **the next deploy reverts to `nest` by itself**. To
+  keep `wasm` long-term it has to go into the server's own `.env` (which `deploy.sh` never
+  overwrites) — do not assume a `docker compose up -d` survives a deploy.
+- To see whether the WASM client actually loaded, do not guess from the page: turn on the
+  access log (§2.1 / docs/verification.md §13.7) and look for two GETs —
+  `/wasm/kestrel_client.js` and `/wasm/kestrel_client_bg.wasm`. Their absence with a blank page
+  means the client never started; the page also renders a `.client-error` note and a
+  `console.error`.
+- Everything that can go wrong here is page-level: the API, SSR and login are the same server
+  either way, and the rollback is one command.
+
 ## Verifying a deploy (read-only, no shell in the container)
 
 ```bash
@@ -211,12 +232,13 @@ ssh lavo-test 'sqlite3 "file:/opt/kestrel-studio/data/kestrel-studio.db?mode=ro"
   "select (select count(*) from conversation_events), (select count(*) from messages), (select count(*) from assets);"'
 ```
 
-Expected on 2026-11-02: `kestrel_studio listening on http://localhost:8848` plus
-`Bailian credentials resolved` and `expired sessions cleared=N` in the logs, RSS
-around **1.2 MiB**, `/login` 200, `/assets/main.css` 200 with an md5 equal to the
-local build, `/capture.js` 200, the wasm 200 (**shipped but not referenced by any
-template yet**), `/api/voice/ticket` 405, `/admin` 302 to `/login`, and
-`https://try.kestrel.justwork.link/admin` 302 to the login page.
+Expected (as of 2026-11-03): `kestrel_studio listening on http://localhost:8848` carrying a
+`client=` field — that is which browser bundle the pages are handing out, `nest` unless
+`CLIENT_BUNDLE=wasm` was set for this run — plus `Bailian credentials resolved` and
+`expired sessions cleared=N`, RSS around **1.2 MiB**, `/login` 200, `/assets/main.css` 200 with
+an md5 equal to the local build, `/capture.js` 200, the wasm files 200 (**served; whether a
+page loads them is exactly the `client=` field**), `/api/voice/ticket` 405, `/admin` 302 to
+`/login`, and `https://try.kestrel.justwork.link/admin` 302 to the login page.
 
 Open the database with `mode=ro` while the app holds it. A plain open would also
 let `sqlite3` checkpoint the WAL on close — harmless and even useful, but then

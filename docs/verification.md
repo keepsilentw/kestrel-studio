@@ -1167,3 +1167,37 @@ roadmap.md §4.1.1。
 **仍未观察到的**：表格里那个 `<table>` 在**线上页面上**的样子——SSR 的会话页需要登录态，我没有凭据，
 也不该去拿。渲染逻辑有 13 条断言钉着、部署产物也确认是新的，但"在浏览器里看到一张渲染出来的表"
 这一步仍属于操作者观察。
+## 17. 浏览器包切换开关（2026-11-03，已实现，默认仍 `nest`）
+
+`CLIENT_BUNDLE` 决定 `/` 与 `/voice` 加载哪份客户端：`nest`（线上现状）或 `wasm`（P3 那份）。
+运维口径与回滚在 deployment.md §2.2，这里只记实现与证据边界。
+
+代码面：`config::ClientBundle`（未知值**启动失败**，不静默回退——与 `BAILIAN_REASONING_EFFORT`
+的静默回退是有意不同的，理由写在函数注释里）；`ChatPage.client` 与 `voice_page(.., client)` 把它
+带进模板；`client_script()` 一个函数决定两个页面加载什么，WASM 分支用的是内联 module loader
+（`WASM_LOADER`），**不新增一个 JS 文件**：JS 与 `.wasm` 是两份产物，落成文件就会有缓存错位的
+可能，内联就没有"半个客户端"这件事。加载失败会在页面上落一条 `.client-error`（样式加在共享的
+`nest/client/styles/main.css`，P4 迁样式时必须一起搬）并 `console.error`。
+
+本机证据：
+
+- `cargo test`（rust/server）**169 passed / 0 failed**，其中新增两条：
+  `the_client_switch_hands_each_page_exactly_one_client`（两页各自只带一个客户端、两个页面引用的
+  模块路径必须一致、`/capture.js` 那份 JS 地板仍按 `audio.rs` 写的路径存在）与
+  `the_client_bundle_round_trips_and_refuses_nonsense`（compose 写的字符串能解析回来，其余一律拒）。
+- `make build-wasm` 产物未变（这次没动客户端代码）；`rust/client` 侧 `cargo test` 36 passed，
+  `cargo check --target wasm32-unknown-unknown` 0 warning。
+- 默认值 `nest` 使渲染结果与切换前**逐字节相同**——原来那条断言 `http::tests` 里的
+  `<script type="module" src="/assets/main.js">` 仍然是绿的，这就是"默认不改行为"的证明。
+
+**没有的证据**（别把上面的通过当成这些已过）：
+
+1. `initChat` / `initVoice` 在真实浏览器里的行为——一次都没有。开关只是让这一步**可以**用一条命令
+   灰度，不是已经灰度过。
+2. 服务端把 `client=wasm` 传到位之后页面长什么样：会话页要登录态，我这边没有凭据。部署后能确证的
+   只有启动日志里的 `client=nest|wasm` 这个字段。
+3. 是否真有一张 `<table>` 渲染出来（§16 的语法补齐后同样还没在页面上看过）。
+
+要补第 1、2、3 条：服务器上 `CLIENT_BUNDLE=wasm docker compose up -d`，浏览器开 `/`，看控制台与
+一次真实轮次；同时在 DEBUG 访问日志里应当看到 `/wasm/kestrel_client.js` 与 `/wasm/kestrel_client_bg.wasm`
+两条 GET（§13.7 的开关）。出问题就同一条命令去掉变量回滚——服务端、session、cookie 全都不动。

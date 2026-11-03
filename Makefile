@@ -83,7 +83,7 @@ help:
 	@echo "    make build-nest             仅 Nest 后端"
 	@echo "    make build-web              仅 Nest 客户端资源（→ public/assets）"
 	@echo "    make build-rust             仅 Rust release 二进制"
-	@echo "    make build-wasm             仅 WASM 客户端（→ public/wasm，模板暂未切换）"
+	@echo "    make build-wasm             仅 WASM 客户端（→ public/wasm；页面是否加载它由 CLIENT_BUNDLE 决定，见 docs/deployment.md §2.2）"
 	@echo ""
 	@echo "  运行（pm2 守护 Nest）"
 	@echo "    make start                  构建 Nest 前后端并启动，打印访问信息"

@@ -66,7 +66,7 @@ cwd 拼接），且它的 `assets` **不能写 `outDir`**（写了就按 cwd 拼
 | `make test-watch` | Nest 后端侧单元测试 watch 模式 |
 | `make clean` | 清全部产物：`nest/server/dist/`、`public/`（含 `public/wasm`）、`rust/server/target/`、`rust/client/target/`、`rust/client/pkg/`、`crates/*/target/`，保留 `data/` `storage/` |
 | `make build-rust` / `run-rust` | 构建 release 二进制 / 本机前台运行（不走 pm2） |
-| `make build-wasm` | `wasm-pack build --target web` 构建到 `rust/client/pkg/`，再连同 `capture.js` 暂存到 `public/wasm/`；模板暂未切换到 WASM |
+| `make build-wasm` | `wasm-pack build --target web` 构建到 `rust/client/pkg/`，再连同 `capture.js` 暂存到 `public/wasm/`。页面加载哪一份客户端由 `CLIENT_BUNDLE` 决定（默认 `nest`），机制见 `docs/deployment.md` §2.2 |
 | `make build-linux` | 交叉编译 `x86_64-unknown-linux-musl` 静态二进制到 `/tmp/kestrel-studio-linux/`（`make deploy` 的输入；需 `zig` + `cargo-zigbuild`） |
 | `make census` / `census-prod` | 数一遍助手消息里的 markdown 构造（`crates/md` 子集取舍的哨兵，只读打开库；脚本在 `scripts/markdown-census.sql`，口径见 `docs/verification.md` §15.1） |
 | `make deploy*` | 部署到 lavo-test。**线上从 2026-11-02 起就是这条路径**：组装 Rust 静态二进制 + `public/`（`FROM scratch`），不再上传 node_modules；先跑 `build-linux` 与 `build-wasm`（后者会先构建 Nest 客户端资源，再补回 `capture.js`），并在上传前检查二进制是否存在、是否比 `rust/server/src` 陈旧 |

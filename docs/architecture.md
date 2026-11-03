@@ -696,10 +696,12 @@ Nest 侧没有对应件（`main.ts` 不挂 morgan、也不开 `useLoggerConfig`�
 字段名（`conversationId` 这种），那才是浏览器真正依赖的契约，比类型共享更容易漂。
 `rust/server/src/task/mod.rs` 同样改为再导出 `TaskKind`，全树引用路径不变。
 
-`rust/client/` 的 DOM 层（socket、音频、两个页面的渲染）代码已移植、wasm 产物已随 `public/`
-上线（线上 `/wasm/kestrel_client_bg.wasm` 返回 200，见 verification.md §13.2），但模板仍引
-`/assets/main.js` 与 `/assets/voice.js`，`initChat` / `initVoice` 零调用点——所以**线上跑的
-仍是 `nest/client/scripts/*.ts` 那份**。切换点见 roadmap.md §4.3 的 P3/P4。
+`rust/client/` 的 DOM 层（socket、音频、两个页面的渲染、下载对话框与历史刷新）代码已移植，
+`public/wasm/` 已随部署上线（`/wasm/kestrel_client_bg.wasm` 200，§13.2）。2026-11-03 起模板
+**会**在 `initChat` / `initVoice` 处调用它——但由 `CLIENT_BUNDLE` 决定，默认仍是 `nest`：
+loader 内联在 `view/templates.rs::WASM_LOADER` 里（不落地成第二个 JS 文件，避免 JS 与 wasm
+两份产物的缓存错位）。所以线上目前跑的仍是 `nest/client/scripts/*.ts`，灰度开关与回滚见
+deployment.md §2.2；把 `nest/` 彻底删掉是 roadmap.md §4.3 的 P4，前提仍是 P1 整体通过。
 
 ## 14. 相关文档
 

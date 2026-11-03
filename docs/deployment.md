@@ -18,7 +18,7 @@
 |---|---|
 | 服务端可执行文件 | 开发机交叉编译的 **x86_64-unknown-linux-musl 静态二进制**（`make build-linux`），随构建上下文上传 |
 | 运行时基础镜像 | `scratch`——Docker 对它有特殊处理、**永远不需要拉取**，所以服务器上没有任何要缓存的镜像 |
-| 前端资源 | 开发机构建的 `public/`。里面已含 `wasm/` 产物，但模板仍引 Nest 构建的 `assets/main.js` 与 `assets/voice.js`，wasm 目前无人加载（切换见 roadmap.md §4.3 的 P3/P4） |
+| 前端资源 | 开发机构建的 `public/`，两份客户端产物都在里面：`assets/*.js`（Nest/Vite）与 `wasm/*`（`make build-wasm`）。页面加载哪一份由 `CLIENT_BUNDLE` 决定，默认 `nest`，见 §2.2 |
 | TLS 根证书 | 编进二进制的 `webpki-roots`（scratch 里没有 `/etc/ssl/certs`） |
 | `/tmp` | compose 的 `tmpfs`：scratch 没有 `/tmp`，而 SQLite 需要临时 b-tree 时会去那里写文件 |
 | C 交叉编译工具链 | 开发机上的 `zig`（自带 musl sysroot）；`ring` 的 C/asm 与 `libsqlite3-sys` 的 bundled SQLite 都靠它 |
@@ -134,6 +134,35 @@ ssh lavo-test "cd /opt/kestrel-studio && docker compose up -d"
    语音的真实证据是 INFO 上的 `voice session opened`，不需要这个开关。
 3. **流式响应的 `latency` 是首字节时间**，不是一轮或一次通话的时长。
 4. DEBUG 里除了访问日志还有 sqlx 的语句 span，量大；只在走查的那几分钟开着，走完关掉。
+
+## 2.2 浏览器包切换（`CLIENT_BUNDLE`，2026-11-03）
+
+`docker-compose.yml` 里 `CLIENT_BUNDLE=${CLIENT_BUNDLE:-nest}`，和 `PORT`、`RUST_LOG` 同一条规则：
+它是部署配置而不是密钥，所以不进那份"只写一次、永不覆盖"的 `.env`。
+
+| 值 | `/` 与 `/voice` 加载 | 用途 |
+|---|---|---|
+| `nest`（默认） | `assets/main.js` / `assets/voice.js` | 线上现状，与 2026-11-02 切服务端时同一份客户端 |
+| `wasm` | 内联 module loader → `/wasm/kestrel_client.js` + `_bg.wasm`，再调 `initChat` / `initVoice` | roadmap.md §4.3 P3 的灰度 |
+
+```bash
+# 打开：只重启容器，不重新构建、不重新上传
+ssh lavo-test "cd /opt/kestrel-studio && CLIENT_BUNDLE=wasm docker compose up -d"
+# 关掉（回到默认）：同一条命令去掉变量
+ssh lavo-test "cd /opt/kestrel-studio && docker compose up -d"
+```
+
+四个必须知道的性质：
+
+1. **它决定服务端会登出人吗？不决定。** 换的是页面加载哪个脚本，session 与 cookie 一行不动。
+2. **`make deploy` 会把它带回 `nest`**：脚本不转发这个变量，所以下一次部署自动回滚。想让它长期
+   保持 `wasm`，就把它写进服务器上那份 `.env`（`deploy.sh` 永不覆盖该文件，改它本来就是运维的活）——
+   这是**长期启用**的唯一写法，别以为 `docker compose up -d` 的效果能扛过一次部署。
+3. **启动日志会写用了哪个**：`client=nest` / `client=wasm`（`main.rs`）。判断"用户拿到的是哪份
+   客户端"不必猜，也不必读宿主机环境变量。
+4. **它按 `nest` 起、按 `wasm` 灰度时，出错是页面级而不是服务级**：接口、SSR、登录都还在跑同一份
+   Rust 服务端。WASM 加载失败时 loader 会在页面上落一条 `.client-error` 提示并 `console.error`；
+   回滚就是上面那条命令。
 
 ## 3. 对外暴露：openresty 反代
 
