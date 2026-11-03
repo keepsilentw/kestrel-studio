@@ -222,7 +222,7 @@ openai 面须置 compat 位 `stream_include_usage = true`，否则全程 `usage:
   前缀一个不含），切流当天全员被登出**——细节与线上表现见 [verification.md](verification.md) §13.4。
   只要这条口径再变一次，代价就会重现，所以切流前必须告知使用者，别让它再变成意外。
   方向还不对称：Nest 读不懂 Rust 写的 sess 行，所以**回滚也要登出一次**（§4.3 的 P2 行）。
-- **P3 的切换开关已就位，默认关**（2026-11-03）：`CLIENT_BUNDLE=wasm` 让 `/` 与 `/voice` 改加载
+- **P3 的切换开关已就位，且已拨到 `wasm` 灰度档**（2026-11-03 10:57；`nest` 仍是代码默认与 `make deploy` 的默认）：`CLIENT_BUNDLE=wasm` 让 `/` 与 `/voice` 改加载
   `public/wasm/` 那份客户端，`nest` 是原样。开关是**部署配置**，所以一次 `docker compose up -d`
   就能切、去掉变量就回滚，不用重新构建或部署；机制与四条性质见 deployment.md §2.2，实现与未验证
   项见 verification.md §17。**开灰度之前**，那份客户端在浏览器里一次都没跑过——这正是 P1 那五条
