@@ -33,8 +33,8 @@ use web_sys::{
 };
 
 use crate::chat_core::{
-    decoded_bytes, download_filename, format_bytes, history_rows, plan_download, quality_percent,
-    selected_size, DownloadPlan, Paint, Stream,
+    decoded_bytes, download_filename, enter_submits, format_bytes, history_rows, plan_download,
+    quality_percent, selected_size, DownloadPlan, Paint, Stream,
 };
 use kestrel_proto::event::{ConversationEvent, ConversationSummary, MessageView, Mode};
 
@@ -331,14 +331,40 @@ fn bind(page: &Handle, dom: &Dom) -> Result<(), JsValue> {
         .add_event_listener_with_callback("click", submit.as_ref().unchecked_ref())?;
     submit.forget();
 
+    // Enter sends, Shift+Enter stays a newline. Bound to the textarea rather than the
+    // form: the form's own submit is prevented above, and a keypress inside the
+    // textarea is the only place this decision can be observed.
+    let scoped = Rc::clone(page);
+    let enter = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |event: web_sys::KeyboardEvent| {
+        if event.key() != "Enter" {
+            return;
+        }
+        if !enter_submits(event.shift_key(), event.is_composing()) {
+            return;
+        }
+        // Without this the browser inserts the newline as well as sending.
+        event.prevent_default();
+        send_prompt(&scoped);
+    });
+    dom.prompt
+        .add_event_listener_with_callback("keydown", enter.as_ref().unchecked_ref())?;
+    enter.forget();
+
     let scoped = Rc::clone(page);
     let fresh = Closure::<dyn FnMut()>::new(move || {
         // A new conversation is a page reset, not a client-side clear: the shell
         // decides what an empty conversation looks like.
-        if let Some(window) = web_sys::window() {
-            let _ = window.location().set_search("");
-            window.location().reload().ok();
-        }
+        //
+        // Exactly one navigation. The previous shape (`search = ""` then `reload()`)
+        // queued two, and the browser aborts the pending one — so the page reloaded
+        // `/?c=<id>` and the button looked dead. Observed during the WASM grey
+        // release: six reloads of the same conversation, no empty page (docs/verification.md §18).
+        let Some(window) = web_sys::window() else { return };
+        let path = window
+            .location()
+            .pathname()
+            .unwrap_or_else(|_| "/".to_string());
+        let _ = window.location().set_href(&path);
         let _ = scoped;
     });
     dom.new_conversation

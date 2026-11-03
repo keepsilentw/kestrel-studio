@@ -194,6 +194,16 @@ pub fn plan_download(
     })
 }
 
+/// Whether an Enter keydown on the composer submits the turn.
+///
+/// Shift+Enter is a newline — the behaviour the TS client has always had. `composing`
+/// is the IME guard: without it, confirming a Chinese pinyin candidate with Enter
+/// would submit a half-typed prompt instead of finishing the word, which is exactly
+/// the kind of bug that never shows up in an English test.
+pub fn enter_submits(shift: bool, composing: bool) -> bool {
+    !shift && !composing
+}
+
 /// The size label next to the export. 1024-based: this describes a file, not a
 /// marketing number.
 pub fn format_bytes(bytes: u64) -> String {
@@ -478,6 +488,14 @@ mod tests {
         assert!(download_filename("image/png", 50, 1).ends_with(".png"));
         assert!(download_filename("image/webp", 50, 1).ends_with(".webp"));
         assert!(download_filename("image/unknown", 100, 2).ends_with(".jpg"), "unknown mime exports as JPEG");
+    }
+
+    #[test]
+    fn enter_sends_unless_shift_or_the_ime_is_still_composing() {
+        assert!(enter_submits(false, false), "plain Enter sends");
+        assert!(!enter_submits(true, false), "Shift+Enter is a newline");
+        assert!(!enter_submits(false, true), "Enter that finishes an IME candidate must not send");
+        assert!(!enter_submits(true, true), "and neither does the shift-combination");
     }
 
     #[test]
