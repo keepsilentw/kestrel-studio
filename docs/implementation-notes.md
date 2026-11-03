@@ -394,5 +394,9 @@ $ git status --porcelain=v1
 **处理**：要么别单独跑 `crates/*`（改动 `crates/proto` 时，跑 `rust/server` 或 `rust/client`
 的测试就足以覆盖，两边都把它当路径依赖吃进去），要么跑完就删掉那份 lock。本次删的就是它。
 
-**不动 `.gitignore`**：加一条 `crates/*/Cargo.lock` 是把这次的疏忽固化成规则，而不是修掉来源；
+**当时没动 `.gitignore`**：加一条 `crates/*/Cargo.lock` 是把这次的疏忽固化成规则，而不是修掉来源；
 按项目约定 `.gitignore` 只由用户明确要求时才改。
+
+**2026-11-03 收尾**：用户明确要求后加了 `crates/*/Cargo.lock`，本节的坑从此结构性关闭——复现方式是
+`cargo check --manifest-path crates/md/Cargo.toml` 之后 `git status` 仍然干净。同一轮里还修了
+`.gitignore` 里一条旧 target 名（`make build-rust-client` → `make build-wasm`，改名发生在 `b9db776`）。

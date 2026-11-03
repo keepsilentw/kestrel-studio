@@ -8,7 +8,10 @@ rust/server/target/
 # `nest/server/dist/`.
 crates/*/target/
 rust/client/target/
-# wasm-pack writes the browser-ready package here (`make build-rust-client`).
+# A direct `cargo test`/`check` on crates/proto or crates/md also leaves a Cargo.lock that
+# nothing tracks and nobody reviews. See docs/implementation-notes.md §18.
+crates/*/Cargo.lock
+# wasm-pack writes the browser-ready package here (`make build-wasm`).
 rust/client/pkg/
 /public/
 data/
