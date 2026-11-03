@@ -292,6 +292,7 @@ mod tests {
     fn config() -> AppConfig {
         AppConfig {
             port: 8848,
+            client_bundle: crate::config::ClientBundle::Nest,
             is_production: false,
             session_secret: "s".to_string(),
             database_file: String::new(),

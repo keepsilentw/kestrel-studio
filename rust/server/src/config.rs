@@ -70,6 +70,8 @@ pub struct AppConfig {
     pub database_file: String,
     pub storage_dir: String,
     pub public_base_url: String,
+    /// See [`ClientBundle`]: which client the chat and voice pages load.
+    pub client_bundle: ClientBundle,
     /// None when either `SUPER_ADMIN_*` variable is absent — then no super admin is seeded.
     pub super_admin: Option<SeedAccount>,
     pub bailian: BailianConfig,
@@ -101,6 +103,49 @@ fn read_reasoning_effort() -> ReasoningEffort {
         .into_iter()
         .find(|effort| effort.as_str() == normalized)
         .unwrap_or(DEFAULT_REASONING_EFFORT)
+}
+
+/// Which browser bundle the two pages load.
+///
+/// `nest` is what production has been running; `wasm` points `/` and `/voice` at the
+/// Rust→WASM client under `public/wasm/` (roadmap.md §4.3 P3). The switch exists because
+/// the WASM client has never been observed in a browser: flipping it is a grey release,
+/// and the rollback has to be one environment variable rather than a redeploy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClientBundle {
+    Nest,
+    Wasm,
+}
+
+impl ClientBundle {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Nest => "nest",
+            Self::Wasm => "wasm",
+        }
+    }
+
+    pub fn parse(raw: &str) -> Option<Self> {
+        match raw {
+            "nest" => Some(Self::Nest),
+            "wasm" => Some(Self::Wasm),
+            _ => None,
+        }
+    }
+}
+
+/// An unknown value is a startup error, not a silent fallback to `nest`.
+///
+/// `BAILIAN_REASONING_EFFORT` does fall back silently, and that is fine: a wrong effort
+/// changes how much thinking shows up. This one decides which client a page runs, so a
+/// typo would hide a whole rollout — or, worse, a page would load a client nobody
+/// intended to ship.
+fn read_client_bundle() -> Result<ClientBundle, String> {
+    let Some(raw) = read_env("CLIENT_BUNDLE") else {
+        return Ok(ClientBundle::Nest);
+    };
+    ClientBundle::parse(&raw.to_lowercase())
+        .ok_or_else(|| format!("CLIENT_BUNDLE must be nest or wasm, got {raw:?}"))
 }
 
 /// Fallback for a missing `SESSION_SECRET` outside production. The same value
@@ -140,6 +185,7 @@ impl AppConfig {
         let is_production = read_env("NODE_ENV").as_deref() == Some("production");
         Ok(Self {
             port: read_port(),
+            client_bundle: read_client_bundle()?,
             is_production,
             session_secret: read_session_secret(is_production)?,
             database_file: read_env("DATABASE_FILE")
@@ -208,6 +254,7 @@ impl AppConfig {
     pub fn test(storage_dir: &str, public_base_url: &str) -> Self {
         Self {
             port: 8848,
+            client_bundle: ClientBundle::Nest,
             is_production: false,
             session_secret: "unit-test-secret".to_string(),
             database_file: String::new(),
@@ -222,6 +269,26 @@ impl AppConfig {
                 video_model_i2v: "i2v-model".to_string(),
                 voice_model: "voice-model".to_string(),
             },
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ClientBundle;
+
+    /// `docker-compose.yml` writes this name, so the spelling is an interface: parse it
+    /// back from the string it prints, and refuse everything else. A typo must not pick
+    /// a client silently — that is the whole difference between this setting and
+    /// `BAILIAN_REASONING_EFFORT`, which falls back because a wrong effort is cosmetic.
+    #[test]
+    fn the_client_bundle_round_trips_and_refuses_nonsense() {
+        for bundle in [ClientBundle::Nest, ClientBundle::Wasm] {
+            assert_eq!(ClientBundle::parse(bundle.as_str()), Some(bundle));
+        }
+        // `read_env` already trims and lowercases upstream; this is the value list.
+        for raw in ["", "wasmb", "ts", "WAM", "n"] {
+            assert_eq!(ClientBundle::parse(raw), None, "{raw:?} must not pick a client");
         }
     }
 }

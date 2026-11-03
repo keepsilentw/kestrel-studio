@@ -127,7 +127,12 @@ async fn main() -> Result<(), Box<dyn Error>> {
     });
 
     let listener = tokio::net::TcpListener::bind(("0.0.0.0", port)).await?;
-    tracing::info!("kestrel-studio listening on http://localhost:{port}");
+    // The bundle is logged because it is the one setting an operator cannot read off a
+    // page: which client users got is the first question after a grey release.
+    tracing::info!(
+        client = state.config.client_bundle.as_str(),
+        "kestrel-studio listening on http://localhost:{port}"
+    );
     axum::serve(listener, http::router::build(state))
         .with_graceful_shutdown(shutdown_signal())
         .await?;

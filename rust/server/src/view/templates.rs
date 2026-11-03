@@ -40,6 +40,9 @@ pub struct ChatPage {
     pub pending_tasks: Vec<PendingTask>,
     pub turn_anchors: Vec<TurnAnchor>,
     pub can_delete_conversations: bool,
+    /// Which client the page loads. From `AppConfig::client_bundle`; a test builds the
+    /// struct directly, so the switch is asserted without touching the environment.
+    pub client: crate::config::ClientBundle,
 }
 
 pub fn login_page(error: bool) -> String {
@@ -109,6 +112,7 @@ pub fn chat_page(page: &ChatPage) -> String {
     }
 
     out.push_str(COMPOSER_AND_DIALOGS);
+    out.push_str(&client_script(page.client, "/assets/main.js", "initChat"));
     out.push_str("</body>\n</html>\n");
     out
 }
@@ -300,21 +304,54 @@ const COMPOSER_AND_DIALOGS: &str = r#"  <footer class="composer">
       <button type="button" class="conversation-delete-yes" data-delete-choice="confirm">删除</button>
     </div>
   </dialog>
+"#;
 
-  <script type="module" src="/assets/main.js"></script>
+/// Which client a page starts — both `/` and `/voice` go through here, so there is one
+/// place that decides it. The `nest` branch is what production has always run; the `wasm`
+/// branch is the P3 client (roadmap.md §4.3, switch semantics in docs/deployment.md §2.2).
+fn client_script(client: crate::config::ClientBundle, legacy: &str, entry: &str) -> String {
+    match client {
+        crate::config::ClientBundle::Nest => {
+            format!("  <script type=\"module\" src=\"{legacy}\"></script>\n")
+        }
+        crate::config::ClientBundle::Wasm => WASM_LOADER
+            .replace("@ENTRY@", entry)
+            .replace("@LEGACY@", legacy),
+    }
+}
+
+/// The WASM bootstrap. `@LEGACY@` is named in the failure note because that is the
+/// one sentence an operator needs: which client this page meant to run.
+const WASM_LOADER: &str = r#"  <script type="module">
+    // Inline on purpose. The loader is these lines; a cached JS file that no longer
+    // matches the .wasm beside it is exactly the failure an inline module cannot make.
+    try {
+      const client = await import("/wasm/kestrel_client.js");
+      await client.default();
+      client.@ENTRY@();
+    } catch (error) {
+      console.error("kestrel: the WASM client did not start", error);
+      const note = document.createElement("p");
+      note.className = "client-error";
+      note.textContent = "WASM 客户端加载失败（@LEGACY@ 是这个页面的旧客户端）。刷新页面重试。";
+      const stream = document.querySelector(".stream");
+      (stream === null ? document.body : stream).append(note);
+    }
+  </script>
 "#;
 
 /// `GET /voice` - the second entrance. The server renders the shell only: a call
 /// has no history to replay, so everything below the header is appended by
 /// `nest/client/scripts/voice.ts` (docs/architecture.md §11).
-pub fn voice_page(username: &str, is_super: bool) -> String {
+pub fn voice_page(username: &str, is_super: bool, client: crate::config::ClientBundle) -> String {
     let admin = if is_super {
         "      <a class=\"menu-button\" href=\"/admin\">管理</a>\n"
     } else {
         ""
     };
     let main = format!(
-        "  <main class=\"voice-stage\">\n    <p class=\"voice-status\" id=\"voice-status\">按住按钮开始说话</p>\n    <ol class=\"voice-log\" id=\"voice-log\"></ol>\n  </main>\n\n  <div class=\"voice-controls\">\n    <button type=\"button\" class=\"voice-button\" id=\"voice-button\">按住说话</button>\n  </div>\n\n  <script type=\"module\" src=\"/assets/voice.js\"></script>\n"
+        "  <main class=\"voice-stage\">\n    <p class=\"voice-status\" id=\"voice-status\">按住按钮开始说话</p>\n    <ol class=\"voice-log\" id=\"voice-log\"></ol>\n  </main>\n\n  <div class=\"voice-controls\">\n    <button type=\"button\" class=\"voice-button\" id=\"voice-button\">按住说话</button>\n  </div>\n\n{}",
+        client_script(client, "/assets/voice.js", "initVoice")
     );
     shell_voice("语音", admin, username, &main)
 }

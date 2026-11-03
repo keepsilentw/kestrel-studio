@@ -118,6 +118,7 @@ pub async fn chat(
         pending_tasks,
         turn_anchors,
         can_delete_conversations: !crate::auth::roles::is_super_admin(Some(&user)),
+        client: state.config.client_bundle,
     };
     Ok(html(super::templates::chat_page(&page)))
 }
@@ -125,9 +126,13 @@ pub async fn chat(
 /// `GET /voice` — the second entrance. No conversation is rendered: a call creates
 /// its own on the server when the socket opens, and the client appends everything
 /// from there.
-pub async fn voice(ViewAuthed(user): ViewAuthed) -> Response {
+pub async fn voice(
+    ViewAuthed(user): ViewAuthed,
+    State(state): State<crate::state::AppState>,
+) -> Response {
     html(super::templates::voice_page(
         &user.username,
         user.role == crate::auth::roles::Role::Super,
+        state.config.client_bundle,
     ))
 }

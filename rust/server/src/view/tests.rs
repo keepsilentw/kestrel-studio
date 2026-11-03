@@ -65,6 +65,9 @@ fn page_fixture(
         pending_tasks: vec![],
         turn_anchors: anchors,
         can_delete_conversations: !is_super,
+        // The fixture renders what production renders by default; the switch has its
+        // own test and builds the page with `..`-update instead.
+        client: crate::config::ClientBundle::Nest,
     }
 }
 
@@ -113,6 +116,7 @@ fn the_chat_page_carries_every_element_the_client_script_requires() {
         pending_tasks: vec![PendingTask { id: 9, kind: TaskKind::Video, status_label: "渲染中".to_string() }],
         turn_anchors: vec![TurnAnchor { message_id: 1, label: "画一只红隼".to_string() }],
         can_delete_conversations: true,
+        client: crate::config::ClientBundle::Nest,
     };
     let rendered = super::templates::chat_page(&page);
 
@@ -355,13 +359,51 @@ fn voice_required_ids() -> Vec<String> {
 
 #[test]
 fn the_voice_page_carries_every_element_the_wasm_client_requires() {
-    let rendered = super::templates::voice_page("tww316", true);
+    let rendered = super::templates::voice_page("tww316", true, crate::config::ClientBundle::Nest);
     for id in voice_required_ids() {
         assert!(
             rendered.contains(&format!("id=\"{id}\"")),
             "#{id} is looked up by rust/client/src/voice_page.rs but is not in the /voice shell"
         );
     }
+}
+
+
+/// `CLIENT_BUNDLE` is the whole switch, so it is asserted where it takes effect: the
+/// rendered tag. `/` and `/voice` are the only two pages that load a client at all
+/// (`/admin` deliberately loads none), and one page never carries both clients.
+#[test]
+fn the_client_switch_hands_each_page_exactly_one_client() {
+    use crate::config::ClientBundle;
+
+    let nest = super::templates::chat_page(&page_fixture(&[], &[], None, None, false));
+    assert!(nest.contains("<script type=\"module\" src=\"/assets/main.js\"></script>"), "{nest}");
+    assert!(!nest.contains("kestrel_client.js"), "the default must not load WASM");
+
+    let wasm = super::templates::chat_page(&ChatPage {
+        client: ClientBundle::Wasm,
+        ..page_fixture(&[], &[], None, None, false)
+    });
+    assert!(wasm.contains("import(\"/wasm/kestrel_client.js\")"), "{wasm}");
+    assert!(wasm.contains("client.initChat()"), "{wasm}");
+    assert!(!wasm.contains("src=\"/assets/main.js\""), "one client per page: {wasm}");
+
+    let voice = super::templates::voice_page("tww316", false, ClientBundle::Wasm);
+    assert!(voice.contains("client.initVoice()"), "{voice}");
+    // Tag-shaped on purpose: the loader's own failure note names the legacy bundle, so
+    // a bare path in the page is not evidence of a second client.
+    assert!(!voice.contains("src=\"/assets/voice.js\""), "no TS client tag on the voice page: {voice}");
+    assert!(
+        voice.contains("import(\"/wasm/kestrel_client.js\")"),
+        "both pages must resolve the same module, or one of them is broken by a typo: {voice}"
+    );
+
+    // The worklet is still JS at that exact path — `rust/client/src/audio.rs` asks for
+    // `/capture.js` and no amount of WASM changes that (docs/roadmap.md §4.1, the JS floor).
+    assert!(
+        std::path::Path::new("../client/public/capture.js").exists(),
+        "audio.rs loads /capture.js; the source file it is built from moved"
+    );
 }
 
 /// The ids the **WASM** chat page looks up, read out of its source. A second
