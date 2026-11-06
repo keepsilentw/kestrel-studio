@@ -198,7 +198,7 @@ pub fn init_chat() -> Result<(), JsValue> {
     // An existing conversation is subscribed immediately: a turn still running on
     // the server must reach this page even if nobody presses send here.
     if let Some(id) = conversation_id(&dom.body) {
-        let cursor = dom.body.dataset().get("start-seq").unwrap_or_default();
+        let cursor = dom.body.dataset().get("startSeq").unwrap_or_default();
         open_stream(&page, &id, &cursor);
     }
     Ok(())
@@ -238,7 +238,7 @@ fn mode_buttons(document: &Document) -> Result<Vec<HtmlButtonElement>, JsValue> 
 }
 
 fn conversation_id(body: &HtmlElement) -> Option<String> {
-    body.dataset().get("conversation-id").filter(|id| !id.is_empty())
+    body.dataset().get("conversationId").filter(|id| !id.is_empty())
 }
 
 /// The ids the SSR shell already painted. Without this the replay from
@@ -254,7 +254,7 @@ fn seed_rendered(document: &Document, page: &Handle) {
     for index in 0..nodes.length() {
         let Some(node) = nodes.item(index) else { continue };
         let Some(html) = node.dyn_ref::<HtmlElement>() else { continue };
-        if let Some(raw) = html.dataset().get("message-id").and_then(|value| value.parse::<i64>().ok()) {
+        if let Some(raw) = html.dataset().get("messageId").and_then(|value| value.parse::<i64>().ok()) {
             page.journal.note_rendered(raw);
         }
     }
@@ -441,14 +441,14 @@ fn bind(page: &Handle, dom: &Dom) -> Result<(), JsValue> {
             return;
         };
         if let Some(button) = find_closest(&target, "[data-delete-conversation]") {
-            let Some(raw) = button.dataset().get("delete-conversation").and_then(|value| value.parse::<i64>().ok()) else {
+            let Some(raw) = button.dataset().get("deleteConversation").and_then(|value| value.parse::<i64>().ok()) else {
                 return;
             };
             ask_delete(&scoped, raw);
             return;
         }
         if let Some(button) = find_closest(&target, "[data-delete-choice]") {
-            match button.dataset().get("delete-choice").as_deref() {
+            match button.dataset().get("deleteChoice").as_deref() {
                 Some("cancel") => {
                     // The question is dropped here, not in the `close` handler the
                     // spec queues: one answer must not be able to fire the delete
@@ -1403,7 +1403,7 @@ fn refresh_history(page: &Handle) {
         let can_delete = dom
             .body
             .dataset()
-            .get("can-delete-conversations")
+            .get("canDeleteConversations")
             .is_some_and(|flag| flag == "true");
         let document = match dom.body.owner_document() {
             Some(document) => document,
