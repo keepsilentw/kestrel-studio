@@ -249,6 +249,9 @@ openai 面须置 compat 位 `stream_include_usage = true`，否则全程 `usage:
   **13:58 已部署并重跑**：三条修复在真实浏览器里全部复验通过，P1 又过了四条（出图、视频异步任务、
   `/admin` 页面内容、断线重连的**游标回放**那一半），下载弹窗的 canvas 重编码也首次上浏览器验过。
   现在只剩**语音真拨号**与 **`Last-Event-ID` 自动重连**两条。逐条证据见 verification.md §23。
+  16:44 又补了一刀（§24）：`logging` 上限已加；浏览器自动重连确实带 `last-event-id`（16:44:24 那条
+  请求头是 1181，服务端 `chat.rs:213-216` 优先读它、忽略同 URL 上的 `?from=0`）。**断开期间的缺口
+  回放仍未测**——第二次尝试里那一轮跟着进程一起死了，于是顺带挖出下面那条新缺陷。
 - **灰度取证的盲区已补并上线**（2026-11-02 16:18）：`router.rs` 挂了 `tower_http::trace::TraceLayer`，
   每请求一行 method + uri + status + latency，**级别 DEBUG**，所以默认的 `info` 过滤下一行都不打、
   生产日志量不变（线上实测：打了若干请求之后去色计数仍为 0）；开关是 compose 里的
@@ -267,6 +270,17 @@ openai 面须置 compat 位 `stream_include_usage = true`，否则全程 `usage:
   4.0 KB、五分钟窗口内 DEBUG 行计数 0（verification.md §23.1）。**但根因没除**：json-file 仍然没有
   `max-size` / `max-file`，下一次取证再忘收回，还是会一直长。要不要给它加轮转上限，是个独立的运维
   决定，写在 deployment.md §2.1。
+  **同日 16:44 根因也关了**：`docker-compose.yml` 的 `logging` 段加了 `max-size: 10m` / `max-file: 5`，
+  宿主机重建后核对 `HostConfig.LogConfig` 已带上这两个键（§24.1 与 deployment.md §2.1）。
+
+- **服务端在轮次进行中被重启 → 页面永久停在「正在生成…」**（2026-11-06 实测，verification.md §24.4）：
+  那一轮不会有终态事件（`conversation_events` 末尾停在 `reasoning`，没有 `turn_done` / `turn_error`），
+  启动收尾虽然把空占位行写成「本轮处理失败：服务在轮次完成前中断。」，**但这条收尾不产生事件**，
+  活着的连接收不到，只有重载页面才恢复。**两个客户端同形**（`main.ts` 的 `streamTurnRunning` 与
+  `chat_page.rs` 的 `turn_running` 都只在 `turn_done` / `turn_error` 复位，没有看门狗），所以这不是
+  wasm 回归而是既有缺口。倾向的修法：启动收尾时往 `conversation_events` 补一帧 `turn_error`——一次
+  改动、两个服务端同步、且天然被重放路径带上；另一条是客户端加无终态超时后自动重载。**未开工，等定**
+  （它不在本次批准的范围内，而且要两端同改）。
 
 ## 4. Nest 退役与 WASM 客户端（2026-10-30 决策）
 
