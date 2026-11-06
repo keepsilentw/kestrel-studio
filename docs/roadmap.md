@@ -194,9 +194,13 @@ openai 面须置 compat 位 `stream_include_usage = true`，否则全程 `usage:
 ## 3. 当前待办
 
 - 红隼 logo 目前是占位 SVG（`nest/client/public/logo.svg`），待替换为正式图片。
-- 对话页有 1 条 Chrome *issue*：`Lazy-loaded images should have explicit dimensions`，来自
-  `partials/turn.hbs` 里 `loading="lazy"` 的资产 `<img>`。不是错误也不是警告，属既有代码；要修
-  得先知道图片尺寸，而尺寸由模型选，暂无好办法，先记着。
+- 对话页有 1 条 Chrome *issue*：`Lazy-loaded images should have explicit dimensions`，来自 SSR 回放
+  那一段 `loading="lazy"` 的资产 `<img>`——线上出自 `rust/server/src/view/templates.rs:209`
+  （`turn()`，由 `view/tests.rs:209` 钉住），`nest/server/src/view/views/partials/turn.hbs:39` 是它的
+  契约源，两条同形。2026-11-06 按源码补一条边界：**只有回放路径会命中**——两个客户端拼流式 DOM 时
+  都不带 `loading` 属性（`nest/client/scripts/main.ts` 全文无 `loading`，`rust/client` 的
+  `append_asset` 也不设），所以它只在刷新回已有会话那一屏出现。不是错误也不是警告，属既有代码；
+  要修得先知道图片尺寸，而尺寸由模型选，暂无好办法，先记着。
 - 语音的遗留项（设计与已落地的部分见 [architecture.md](./architecture.md) §11）：
   - **真实麦克风采集尚未验证**。客户端到服务端的帧序列已有测试与实测覆盖
     （`nest/client/__tests__/voice.test.ts`、[verification.md](verification.md) §7），剩下的是
