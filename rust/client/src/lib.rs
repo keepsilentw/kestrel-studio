@@ -20,6 +20,12 @@ pub mod voice_core;
 pub mod chat_core;
 pub mod pcm;
 
+/// A guard over the DOM modules' own source: `dataset()` is keyed in camelCase,
+/// and a kebab-case lookup is a silent `None` rather than an error. Test-only, so
+/// it compiles nothing into either bundle.
+#[cfg(test)]
+mod dataset_keys;
+
 // The exports exist only where they can be called: on the host target the same
 // module would drag wasm-bindgen into `cargo test` for no reason.
 #[cfg(target_arch = "wasm32")]
