@@ -397,6 +397,40 @@ $ git status --porcelain=v1
 **当时没动 `.gitignore`**：加一条 `crates/*/Cargo.lock` 是把这次的疏忽固化成规则，而不是修掉来源；
 按项目约定 `.gitignore` 只由用户明确要求时才改。
 
+## 19. `dataset()` 的键是 camelCase，写成属性的 kebab 拼法是静默 None（2026-11-06）
+
+`HTMLElement::dataset()` 返回的是 `DomStringMap`，它的键是 **JS 属性名**，也就是 camelCase：
+属性 `data-conversation-id` 要读成 `dataset["conversationId"]`。在 Rust 侧写成
+`body.dataset().get("conversation-id")` 不报错、不 panic、也不返回 `None` 之外的任何东西——
+它就是个空读取，于是每个调用点都走 `None` 分支，页面照常渲染，功能照常坏。
+
+WASM 客户端一次就写了六处（`rust/client/src/chat_page.rs`，2026-11-06 之前）：
+
+| 读取 | 正确键 | 静默失效的后果 |
+|---|---|---|
+| `conversation-id` | `conversationId` | 已有会话里提交一律新建会话；首屏不订流（`if let Some(id)` 永不成立）；历史行 active 恒空 |
+| `start-seq` | `startSeq` | 订流游标恒空（被上一行掩盖） |
+| `message-id` | `messageId` | SSR 已画的轮次不进 replay 去重集合（被第一行掩盖，一旦订上流就会重复画） |
+| `delete-conversation` | `deleteConversation` | 历史行的删除按钮认不出是哪一行 |
+| `delete-choice` | `deleteChoice` | 删除确认对话框的确认/取消都不响应 |
+| `can-delete-conversations` | `canDeleteConversations` | 删除控件对所有账号都不渲染——连普通用户也一起没有 |
+
+**为什么两道质量门都没拦住**：`cargo test`（宿主目标）根本编不到 `chat_page.rs`，它是
+`cfg(target_arch = "wasm32")` 门后的 DOM 模块；`rust/server/src/view/tests.rs` 的契约测试钉的是
+**元素 id**，不是**属性键**。这正是 roadmap.md §4.1 当时写下的真实代价——"客户端从此没有类型检查
+与 jsdom 测试之外的运行时护栏"——第一次以它预言的方式兑现。上一轮 jsdom 套件退役时也没留下等价物。
+
+**结构性关闭**：`rust/client/src/dataset_keys.rs`（`#[cfg(test)] mod`，不进任何包）扫五个 DOM
+模块的源码，断言每个 `dataset().get("…")` 的实参不含 `-` 与 `_`，并且扫描条数 `< 8` 就报"解析器过期"，
+避免护栏自己变成假人。复现方式：把任一键改回 kebab 拼法，`cargo test` 立刻红。
+反向验证做过了：把 `conversationId` 改回 `conversation-id` 后，报错原文是
+`…/chat_page.rs: `dataset().get("conversation-id")` at byte 10014 uses the attribute spelling`——
+文件、字节偏移、错键与"该用 camelCase"都在。还原后 39 条全绿。
+
+**同类写法不受影响**：`set_attribute("data-conversation-id", …)` 与 `get_attribute("data-…")` 走的
+是属性名，本来就是 kebab，两侧一致。要记住的分界线只有一条——**经过 `dataset()` 就是属性名，
+绕过它就不是**。
+
 **2026-11-03 收尾**：用户明确要求后加了 `crates/*/Cargo.lock`，本节的坑从此结构性关闭——复现方式是
 `cargo check --manifest-path crates/md/Cargo.toml` 之后 `git status` 仍然干净。同一轮里还修了
 `.gitignore` 里一条旧 target 名（`make build-rust-client` → `make build-wasm`，改名发生在 `b9db776`）。
