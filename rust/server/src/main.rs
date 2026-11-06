@@ -99,8 +99,28 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // history — keeps the orphaned-user-message hazard the turn loop's finalizer
     // guards against from surviving a process boundary.
     let abandoned = state.conversations.abandon_stale_placeholders().await?;
-    if abandoned > 0 {
-        tracing::info!(abandoned, "finalized assistant rows left by a previous process");
+    if !abandoned.is_empty() {
+        tracing::info!(
+            abandoned = abandoned.len(),
+            "finalized assistant rows left by a previous process"
+        );
+        // Closing the row is only half the recovery. The page that was watching
+        // that turn has no way to learn it ended — its composer stays locked on
+        // "正在生成…" until someone reloads (measured 2026-11-06, docs/verification.md §24.4).
+        // Publish the terminal event the dead process never got to send: the journal
+        // is the only channel a reconnecting client reads, and `turn_error` is what
+        // releases the composer on both clients.
+        for (conversation_id, message_id) in &abandoned {
+            let event = kestrel_proto::event::ConversationEvent::TurnError {
+                message_id: *message_id,
+                message: "服务在轮次完成前中断。".to_string(),
+            };
+            // Loud but not fatal: a journal that will not take this event is a
+            // problem for that turn's watchers, not a reason to refuse to boot.
+            if let Err(error) = state.events.publish(*conversation_id, event).await {
+                tracing::warn!(%error, conversation_id, message_id, "could not journal the abandoned turn");
+            }
+        }
     }
 
     // Expired logins: cleared at boot and then on a quarter-hour tick, which is

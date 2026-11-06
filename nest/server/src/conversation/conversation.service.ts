@@ -377,14 +377,29 @@ export class ConversationService {
    * (that once duplicated a paid video submission; CLAUDE.md §Agent). A
    * graceful stop finalizes through AgentService's `finally`; this covers
    * everything that path never got to run.
+   *
+   * Returns one `{ conversationId, messageId }` per row it closed, because the
+   * page that was watching the turn has no way to learn it ended — its composer
+   * stays locked on "正在生成…" until someone reloads (docs/verification.md §24.4).
+   * `TurnRunnerService` journals a `turn_error` for each, which is what a
+   * reconnecting client releases on. Same contract as `rust/server`'s
+   * `abandon_stale_placeholders`.
    */
-  abandonStalePlaceholders(): number {
-    const result = this.db
+  abandonStalePlaceholders(): Array<{ conversationId: number; messageId: number }> {
+    const stale = this.db
+      .select({ conversationId: messages.conversationId, id: messages.id })
+      .from(messages)
+      .where(and(eq(messages.role, 'assistant'), eq(messages.content, '')))
+      .all();
+    if (stale.length === 0) {
+      return [];
+    }
+    this.db
       .update(messages)
       .set({ content: '本轮处理失败：服务在轮次完成前中断。' })
       .where(and(eq(messages.role, 'assistant'), eq(messages.content, '')))
       .run();
-    return result.changes;
+    return stale.map((row) => ({ conversationId: row.conversationId, messageId: row.id }));
   }
 
   addAsset(messageId: number, asset: StoredAsset): number {

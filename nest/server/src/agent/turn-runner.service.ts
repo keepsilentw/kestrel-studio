@@ -40,10 +40,21 @@ export class TurnRunner implements OnApplicationBootstrap {
    */
   onApplicationBootstrap(): void {
     const abandoned = this.conversations.abandonStalePlaceholders();
-    if (abandoned > 0) {
+    if (abandoned.length > 0) {
       this.logger.log(
-        `Finalized ${abandoned} assistant row(s) left unfinished by a previous process`,
+        `Finalized ${abandoned.length} assistant row(s) left unfinished by a previous process`,
       );
+      // Closing the row is only half the recovery. The journal is the only channel
+      // a client still watching that turn reads, and `turn_error` is what releases
+      // its composer — otherwise the page sits on "正在生成…" until a reload
+      // (docs/verification.md §24.4). Mirrors `rust/server/src/main.rs`.
+      for (const { conversationId, messageId } of abandoned) {
+        this.events.publish(conversationId, {
+          type: 'turn_error',
+          messageId,
+          message: '服务在轮次完成前中断。',
+        });
+      }
     }
   }
 

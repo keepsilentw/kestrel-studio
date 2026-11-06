@@ -605,11 +605,15 @@ describe('ConversationService 未完轮次探针', () => {
     expect(harness.service.unfinishedAssistant(conversationId) !== null).toBe(true);
   });
 
-  it('abandonStalePlaceholders 收尾空占位，返回条数，不碰别的', () => {
+  it('abandonStalePlaceholders 收尾空占位，交出该收尾的会话与消息，不碰别的', () => {
     const { conversationId, messageId } = seededTurn();
     const done = harness.service.appendAssistantMessage(conversationId, '好的', 'chat');
 
-    expect(harness.service.abandonStalePlaceholders()).toBe(1);
+    // The pairs are the contract with `TurnRunnerService`: each closed row owes the
+    // journal one `turn_error`, or a client still watching it never unlocks.
+    expect(harness.service.abandonStalePlaceholders()).toEqual([
+      { conversationId, messageId },
+    ]);
 
     const staleView = harness.service.messageView(messageId);
     expect(staleView?.content.length).toBeGreaterThan(0);
@@ -619,7 +623,7 @@ describe('ConversationService 未完轮次探针', () => {
     expect(staleView?.content).toContain('本轮处理失败');
     expect(harness.service.messageView(done)?.content).toBe('好的');
     // Idempotent: a second boot finds nothing left to end.
-    expect(harness.service.abandonStalePlaceholders()).toBe(0);
+    expect(harness.service.abandonStalePlaceholders()).toEqual([]);
   });
 });
 

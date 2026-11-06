@@ -330,13 +330,22 @@ impl ConversationService {
     /// messages make the model re-run the failed request as if it were new (that
     /// once duplicated a paid video submission). A graceful stop finalizes through
     /// the turn loop's own cleanup; this covers everything that path never got to run.
-    pub async fn abandon_stale_placeholders(&self) -> Result<u64, AppError> {
-        let result = sqlx::query(
-            "UPDATE messages SET content = '本轮处理失败：服务在轮次完成前中断。' WHERE role = 'assistant' AND content = ''",
+    ///
+    /// Returns `(conversation_id, message_id)` for each row it closed, because the
+    /// page watching that turn has no way to learn it ended: the process that owned
+    /// it is gone, so its composer stays locked on "正在生成…" until someone reloads.
+    /// The caller turns each pair into a journaled `turn_error` (see `main.rs`),
+    /// which is what a reconnecting client releases on — docs/verification.md §24.4.
+    pub async fn abandon_stale_placeholders(&self) -> Result<Vec<(i64, i64)>, AppError> {
+        let rows = sqlx::query(
+            "UPDATE messages SET content = '本轮处理失败：服务在轮次完成前中断。' WHERE role = 'assistant' AND content = '' RETURNING conversation_id, id",
         )
-        .execute(&self.pool)
+        .fetch_all(&self.pool)
         .await?;
-        Ok(result.rows_affected())
+        Ok(rows
+            .iter()
+            .map(|row| (row.get("conversation_id"), row.get("id")))
+            .collect())
     }
 
     pub async fn add_asset(
@@ -835,7 +844,7 @@ mod tests {
 
     #[tokio::test]
     async fn a_placeholder_is_not_a_finished_turn_but_a_stale_one_is_abandoned_at_boot() {
-        let (service, _) = seeded().await;
+        let (service, pool) = seeded().await;
         let _user = service
             .append_user_message(10, "画一只红隼", Some(Mode::Image))
             .await
@@ -862,12 +871,47 @@ mod tests {
         assert_eq!(view.mode, Some(Mode::Image));
 
         // A second crash leaves another empty placeholder; boot ends them all.
-        service
+        let second_placeholder = service
             .create_assistant_placeholder(10, Some(Mode::Image))
             .await
             .expect("placeholder");
-        assert_eq!(service.abandon_stale_placeholders().await.expect("abandon"), 1);
+        let abandoned = service.abandon_stale_placeholders().await.expect("abandon");
+        assert_eq!(abandoned.len(), 1, "the stale placeholder is closed once");
+        assert_eq!(
+            abandoned[0].0, 10,
+            "the caller is told which conversation owed the terminal event"
+        );
+        assert_eq!(abandoned[0].1, second_placeholder, "and which message");
         assert_eq!(service.unfinished_assistant(10).await.expect("probe"), None);
+
+        // Those pairs exist so boot can journal one terminal event per dead turn:
+        // a client still watching that turn has no other way to learn it ended, and
+        // `turn_error` is what releases its composer (docs/verification.md §24.4).
+        let events = crate::conversation::EventLog::new(pool.clone());
+        for (conversation_id, message_id) in &abandoned {
+            events
+                .publish(
+                    *conversation_id,
+                    kestrel_proto::event::ConversationEvent::TurnError {
+                        message_id: *message_id,
+                        message: "服务在轮次完成前中断。".to_string(),
+                    },
+                )
+                .await
+                .expect("journal the terminal event");
+        }
+        let last = sqlx::query(
+            "SELECT type, message_id FROM conversation_events WHERE conversation_id = 10 ORDER BY seq DESC LIMIT 1",
+        )
+        .fetch_one(&pool)
+        .await
+        .expect("last event");
+        assert_eq!(
+            last.get::<String, _>("type"),
+            "turn_error",
+            "the abandoned turn ends in the journal, not only in `messages`"
+        );
+        assert_eq!(last.get::<Option<i64>, _>("message_id"), Some(second_placeholder));
     }
 
     #[tokio::test]
