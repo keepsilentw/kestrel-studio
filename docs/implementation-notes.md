@@ -396,6 +396,9 @@ $ git status --porcelain=v1
 
 **当时没动 `.gitignore`**：加一条 `crates/*/Cargo.lock` 是把这次的疏忽固化成规则，而不是修掉来源；
 按项目约定 `.gitignore` 只由用户明确要求时才改。
+**2026-11-03 收尾**：用户明确要求后加了 `crates/*/Cargo.lock`，本节的坑从此结构性关闭——复现方式是
+`cargo check --manifest-path crates/md/Cargo.toml` 之后 `git status` 仍然干净。同一轮里还修了
+`.gitignore` 里一条旧 target 名（`make build-rust-client` → `make build-wasm`，改名发生在 `b9db776`）。
 
 ## 19. `dataset()` 的键是 camelCase，写成属性的 kebab 拼法是静默 None（2026-11-06）
 
@@ -431,6 +434,20 @@ WASM 客户端一次就写了六处（`rust/client/src/chat_page.rs`，2026-11-0
 是属性名，本来就是 kebab，两侧一致。要记住的分界线只有一条——**经过 `dataset()` 就是属性名，
 绕过它就不是**。
 
-**2026-11-03 收尾**：用户明确要求后加了 `crates/*/Cargo.lock`，本节的坑从此结构性关闭——复现方式是
-`cargo check --manifest-path crates/md/Cargo.toml` 之后 `git status` 仍然干净。同一轮里还修了
-`.gitignore` 里一条旧 target 名（`make build-rust-client` → `make build-wasm`，改名发生在 `b9db776`）。
+## 20. 沙箱里跑 `cargo test` 会假红两条 storage 测试（2026-11-06）
+
+`make test` 的最后一半在受限沙箱里跑时：
+
+```
+test result: FAILED. 167 passed; 2 failed
+admin::tests::removing_an_account_takes_its_rows_and_its_files  --- PermissionDenied ("Operation not permitted")
+http::tests::assets_follow_ownership_and_the_signature_is_the_only_authority --- 同一处
+```
+
+两条都在**创建 storage 临时目录**那一步炸（`src/admin/tests.rs:227`、`src/http/tests.rs:478`），
+与被测逻辑无关。同一份代码在沙箱外是 **169 passed / 0 failed / 2 ignored**。
+
+**为什么单独记一条**：这类假红很容易被骗成"改动弄坏了什么"，然后引发一次不必要的回滚或返工。
+判据很简单——**失败信息是 `PermissionDenied` 且发生在建目录/写临时文件那步**，就先按环境问题处理，
+用完整权限复跑一次同一套门再说。Nest 侧（vitest 用 in-memory 或仓库内的临时库）不吃这个亏，
+`nest/server` 28 files / 461 与 `nest/client` 49 在沙箱内外都绿。

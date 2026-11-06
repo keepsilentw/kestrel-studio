@@ -204,9 +204,17 @@ openai 面须置 compat 位 `stream_include_usage = true`，否则全程 `usage:
   2026-11-06 下午在新链路上量到了实际条数：产品页 c=11 是 **count=2**，只读回放页
   `/admin/conversations/3`（11 个资产）是 **count=11**——与"只有回放命中"的判断一致（verification.md §23.5）。
 - 语音的遗留项（设计与已落地的部分见 [architecture.md](./architecture.md) §11）：
-  - **真实麦克风采集尚未验证**。客户端到服务端的帧序列已有测试与实测覆盖
-    （`nest/client/__tests__/voice.test.ts`、[verification.md](verification.md) §7），剩下的是
-    `getUserMedia` 那一步——它要弹权限框，需由人在 `/voice` 页按住按钮走一遍。
+  - **WS upgrade 已经在新链路上跑通**（2026-11-06 17:07，操作者亲按；verification.md §25.1）：
+    `voice session opened conversation=13` → 两次 `voice turn committed` → `voice call ended`。
+    **但两次都是 `frames=0`**，上游回 `buffer too small, or have no audio`——`capture.js` 是 43 ms
+    一帧，正常按住 1.2 秒该有约 27 帧，所以音频一字节都没到服务端。最可信的解释是首按正好撞上
+    权限框（`getUserMedia` 在提示期间不产出）；现在权限已 `granted`，**再按一次**就该看到 `frames>0`。
+    所以这条遗留项**仍未关闭**，而且只剩"人再按一次"这一件事——合成 `pointerdown` 会在权限已授的
+    前提下悄悄开麦把环境声送进外部 ASR，那不该由 Agent 代做。
+  - **一条相关缺口（未修，等确认）**：`voice_core::release()` 不知道"这一按有没有产出过帧"，
+    静默按住也会 commit，由上游拒绝。`abort()` 只覆盖"采集失败"，没覆盖"采集还没开始"
+    （有测试 `an_uncapturable_press_is_abandoned_without_committing`）。补法：核心记一个本次按住
+    是否产出过帧的标志，没有就跳过 commit 并复位——纯客户端核心逻辑，宿主测试能钉住。
   - **打断（barge-in）未做**：上一句还在播时按住说话不会中断它。
   - **空闲保活未做**：上游 180 秒无响应即关闭会话（close code `1007`），现由客户端提示
     "再按一次继续"并重新取票重连——重连后上游上下文重置。
@@ -281,6 +289,11 @@ openai 面须置 compat 位 `stream_include_usage = true`，否则全程 `usage:
   wasm 回归而是既有缺口。倾向的修法：启动收尾时往 `conversation_events` 补一帧 `turn_error`——一次
   改动、两个服务端同步、且天然被重放路径带上；另一条是客户端加无终态超时后自动重载。**未开工，等定**
   （它不在本次批准的范围内，而且要两端同改）。
+  **同日已按第一个方向修完（verification.md §25.2）**：`abandon_stale_placeholders` 改为返回被收尾的
+  `(conversation_id, message_id)`，启动时对每一对 publish 一帧 `turn_error`——`rust/server`（`repo.rs`
+  + `main.rs`）与 `nest/server`（`conversation.service.ts` + `turn-runner.service.ts`）两侧同改，
+  测试同步（rust 侧断言日志末尾真的落下那一帧）。质量门全绿。**尚未部署**，验法就是重玩一次
+  "提交一轮 → 中途重启"，预期这次 composer 自己解锁。
 
 ## 4. Nest 退役与 WASM 客户端（2026-10-30 决策）
 
@@ -433,3 +446,9 @@ Agent 直接在真人登录态的浏览器里把十项清单跑完，逐条返�
 
 **P1 至此只剩两条**：语音的真拨号（要权限框与人耳）、`Last-Event-ID` 的自动重连（CDP 的 Offline
 撕不开已经建立的流，所以不算证据）。**P4 的闸门仍然关着**——除这两条之外，`nest/` 一行不删。
+
+**同日 17:07 之后收窄成一条半**（verification.md §25）：语音的 **WS upgrade 已经真跑通**
+（`voice session opened conversation=13` → `voice call ended`），剩下的是**真实音频**——两次按下都是
+`frames=0`，几乎确定是首按撞上权限框；权限现在已 `granted`，人再按一次就能收口。另一半是"断开期间的
+缺口回放"（`Last-Event-ID` 这一半已证，§24.2）。同期把 §24.4 那条启动收尾缺陷在两个服务端都修了
+（§25.2，**待部署**）。

@@ -1534,6 +1534,62 @@ c=12 里提交一轮（`POST /api/v1/conversations/12/turns` 202——顺带第�
 **服务端其实没漏收尾**：启动时会把空占位行写成失败说明，但**这条收尾不产生事件**，所以活着的连接
 永远收不到。修法两个方向：启动收尾顺手往 `conversation_events` 补一帧 `turn_error`（一次改动、
 两个服务端同步、且天然被重放路径带上），或客户端加"订阅后 N 分钟无终态即重载"的看门狗。倾向前者。
-**本次未动代码**——这不在批准范围内，且要两端同改。
+**本节写下当天就已修**：两个服务端都补了这帧终态事件，见 §25.2；**尚未部署**。
 
 **边界**：只验过"轮次进行中重启服务"这一种故障；进程 OOM、网络半开、反代超时没碰。
+
+## 25. 语音第一次在新链路上拨号，以及启动收尾补的那帧终态事件（2026-11-06 17:07 / 18:0x）
+
+### 25.1 `/api/voice` 的 upgrade 通了，音频没有
+
+操作者在 `/voice`（灰度 `wasm` 档）按住两次，服务端 INFO/WARN 给出一条完整轨迹：
+
+```
+voice session opened conversation=13 user=2
+voice turn committed frames=0
+WARN voice turn failed Error committing input audio buffer: buffer too small, or have no audio. failures=1
+voice turn committed frames=0
+WARN voice turn failed … failures=2
+voice call ended conversation="13"
+```
+
+**这条记录关掉的是 §13.5 与 §19 一直挂着的那件事**：WASM 语音客户端第一次取到 ticket、完成 WS
+upgrade、服务端建立起上游会话并正常收尾——`initVoice` 与 `/api/voice` 不再是"零请求"。
+
+**但 `frames=0` 说明音频一字节都没到服务端**。最可信的解释是首按正好撞上权限框：`getUserMedia`
+在提示期间不产出，而 `capture.js` 是 1024 样本/帧、24 kHz 下约 **43 ms 一帧**，正常按住 1.2 秒该有
+约 27 帧；两次 commit（按下后 1.2 秒与 4 秒）都可能落在麦克风真正打开之前。现在
+`navigator.permissions.query({name:'microphone'})` 已是 `granted`，决定已持久化，所以**再按一次**
+理应看到 `frames` 大于 0。
+
+我没有代操作者按：合成一次 `pointerdown` 会在权限已授予的前提下悄悄打开麦克风，把房间里的环境声
+送进外部 ASR——这件事只应由人自己按。所以 §3 第一条语音遗留项**仍然是"真实麦克风采集未验证"**。
+
+**顺带在核心里看到一条缺口（本次未修）**：`voice_core::release()` 只防 `blocked`（上游刚拒绝过）
+与 `busy`，并不知道"这一按到底有没有产出过帧"，于是静默按住也会发出 commit，由上游回
+`buffer too small, or have no audio`。`abort()` 覆盖了"采集失败"（有测试
+`an_uncapturable_press_is_abandoned_without_committing`），没覆盖"采集还没开始"。
+补法很小：核心记一个"本次按住是否产出过帧"的标志，没有就跳过 commit 并复位状态——纯客户端核心
+逻辑，宿主测试可钉。**等确认再做**。
+
+### 25.2 启动收尾现在会补一帧 `turn_error`
+
+§24.4 那条缺陷（轮次进行中重启服务 → 页面永久停在"正在生成…"）的修法选了服务端那一侧：
+
+| 改动 | 内容 |
+|---|---|
+| `rust/server/src/conversation/repo.rs` | `abandon_stale_placeholders` 从 `u64` 改为返回 `Vec<(conversation_id, message_id)>`（`UPDATE … RETURNING`），收尾不再只改 `messages` 还知道该为哪些轮次发终态 |
+| `rust/server/src/main.rs` | 启动时对每一对 `events.publish(TurnError{ message_id, "服务在轮次完成前中断。" })`；发布失败只 WARN，不阻塞启动（日志坏了不该让服务起不来） |
+| `nest/server/src/conversation/conversation.service.ts` + `agent/turn-runner.service.ts` | 同一条契约的 Nest 侧镜像：先 `select` 出空占位行再 `update`，bootstrap 里逐条 `publish({type:'turn_error',…})` |
+| 测试 | rust 侧在原 placeholder 测试里断言"这些对必须落成一帧 `turn_error`"（查 `conversation_events` 最后一行的 `type` 与 `message_id`）；nest 侧把原来断言条数的两处改成断言返回的 `{conversationId, messageId}` |
+
+为什么这能解锁页面：两个客户端都在 `turn_error` 上把 `turn_running` 置回 false 并同步 composer
+（`rust/client/src/chat_page.rs` 的 `Paint::TurnError`；Nest 侧同理），而重连后的客户端读的就是
+这份日志。
+
+**质量门**（沙箱外，见 implementation-notes.md §20 那条假红）：`nest/server` 28 files / **461 passed**、
+`nest/client` **49 passed**、`cargo test`（server）**169 passed / 0 failed / 2 ignored**、
+（client）**39 passed**；`make check` 两次 `tsc --noEmit` 与两次 `cargo check --tests` 全清。
+
+**边界**：**尚未部署**，所以这条修复在线上还没有效果。验法现成——上线后重玩一次 §24.3 那个动作
+（提交一轮、中途 `docker compose restart`），预期这次页面自己从"正在生成…"里出来，不需要重载。
