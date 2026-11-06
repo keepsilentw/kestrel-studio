@@ -1593,3 +1593,62 @@ upgrade、服务端建立起上游会话并正常收尾——`initVoice` 与 `/a
 
 **边界**：**尚未部署**，所以这条修复在线上还没有效果。验法现成——上线后重玩一次 §24.3 那个动作
 （提交一轮、中途 `docker compose restart`），预期这次页面自己从"正在生成…"里出来，不需要重载。
+
+## 26. 服务端修复上线并实测：终态事件靠游标重放解锁了页面（2026-11-06 17:24–17:27）
+
+### 26.1 部署
+
+| 步骤 | 结果 |
+|---|---|
+| 备份 | `data/backup-20261106-pre-bootrecovery.db`（679,936 B；白天这一天的走查把库从 172 KB 推到 680 KB，几乎全是 `conversation_events`） |
+| 部署前基线 | `sessions` 3、`conversations` 13、`messages` 65 |
+| `make deploy` | 这次 `COPY .build/linux-x86_64/kestrel-studio` 是 **DONE 而不是 CACHED**（服务端确实变了），镜像 `90c93fcd…`，健康探测通过 |
+| 重拨灰度 | `CLIENT_BUNDLE=wasm docker compose up -d` → `client="wasm"`；`/login` 200、`/assets/main.css` 200、wasm 两个文件 200、`/admin` 302；`HostConfig.LogConfig` 仍是 `{"max-file":"5","max-size":"10m"}`；`expired sessions cleared=0`，`sessions` 仍 3——**没人被登出** |
+| 客户端包 | md5 与 §23 那次相同（`cb999e92…` / `a073a905…`），本次只换服务端，符合预期 |
+
+### 26.2 实测：点新会话 → 提一轮 → 中途重启
+
+先在浏览器里点「新会话」（`conversationId=null`、`.turn` 0 条），再提交一轮 `对话`：新建 c=14、
+`POST /14/turns` 202、`stream?from=0` 200。重启前 `max(seq)=908`。
+
+```
+17:26:17  before restart seq: 908        ← docker compose restart 发出 SIGTERM
+17:26:28  Container Started
+          INFO finalized assistant rows left by a previous process abandoned=1
+          INFO kestrel-studio listening on http://localhost:8848 client="wasm"
+          journal tail: 1424|text  1425|text  1426|turn_error
+```
+
+页面侧（**没有重载**）：`send.disabled=false`、占位文案回到"想让红隼帮你做什么？"、最后一条助手气泡
+内容是 `服务在轮次完成前中断。`、类名 `content turn-error`、`.turn` 只有 2 条（没有重复气泡）。
+网络面板里断开后多出一条 `GET /14/stream?from=0`（reqid 46），即 EventSource 的自动重连。
+
+落库：`messages` id=67 `content = 本轮处理失败：服务在轮次完成前中断。`；
+`conversation_events` seq 1426 `message_id=67`，payload
+`{"type":"turn_error","messageId":67,"message":"服务在轮次完成前中断。"}`。
+
+### 26.3 这条顺带把"缺口回放"证掉了
+
+推理只依赖两件事的先后：**启动收尾发布 1426 的时刻在"listening"之前**（同一段 boot 代码里，
+`finalized …` 那行 INFO 就在 `listening` 前两毫秒），那时服务端还没开始 accept，任何客户端都不可能
+正连着。所以这条连接后来能拿到 1426，只能是**重连时带 `Last-Event-ID`、服务端按游标从日志重放**的结果。
+
+反过来讲：如果服务端只接 live tail，这一轮早就没有后续事件了，页面会永远停在"正在生成…"——
+那正是 §24.4 修复前实测到的样子。于是 **§24.3 记的"缺口回放仍未测"现在改为通过**，
+而且是通过一条终态事件这种最苛刻的形式：断开 11 秒、期间新增了 500 多条事件、末尾还挂着进程。
+
+一个附带观察：`docker compose restart` 不是瞬间杀死——SIGTERM 之后那一轮在宽限期内继续把 seq 从
+908 推到 1425 才被终止。所以"轮次进行中被重启"这种故障，日志里会留下**半截流 + 一帧启动补发的
+`turn_error`**，排查时按这个形状认。
+
+### 26.4 控制台
+
+断开那一下留下 `Failed to load resource: net::ERR_HTTP2_PROTOCOL_ERROR`——**这是被撕开的 SSE 自己
+的记账，不是客户端缺陷**（§23.5 那轮"零 error、零 warning"是在没有人工中断的情况下取得的）。
+除此之外仍然零条，唯一的 *issue* 还是既有的 lazy-image 那条。
+
+### 26.5 P1 现状
+
+§13.5 那五条里，**出图、视频任务、`/admin` 内容、SSE 续传（含缺口回放）四条已在新链路上实测通过**；
+只剩**真实麦克风采集**一条——它需要人按一下（`§25.1`：upgrade 已通，两次 `frames=0`）。
+本次留下的数据：会话 **c=14**（一条被中断的轮次 + 那帧终态事件）。

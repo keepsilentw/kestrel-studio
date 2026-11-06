@@ -230,7 +230,7 @@ sequenceDiagram
 | `tool_result` | seq | `{messageId, name, ok, summary}` | 工具执行结果 |
 | `asset` | seq | `{messageId, id, kind, url, mime, bytes}` | 生成出的图片/视频 |
 | `turn_done` | seq | `{messageId}` | 该轮结束（助手行已收尾落库） |
-| `turn_error` | seq | `{messageId, message}` | 该轮失败（同样已收尾）。上一进程被硬杀留下的轮次，**由启动收尾补发这一帧**（2026-11-06，verification.md §25.2）——只把 `messages` 行改掉不够：看着那一轮的页面只有这条流，不补就只能靠重载解锁 |
+| `turn_error` | seq | `{messageId, message}` | 该轮失败（同样已收尾）。上一进程被硬杀留下的轮次，**由启动收尾补发这一帧**（2026-11-06 实现见 verification.md §25.2，线上实测见 §26：断开 11 秒的客户端靠这条重放拿到终态并自己解锁 composer，不需要重载）——只把 `messages` 行改掉不够：看着那一轮的页面只有这条流 |
 | `task_updated` | seq | `{taskId, kind, status, error}` | 后台任务进度（视频渲染） |
 | `message_added` | seq | `{message}` | 无请求在飞时追加的消息（任务结果） |
 
