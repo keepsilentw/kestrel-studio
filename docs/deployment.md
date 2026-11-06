@@ -134,6 +134,12 @@ ssh lavo-test "cd /opt/kestrel-studio && docker compose up -d"
    语音的真实证据是 INFO 上的 `voice session opened`，不需要这个开关。
 3. **流式响应的 `latency` 是首字节时间**，不是一轮或一次通话的时长。
 4. DEBUG 里除了访问日志还有 sqlx 的语句 span，量大；只在走查的那几分钟开着，走完关掉。
+   **2026-11-06 实测这条被违反了**：11-03 13:23 那次拨档把 `RUST_LOG=debug` 带进去就没收回，
+   三天后日志文件 16 MB、31,840 行里 97% 是 sqlx 的语句行（task worker 与会话清扫各每 8s 一次）。
+   json-file 驱动且 `Config={}`——**没有 max-size，也没有 max-file**，所以它只会一直长。宿主机
+   `/` 当时还有 50 G 可用，不急，但这与「可变项由 compose 注入、收尾就退回默认」那条规矩相冲。
+   收回而保留灰度：`CLIENT_BUNDLE=wasm docker compose up -d`；两者一起退回：`docker compose up -d`。
+   逐条数字见 [verification.md](verification.md) §21。
 
 ## 2.2 浏览器包切换（`CLIENT_BUNDLE`，2026-11-03）
 
@@ -193,6 +199,16 @@ kestrel-studio 的站点配置：`/opt/1panel/www/conf.d/try.kestrel.justwork.li
 
 改动流程：`docker exec <openresty 容器名> nginx -t` 验证语法，再
 `nginx -s reload`（平滑重载，不断现有连接）。实测 reload 后现有 8 个站点均无回归。
+
+**域名上是有人扫的**（2026-11-06 从应用访问日志里读到，明细见 verification.md §21）：11-04 与 11-05
+两天 116 行请求，绝大多数是 `/.env`、`/web/.env`、`/wp-config.php.bak`、`/storage/logs/laravel.log`
+这类 PHP/Laravel 探针，外加 11-04 01:57 一秒内的四个 POST（三个 `/login`、一个打在 `/` 上）。
+因为 80/443 是唯一放行面，这些请求全部落到本应用的 fallback 上。实测响应：`/.env` 404、
+`/../.env` 400、`/assets/../data/kestrel-studio.db` 400——静态根只有 `public/`，
+`http/static_files.rs` 的 `resolve_under` 拒绝 `..` 与 NUL，所以服务器上那份 `.env` 与库文件
+不在这个面的可达范围内。唯一还能取到的点文件是 `/wasm/.gitignore`（构建产物自带的 1 字节忽略文件）。
+两个服务端都没有登录限流或失败锁定；这台机器上跑的是内部试用域名，要不要加是个排期决定，
+不是这条记录要替谁做的决定。
 
 ## 4. 对外访问配置（2026-09-21 完成）
 
