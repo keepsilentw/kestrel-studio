@@ -140,6 +140,11 @@ ssh lavo-test "cd /opt/kestrel-studio && docker compose up -d"
    `/` 当时还有 50 G 可用，不急，但这与「可变项由 compose 注入、收尾就退回默认」那条规矩相冲。
    收回而保留灰度：`CLIENT_BUNDLE=wasm docker compose up -d`；两者一起退回：`docker compose up -d`。
    逐条数字见 [verification.md](verification.md) §21。
+   **2026-11-06 13:58 已收回**：那次重拨灰度时故意不带 `RUST_LOG`，档位回到默认 `info`——新容器的日志
+   文件 4.0 KB，五分钟窗口内 DEBUG 行计数 0。**根因还在**：`LogConfig.Config` 至今是 `{}`，既没有
+   `max-size` 也没有 `max-file`，所以只要下一次取证忘了收回，它还是会一路长下去（宿主机 `/` 当天余量
+   50 G）。加不加轮转上限是一个独立的运维决定，要加就写在 `docker-compose.yml` 的 `logging` 段里，
+   不是把 `RUST_LOG` 塞进那份"永不覆盖"的 `.env`——那条规矩见 §5 与本节开头。
 
 ## 2.2 浏览器包切换（`CLIENT_BUNDLE`，2026-11-03）
 
