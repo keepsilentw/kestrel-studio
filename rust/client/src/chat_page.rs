@@ -352,20 +352,8 @@ fn bind(page: &Handle, dom: &Dom) -> Result<(), JsValue> {
 
     let scoped = Rc::clone(page);
     let fresh = Closure::<dyn FnMut()>::new(move || {
-        // A new conversation is a page reset, not a client-side clear: the shell
-        // decides what an empty conversation looks like.
-        //
-        // Exactly one navigation. The previous shape (`search = ""` then `reload()`)
-        // queued two, and the browser aborts the pending one — so the page reloaded
-        // `/?c=<id>` and the button looked dead. Observed during the WASM grey
-        // release: six reloads of the same conversation, no empty page (docs/verification.md §18).
-        let Some(window) = web_sys::window() else { return };
-        let path = window
-            .location()
-            .pathname()
-            .unwrap_or_else(|_| "/".to_string());
-        let _ = window.location().set_href(&path);
-        let _ = scoped;
+        reset_to_new_conversation(&scoped);
+        let _ = scoped.borrow().dom.prompt.focus();
     });
     dom.new_conversation
         .add_event_listener_with_callback("click", fresh.as_ref().unchecked_ref())?;
@@ -544,11 +532,10 @@ fn confirm_delete(page: &Handle) {
             return;
         }
         if id.to_string() == current {
-            // Deleting what is on screen is the same state as 新会话: the shell
-            // decides what an empty stage looks like, so go get a fresh one.
-            if let Some(window) = web_sys::window() {
-                let _ = window.location().set_href("/");
-            }
+            // Deleting what is on screen is the same state as 新会话, so it is the
+            // same reset — and it still cannot be a reload: the shell would paint the
+            // next-most-recent conversation and call it new.
+            reset_to_new_conversation(&scoped);
             return;
         }
         // Any other row is just a row going away. Refetched rather than spliced, so
@@ -616,6 +603,60 @@ fn close_stream(page: &Handle) {
     if let Some(source) = page.borrow_mut().events.take() {
         source.close();
     }
+}
+
+/// Put the page back into the state a brand-new conversation is in: no identity,
+/// no turns, no subscription.
+///
+/// This cannot be a reload. `GET /` without `?c=` deliberately falls back to the
+/// caller's most recent conversation (`rust/server/src/view/controller.rs`), so a
+/// reload lands on the conversation the button was meant to leave — twice reported,
+/// first as a navigation race (docs/verification.md §18) and then, after that was
+/// "fixed", as the stage still holding the old turns (§22). The TS client made the
+/// same call by clearing the stage in place (`resetToNewConversation` in
+/// `nest/client/scripts/main.ts`); both the 新会话 button and deleting the
+/// conversation on screen come through here, so they cannot drift apart.
+fn reset_to_new_conversation(page: &Handle) {
+    close_stream(page);
+    let dom = page.borrow().dom.clone();
+    // The identity goes first: the next submit reads it to decide create-versus-continue.
+    dom.body.remove_attribute("data-conversation-id").ok();
+    dom.stream.set_inner_html("");
+    if let Some(document) = dom.stream.owner_document() {
+        // The sidebar indexes the stream's turns, so its rows leave with them.
+        // `append_anchor` rebuilds the list when the next user turn arrives.
+        if let Ok(lists) = document.query_selector_all(".turn-index-list") {
+            for index in 0..lists.length() {
+                if let Some(node) = lists.item(index) {
+                    if let Some(list) = node.dyn_ref::<HtmlElement>() {
+                        list.set_inner_html("");
+                    }
+                }
+            }
+        }
+    }
+    {
+        let mut borrow = page.borrow_mut();
+        borrow.journal = Stream::new();
+        borrow.live.clear();
+        borrow.tasks.clear();
+        borrow.anchors.clear();
+        borrow.active_anchor = None;
+        borrow.pending_delete = None;
+        borrow.turn_running = false;
+    }
+    sync_composer(page);
+    // The index sidebar hides with its rows, the way `clearTurnAnchors` did it.
+    sync_index_visibility(page);
+    // Keep the address bar honest: reloading this URL must not resurrect the
+    // conversation the page just let go of.
+    if let Some(window) = web_sys::window() {
+        let path = window.location().pathname().unwrap_or_default();
+        if let Ok(history) = window.history() {
+            let _ = history.replace_state_with_url(&JsValue::NULL, "", Some(&path));
+        }
+    }
+    refresh_history(page);
 }
 
 /// Paint one instruction. Borrows are taken per statement so nothing here can
