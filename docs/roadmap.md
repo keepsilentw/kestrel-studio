@@ -210,8 +210,10 @@ openai 面须置 compat 位 `stream_include_usage = true`，否则全程 `usage:
   所以本机那个常驻的 pm2 实例要等重启才会出现 `/admin` 与超管账号。
 - 后端链路与前端控制台均已实测，本地与线上均通过，详见 [verification.md](verification.md)。
   注意这条说的是**功能面**（Nest 时代验的）；服务端的宿主语言此后换过一次，见下两条。
-- **线上已是 Rust 服务端**（2026-11-02 13:24 接管，当天共三次部署，在跑的是 13:47 那版；
-  10.2 MB 的 `scratch` 镜像，`make deploy` 先跑 `build-linux` 再跑 `build-wasm`）。
+- **线上已是 Rust 服务端**（2026-11-02 13:24 接管，当天共三次部署）；**盘上在跑的是 11-03 13:21
+  那版**——客户端修复版，机器证据见 [verification.md](verification.md) §20。2026-11-06 复核：容器
+  仍是那一次 `up -d`，三天没有新部署。镜像 10.2 MB 的 `scratch`，`make deploy` 先跑 `build-linux`
+  再跑 `build-wasm`。
   已过与未过的判据逐条列在
   [verification.md](verification.md) §13.5：**出图 / 视频任务 / 语音 / `/admin` 内容 /
   SSE 断线续传 / 浏览器控制台零噪音仍未在新链路上实测**。
@@ -227,8 +229,11 @@ openai 面须置 compat 位 `stream_include_usage = true`，否则全程 `usage:
   `public/wasm/` 那份客户端，`nest` 是原样。开关是**部署配置**，所以一次 `docker compose up -d`
   就能切、去掉变量就回滚，不用重新构建或部署；机制与四条性质见 deployment.md §2.2，实现与未验证
   项见 verification.md §17。灰度已跑过一轮：一整轮对话在真实浏览器里走通（§18），报回的「新会话」与
-  Enter 两条回归已修并随 13:21 那次部署上线（§19），**修复后的浏览器复验仍未做**——这一条正是 P1
-  那五条里最实的，需要有人在页面上看控制台。
+  Enter 两条回归已修并随 13:21 那次部署上线（§19）。**2026-11-06 只读复核**：档位仍是 `wasm`，
+  修复版包确实被真实浏览器全新下载并执行过（首屏与历史切换都有访问行），但拨档至今
+  `POST /api/v1/...` 与 `stream` 各 0 条——**修复后的复验仍未做完**，因为「Enter 发送」从没被
+  按下过，逐条时间轴见 verification.md §21。这一条仍是 P1 那五条里最实的：需要有人在页面上
+  提交一轮并看控制台。
 - **灰度取证的盲区已补并上线**（2026-11-02 16:18）：`router.rs` 挂了 `tower_http::trace::TraceLayer`，
   每请求一行 method + uri + status + latency，**级别 DEBUG**，所以默认的 `info` 过滤下一行都不打、
   生产日志量不变（线上实测：打了若干请求之后去色计数仍为 0）；开关是 compose 里的
@@ -237,6 +242,12 @@ openai 面须置 compat 位 `stream_include_usage = true`，否则全程 `usage:
   当天决定不跑（见上一条与 §4.4 的 P1 行），所以它现在是排障手段，不是待办。
   注意 `/api/voice` 刻意排除在外（它是唯一劫持连接的路径，接管未上机验过之前不在它前面放碰
   response body 的件），这条排除有测试钉住。
+- **取证档位忘了收回**（2026-11-06 核对）：线上 `RUST_LOG=debug` 还挂着，是 11-03 13:23 那次拨档
+  带进去的。日志文件 16 MB / 2.8 天，json-file 驱动且没有轮转配置，31,840 行里 30,903 行（97%）
+  是 sqlx 的 DEBUG 语句而不是访问日志。宿主机 `/` 还有 50 G 可用，不急，但它没有上限——deployment.md
+  §2.1 第 4 条那句「只在走查的那几分钟开着，走完关掉」这次没被执行。收回且保留灰度 =
+  `CLIENT_BUNDLE=wasm docker compose up -d`（重建容器、不登出任何人）。**未执行，等确认。**
+  数字与顺带测出的扫描面见 verification.md §21。
 
 ## 4. Nest 退役与 WASM 客户端（2026-10-30 决策）
 
@@ -244,7 +255,10 @@ openai 面须置 compat 位 `stream_include_usage = true`，否则全程 `usage:
 
 目标：**仓库里不再出现 Nest / Node / npm 技术栈**。服务端由 `rust/server/` 接管（第六期），
 Web 客户端由 TypeScript + Vite 改为 **Rust→WASM**（选型 B），markdown 改由
-`pulldown-cmark` 承担。
+`pulldown-cmark` 承担。**2026-11-06 更正这行的最后一项**：`pulldown-cmark` 只是当时的原案，实测后
+被换掉了——服务端 SSR 与浏览器现在编的是同一个共享子集 `kestrel-md`（`crates/md/`），体积账与理由见
+§4.1.1 及 [verification.md](verification.md) §14；代码里两侧都依赖它，`rust/client/Cargo.toml` 的注释
+明确写着不选 `pulldown-cmark`（多付 74 KB gz 换助手根本不写的语法）。
 
 选 B 接受的代价，其中第一条在实测后被**推翻**（数字见 [verification.md](verification.md) §11.5）：
 
@@ -363,3 +377,8 @@ Rust 容器，`/login`、静态资源、鉴权跳转、公网 HTTPS、一轮真�
 `turn_done`）都已确认——P1 因此是**部分通过**，逐条证据与剩下未覆盖的五项见
 [verification.md](verification.md) §13。剩余五项里出图 / 视频 / 语音 / `/admin` 内容都需要登录态，
 必须由人在浏览器里操作，探测脚本代替不了。
+
+**2026-11-06 宿主机只读复核**（证据见 [verification.md](verification.md) §21）：档位仍是
+`client="wasm"`，三天没有新部署。**P1 的判断不变（部分通过）**，但它的未验证面从「五条」收敛成
+**一条**：首屏与历史切换已经被真实浏览器走证过，缺的只剩一次**带提交的走查**——Enter 发送、
+Shift+Enter 换行、出图落 `assets`、控制台零噪音。时间轴与零计数见 §21，这一步只能由人做。
