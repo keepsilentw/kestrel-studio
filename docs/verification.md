@@ -1276,6 +1276,16 @@ docker logs --since 2026-11-03T11:00:00 kestrel-studio 2>&1 \
   没它的话，中文拼音选词的 Enter 会把半截 prompt 发出去。`rust/client/Cargo.toml` 因此加 `KeyboardEvent`。
 - 3 不动代码。若要把超管纳入可删，需要两个服务端一起改，那是 §12.1 的事。
 
+**2026-11-06 更正第 1 条与第 3 条**（浏览器实测，见 §22）：
+
+- 第 1 条的修复**没修到位**。`location.set_href(pathname)` 确实消除了双导航竞态，但那次导航落到
+  `/` 之后，服务端 `view/controller.rs` 会把无 `?c=` 的请求回落到"该用户最近的一会话"，于是舞台
+  仍是上一会话——实测从 `/?c=7` 点新会话后 `data-conversation-id="8"`、2 轮旧内容原样在屏上。
+  Nest 版靠 `resetToNewConversation()` 在客户端就地清舞台并删掉 `data-conversation-id`，从不走服务端。
+- 第 3 条的结论只对了一半。超管没有删除按钮确实是既有规则；但 wasm 客户端读
+  `dataset("can-delete-conversations")` 用的是属性的 kebab 拼法，**恒为 None**，所以普通用户在
+  wasm 那一侧也同样拿不到删除控件。当时那条报回是"规则 + bug"两因叠加，不是单纯的规则。
+
 验证边界：`cargo test`（client）37 passed、`cargo check --target wasm32-unknown-unknown` 0 warning、
 `make build-wasm` 通过（133,983 B gz，比修之前 +239 B）。**修复后没有在浏览器里跑过**——13:08 已把档位
 拨回 `nest`，线上目前还是那份 TS 客户端；要再验一次必须重新部署 + 再拨一次灰度。（后续：13:21 部署了
@@ -1360,3 +1370,54 @@ P4 的闸门照旧关着。
 `.menu-dropdown` 点外部收起（wasm 侧只在 `Dom::query` 里取过这个元素，没有 document 级委托；
 它已有的那处 outside-click 是下载 `<dialog>` 的 backdrop，不是同一个东西）。两条都不影响正确性，
 只影响手感，所以仍是「等确认」而不是待办。
+
+## 22. WASM 客户端的第一次真浏览器回归测试（2026-11-06，chrome-devtools MCP）
+
+载体：用户已登录的那个标签页（账号 `tww316`，超管），档位 `client="wasm"`。全部判据取自
+`list_console_messages` / `list_network_requests` / `evaluate_script` 的返回值，不是肉眼印象。
+
+### 22.1 通过
+
+| 判据 | 证据 |
+|---|---|
+| 浏览器控制台零噪音 | `/`、`/?c=7`↔`/?c=8`、提交一轮、`/?c=9`、`/voice` 共 5 次导航之后，`list_console_messages` 全部返回**零条**（error / warning / issue 都没有） |
+| Enter 发送 | `POST /api/v1/conversations` **201** → `POST /api/v1/conversations/9/turns` **202** → `GET /9/stream?from=0` **200**，回复渲染到页面。§19 那条"从未被按下"的判据到此取到 |
+| Shift+Enter 换行 | 按下后 `#prompt` 的值为 `"回归测试第一行\n"`（换行 1 个），网络面板**没有任何 POST** |
+| IME 守卫 | 合成 `KeyboardEvent('keydown', {isComposing:true})` 的 Enter 后值不变、无提交。**这条是弱证据**：合成事件不是真拼音选词，真 IME 仍需真人一次 |
+| 历史抽屉 | 点开 `<details>` 后出现 4 行（c=8/7/6/5），由 `refresh_history` 向 `/api/v1/conversations` 取（200） |
+| `/voice` 的 wasm 分支 | `kestrel_client.js` + `_bg.wasm` 都取到（304），页面上**没有** `.client-error`，控制台零条。按 `templates.rs` 的 `WASM_LOADER`，`initVoice()` 抛错必落 `console.error` + 页内提示——所以这是**它第一次执行到底**。（真麦克风没有测：按住要弹权限框） |
+| GFM 子集上线生效 | 会话 8 的表格在浏览器里是真 `<table>`，不是裸竖线 |
+
+### 22.2 不通过：`dataset()` 的 kebab 拼法（六处，五处承重）
+
+`document.body.dataset` 的实际键是 `["conversationId","startSeq","canDeleteConversations"]`，
+而 `dataset["conversation-id"]` 的类型是 `undefined`。客户端全部读取写成属性拼法，于是每个都是
+静默 None。后果在浏览器里逐条取到：
+
+| 现象 | 证据 |
+|---|---|
+| 已有会话里提交 → 新建会话 | 当前页 `/?c=9`，按 Enter 得到 `POST /api/v1/conversations` **201** 与 `POST /api/v1/conversations/10/turns` **202**，URL 变 `/?c=10` |
+| 已有会话首屏根本不订流 | 重载 `/?c=9` 后网络面板只有 wasm 两个文件，**零个** `/api/v1` 请求、零个 `stream`——正在跑的轮次与后台视频完成事件永远到不了这一屏 |
+| 删除控件全线失效 | 代码级：`can-delete-conversations` / `delete-conversation` / `delete-choice` 三处恒 None。**未页面复现**：这个账号是超管，服务端本来就不渲染删除 |
+
+根因、六处清单与护栏测试见 implementation-notes.md §19；「新会话」那条独立的语义缺陷（服务端把无
+`?c=` 的请求回落到最近会话，所以任何"重新加载拿一个空舞台"的做法都不成立）见 §19 的 11-06 更正。
+
+### 22.3 修复与质量门（同日，三个提交）
+
+`9a5d7d3` 六处键改 camelCase；`f40f132` 新增 `rust/client/src/dataset_keys.rs` 把这类拼法钉成静态
+护栏（宿主 `cargo test` 可跑，不进任何包）；`e33a017` 提出 `reset_to_new_conversation()`，「新会话」
+与"删掉当前这一会话"共用同一次客户端清场（对齐 `nest/client/scripts/main.ts` 的
+`resetToNewConversation`）。质量门：**`cargo test`（client）39 passed**（护栏两条 + 原 37）、
+**`cargo check --target wasm32-unknown-unknown` 零 warning**。
+
+### 22.4 边界
+
+- **修复尚未上线**：没跑 `make build-wasm`，没部署，线上还是坏的那份。22.1 那批通过项是对**坏包**做的，
+  上线后需要重跑——尤其"已有会话首屏订流"与"多轮续接"这两条此前根本不成立。
+- **仍未测**：出图（`image` 模式，会真扣额度）、视频异步任务、真麦克风通话、`/admin` 页面内容、
+  下载对话框的 canvas 重编码。断线续传在修复前是结构性不成立，不是"没测"。
+- **测试留下的数据**：账号 `tww316` 下新增会话 **c=9「回归测试第一行」**、**c=10「回归测试第二行：
+  这是在 c=9 里提交」**，都是 `对话` 模式（零工具，无出图）。模式已在测完后还原为 `智能`。
+- §21 那句"这一步只能由人做"**要更正**：chrome-devtools MCP 在本机可用，Agent 能在真人登录态的
+  浏览器里跑完这条清单；只有需要权限框（麦克风）与需要人眼判断观感的步骤仍然只能真人。
