@@ -28,6 +28,16 @@ services:
       - PORT=${HOST_PORT:-8848}
       - RUST_LOG=${RUST_LOG:-info}
       - CLIENT_BUNDLE=${CLIENT_BUNDLE:-nest}
+    # Cap the json-file log. Without these keys the driver keeps `Config: {}` —
+    # no size limit and no rotation — and one forgotten `RUST_LOG=debug` forensics
+    # run grew the file to 16 MB in 2.8 days (docs/verification.md §21, and the
+    # retraction in §23.1). 10 MB x 5 files is a ceiling for the verbose arm, not a
+    # target: at the default `info` a day of this service is a few KB.
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
     # The runtime base is `scratch`, which has no /tmp. SQLite creates temporary
     # files there whenever a query needs a temp b-tree, so the absence would only
     # show up as a rare "unable to open temporary file" under load. A tmpfs keeps
