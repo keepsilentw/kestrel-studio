@@ -201,6 +201,8 @@ openai 面须置 compat 位 `stream_include_usage = true`，否则全程 `usage:
   都不带 `loading` 属性（`nest/client/scripts/main.ts` 全文无 `loading`，`rust/client` 的
   `append_asset` 也不设），所以它只在刷新回已有会话那一屏出现。不是错误也不是警告，属既有代码；
   要修得先知道图片尺寸，而尺寸由模型选，暂无好办法，先记着。
+  2026-11-06 下午在新链路上量到了实际条数：产品页 c=11 是 **count=2**，只读回放页
+  `/admin/conversations/3`（11 个资产）是 **count=11**——与"只有回放命中"的判断一致（verification.md §23.5）。
 - 语音的遗留项（设计与已落地的部分见 [architecture.md](./architecture.md) §11）：
   - **真实麦克风采集尚未验证**。客户端到服务端的帧序列已有测试与实测覆盖
     （`nest/client/__tests__/voice.test.ts`、[verification.md](verification.md) §7），剩下的是
@@ -244,6 +246,9 @@ openai 面须置 compat 位 `stream_include_usage = true`，否则全程 `usage:
   回落到最近一会话）。三个修复提交已在本地（`9a5d7d3` / `f40f132` / `e33a017`，含一条静态护栏），
   质量门 `cargo test` 39 passed、`cargo check --target wasm32` 零 warning，**但尚未 build-wasm、
   尚未部署**——线上仍是坏的那份。
+  **13:58 已部署并重跑**：三条修复在真实浏览器里全部复验通过，P1 又过了四条（出图、视频异步任务、
+  `/admin` 页面内容、断线重连的**游标回放**那一半），下载弹窗的 canvas 重编码也首次上浏览器验过。
+  现在只剩**语音真拨号**与 **`Last-Event-ID` 自动重连**两条。逐条证据见 verification.md §23。
 - **灰度取证的盲区已补并上线**（2026-11-02 16:18）：`router.rs` 挂了 `tower_http::trace::TraceLayer`，
   每请求一行 method + uri + status + latency，**级别 DEBUG**，所以默认的 `info` 过滤下一行都不打、
   生产日志量不变（线上实测：打了若干请求之后去色计数仍为 0）；开关是 compose 里的
@@ -258,6 +263,10 @@ openai 面须置 compat 位 `stream_include_usage = true`，否则全程 `usage:
   §2.1 第 4 条那句「只在走查的那几分钟开着，走完关掉」这次没被执行。收回且保留灰度 =
   `CLIENT_BUNDLE=wasm docker compose up -d`（重建容器、不登出任何人）。**未执行，等确认。**
   数字与顺带测出的扫描面见 verification.md §21。
+  **2026-11-06 13:58 已关闭**：那次重拨灰度时故意不带 `RUST_LOG`，档位回到 `info`——新容器日志
+  4.0 KB、五分钟窗口内 DEBUG 行计数 0（verification.md §23.1）。**但根因没除**：json-file 仍然没有
+  `max-size` / `max-file`，下一次取证再忘收回，还是会一直长。要不要给它加轮转上限，是个独立的运维
+  决定，写在 deployment.md §2.1。
 
 ## 4. Nest 退役与 WASM 客户端（2026-10-30 决策）
 
@@ -400,6 +409,13 @@ Agent 直接在真人登录态的浏览器里把十项清单跑完，逐条返�
 新建会话」与「已有会话首屏不订流」两条坏功能一直在线跑。也就是说 §21 那些"零计数"不是巧合：
 订流路径从来没被打开过。断线续传这一条在修复前是**结构性不成立**，不是"未测"。
 
-三个修复提交已在本地（键、静态护栏、客户端清场），质量门通过，**尚未部署**。P4 的闸门因此照旧
-关着，而且现在多了一条前置：**先上线这一版并在灰度上重跑 §22 那张表**，再谈删 `nest/`。
-出图 / 视频 / 真麦克风 / `/admin` 内容仍然未测，前两条要花真额度，等点头。
+三个修复提交已在本地（键、静态护栏、客户端清场），质量门通过。**同日 13:58 部署上线并重拨灰度**
+（`make deploy` 后 `CLIENT_BUNDLE=wasm docker compose up -d`，顺手把遗留三天的 `RUST_LOG=debug`
+收回 `info`），§22 那张表在同一个浏览器里重跑一遍：**三条修复全部复验通过**，P1 再过四条——
+出图（asset 18）、视频异步任务（`generation_tasks` 第 3 行 succeeded、asset 19 自动落到页面）、
+`/admin` 页面内容与只读回放、以及断线重连的**游标回放**那一半（轮次进行中重载，客户端从
+`data-start-seq=269` 续订并把那一轮画完，用户气泡只出现 1 次，`messageId` 去重第一次在浏览器里生效）。
+下载弹窗的尺寸档也复算对了（1024 档 186.6 KB，独立 canvas 复算 191 KB）。逐条见 §23。
+
+**P1 至此只剩两条**：语音的真拨号（要权限框与人耳）、`Last-Event-ID` 的自动重连（CDP 的 Offline
+撕不开已经建立的流，所以不算证据）。**P4 的闸门仍然关着**——除这两条之外，`nest/` 一行不删。
