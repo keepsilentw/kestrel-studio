@@ -1421,3 +1421,66 @@ P4 的闸门照旧关着。
   这是在 c=9 里提交」**，都是 `对话` 模式（零工具，无出图）。模式已在测完后还原为 `智能`。
 - §21 那句"这一步只能由人做"**要更正**：chrome-devtools MCP 在本机可用，Agent 能在真人登录态的
   浏览器里跑完这条清单；只有需要权限框（麦克风）与需要人眼判断观感的步骤仍然只能真人。
+
+## 23. 修复版上线，同一浏览器重跑走查（2026-11-06 13:58 起）
+
+### 23.1 上线与拨档
+
+| 步骤 | 结果 |
+|---|---|
+| 部署前备份 | `data/backup-20261106-pre-datasetfix.db`（172,032 B） |
+| `make deploy` | 服务端二进制**没变**（`COPY .build/linux-x86_64/kestrel-studio → CACHED`），只有客户端换了；归档 4.8 MB，宿主机建镜像后 `deploy.sh` 的健康探测通过 |
+| 产物一致性 | 线上 `kestrel_client.js` md5 `cb999e9285ab…`、`kestrel_client_bg.wasm` md5 `a073a9057662…`，与本机 `public/wasm/` 逐字节相同；wasm 本体 **375,413 B**（比 §20 那版 +1,040 B，就是这三笔修复的价钱） |
+| 拨档 | `CLIENT_BUNDLE=wasm docker compose up -d` → 启动日志 `client="wasm"`。**这次没带 `RUST_LOG=debug`**：`info` 档下 5 分钟内 DEBUG 行计数 0，日志文件从 16 MB 的那份换成新容器的 4.0 KB。§21 与 deployment.md §2.1 记的"取证档位忘了收回"到此关闭 |
+
+### 23.2 三条修复的复验（全部在真实浏览器里取到）
+
+| 修复 | 判据与证据 |
+|---|---|
+| dataset 键（`conversationId` / `startSeq` / `messageId`） | 打开 `/`（回落到 c=10）后客户端**主动订流**：`GET /api/v1/conversations/10/stream?from=55`——`from` 是壳里 stamp 的游标，说明三个键都读到了 |
+| 多轮续接 | 在 c=10 里按 Enter：`POST /api/v1/conversations/10/turns` **202**，**没有** `POST /api/v1/conversations`；URL 不变、`conversationId` 仍是 10、`.turn` 从 2 变 4、右侧索引从 1 行变 2 行 |
+| 新会话清场 | 点「新会话」后：URL 仍是 `/`、`data-conversation-id` **不存在**、`#stream` 子节点 0、索引行 0 且 `#turn-index.hidden === true`、焦点落在 `#prompt`、历史列表刷新成 6 行、无 `.client-error` |
+| replay 去重（`messageId`，此前被上面两条掩盖） | 见 23.4：轮次进行中重载页面后，该轮的用户气泡在 DOM 里**只出现 1 次** |
+
+### 23.3 P1 剩下的几条判据，这次过了四条
+
+| 判据 | 证据 |
+|---|---|
+| 出图（同步） | `图片` 模式提交 → c=11 新建（新会话后的首次提交，语义与 Nest 一致）→ 工具帧 `generate_image — Generated 1 image(s) at 1024*1024 with wan2.7-image … Asset ids: 18` → 页面出现 `/api/v1/assets/18/download` 的 `<img>` 与「下载」链接，库里 `assets` 行随之增加 |
+| 下载弹窗的 canvas 重编码 | 打开时默认档 `100 × 100` → 预计 4.8 KB；把尺寸单选点到 `1024` → 预计 **186.6 KB**。我另外在页面里独立建 canvas 复算同一张图 q0.9 = 191 KB，同量级。**第一次在浏览器里验过**（§20 之前只有编译与宿主测试） |
+| 视频（异步任务） | `视频` 模式在**已有** c=11 里提交（再次证明续接）→ 工具帧 `generate_video — Video task 3 submitted … 1280*720, 5s` → 本轮立即结束（composer 复位）→ 页面上出现"video 渲染中"的挂起条 → 几分钟后 `<video src="/api/v1/assets/19/download">` 落地、挂起条消失、`.turn` 由 4 变 5，**全程没有重载**。库侧对齐：`generation_tasks` 第 3 行 `kind=video status=succeeded asset_id=19` |
+| `/admin` 页面内容 | `/admin` 列出 2 个账号（角色、会话数、资产数、创建时间、管理链接），`/admin/conversations?user=1` 的过滤与"已删除"标注正确，只读回放页 `/admin/conversations/3` 渲染 18 轮 / 11 个资产并带「只读视图，不能在此发送消息」；这些页面**不加载任何客户端脚本**（`script[src*=wasm]` 为空），控制台无 error/warning |
+
+### 23.4 断线重连：过的是游标回放那条，不是 `Last-Event-ID`
+
+做法与诚实的边界：
+
+1. 先试了 CDP 的网络离线模拟——在一轮出图进行中 `Offline` 26 秒再恢复。结果图（asset 20）照样落到页面上、没重载。
+   **但这不能算断线续传的证据**：网络面板自始至终只有**一条** `stream` 请求，说明那条 EventSource 根本没被拆掉，
+   CDP 的 Offline 只是让新请求失败，没有撕开已经建立的流。
+2. 于是改走真会断开的那条路：`对话` 模式提交一轮，**在轮次进行中重载页面**。重载后壳里 stamp 的是
+   `data-start-seq="269"`，客户端立刻 `GET /api/v1/conversations/11/stream?from=269`，把这一轮的剩余事件接着画完，
+   `.turn` 从 7 变 9，该轮用户气泡在 DOM 里**只出现 1 次**（`seed_rendered` 用 `messageId` 建的 replay 去重集合
+   第一次在浏览器里生效——修复前它是空的，按理会看到两条）。
+
+结论：**游标回放 = 通过**；**socket 被拆后由浏览器带 `Last-Event-ID` 自动重连 = 仍未测**。要真验后者，得让服务端
+连接断掉（重启容器即可，但要人批准一次重启），或者拿真网络故障来做。不写成已验。
+
+### 23.5 控制台与一处我自己的误判
+
+- 全程（`/`、`/?c=`、`/admin` 三页、两次重载、两轮生成）**零 error、零 warning**。唯一一条是既有的 Chrome
+  *issue*：`Lazy-loaded images should have explicit dimensions`，在产品页 count=2、在 `/admin/conversations/3`
+  count=11——来源就是 §3 记的那条，2026-11-06 早上刚把它的线上出处改写成 `templates.rs::turn`；这次是它在
+  新链路上第一次被量到，不是新缺陷。
+- 我一度把"预计大小 4.8 KB"当成第四个缺陷。查了两个服务端的单选默认（`nest/…/chat.hbs:119` 与
+  `rust/…/templates.rs:260` 都写死 `value="100" checked`），再点大档复算，才确认数字是对的。
+  **记在此处是为了留个教训**：看到"不像话"的数字，先确认它对应哪一档，再决定是不是缺陷。
+
+### 23.6 还缺什么
+
+P1 现在只剩两条：**语音的真拨号**（要 `getUserMedia` 权限框 + 人耳听回放；`initVoice` 已在 §22 验过执行到底），
+以及 **`Last-Event-ID` 的自动重连**。P4 的闸门：这两条之前不删 `nest/`。
+
+本次留下的数据：会话 c=9 / c=10 / c=11（11 里有图 18、视频 19、图 20 与两轮对话），
+`messages` 61、`conversation_events` 2,124、`assets` 20、`generation_tasks` 3。模式与档位都还原到位
+（`智能`、`client="wasm"`、`info`）。
