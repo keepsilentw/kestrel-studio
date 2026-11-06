@@ -1301,3 +1301,62 @@ docker logs --since 2026-11-03T11:00:00 kestrel-studio 2>&1 \
   §13.2 那些探针因此长成那样。
 - `debug` 是取证档位。只关日志保留灰度：`CLIENT_BUNDLE=wasm docker compose up -d`；两者一起退回：
   `docker compose up -d`（无需重建，也不登出任何人）。
+
+## 21. 灰度第三天的宿主机核对（2026-11-06 上午，全程只读）
+
+起因：11-03 13:23 拨到 `wasm` 之后没人再动过，而 roadmap.md §3 里那句「修复后的浏览器复验仍未做」
+需要一次现状核对，不能一直靠引用三天前的记录过日子。证据全部来自宿主机的 `docker logs`、
+`sqlite3 …?mode=ro` 和 `curl 127.0.0.1:8848`；**没有改任何状态**（未重启容器、未动档位、未写库）。
+
+| 探针 | 结果 |
+|---|---|
+| 容器 | `kestrel-studio:latest` `Up 2 days`（= 11-03 13:23 那次 `up -d`，三天没有新部署）、`/login` 200、`docker stats` 内存 2.293 MiB、`0.0.0.0:8848->8848/tcp` |
+| 浏览器包档位 | 启动日志 `2026-11-03T05:23:48Z INFO kestrel_studio: … listening on http://localhost:8848 client="wasm"` ——**灰度仍在** |
+| 日志档位 | **`RUST_LOG=debug` 忘了收回**，还是 §20 那次 `up -d` 带进去的。json-file 驱动且 `Config={}`（无轮转无上限），日志文件 **16 MB / 2.8 天 ≈ 5.7 MB/天**；31,840 行里 **30,903 行（97%）是 sqlx 的 DEBUG 语句**（task worker 每 8s 一次查询 + 会话过期清扫每 8s 一次），访问日志只占 1,107 行。deployment.md §2.1 第 4 条「只在走查的那几分钟开着，走完关掉」这次没被执行 |
+| 磁盘 | 宿主机 `/` 45 G 已用 / 99 G，可用 50 G。这个增速不急，但它没有上限 |
+| 数据库 | `messages` 46、`conversation_events` 216、`assets` 17、`sessions` 3；**`created_at > '2026-11-03 13:23'` 的消息 0 行**（与 §20 部署前后那三个数一模一样） |
+
+浏览器到底做到了哪一步——按时间轴读访问日志（11-03 之后的行已无 ANSI，字段直接命中）：
+
+| 时刻（本地） | 证据 | 能证明什么 |
+|---|---|---|
+| 13:24:07、13:25:16 | `/wasm/kestrel_client.js` 与 `_bg.wasm` 各一对 200，附近没有已认证的 `GET /` | 与 §20 记录的宿主机 curl 探针时间吻合（拨档后 80 秒、188 秒） |
+| 13:25:55 | 已认证的 `GET /` 200 → 同一秒内 wasm 两个文件 **200** → 13:25/13:26 各一次 `GET /api/v1/conversations` | **修复版包被真实浏览器全新下载并执行过一次**：首屏骨架、wasm 加载、历史列表接口都到了 |
+| 13:40:37–13:41:10 | `GET /` 200 五次；`GET /?c=8`、`/?c=6`、`/?c=5` 若干；`GET /api/v1/conversations` 六次；wasm 全部 304 | 同一个人反复整页换会话、切历史——wasm 侧的 `refresh_history` 与按 `?c=` 的导航在线上被走到了 |
+| 14:03:24 | 又一次 `GET /` 200 + wasm 304 | 还在页面上 |
+| 14:03 之后到本次核对 | 只有未认证的 `GET /`→302 + `GET /login` 200，以及公网扫描（见下） | **没有人再登录过** |
+
+**没有的东西才是结论**：自 13:23 拨档起，`method=POST uri=/api/v1/...` **0 条**、
+`uri=/api/v1/conversations/{id}/stream` **0 条**、INFO 上的 `voice session opened` **0 条**。
+§19 那两条修复里，「Enter 该发送」这一条从未被按下过——一整轮都没提交，出图 / 视频 / SSE 续传
+照旧拿不到新链路上的证据，`/voice` 的 WASM 分支仍然一次都没跑过。P1 因此仍是**部分通过**，
+P4 的闸门照旧关着。
+
+顺带把两件不相干的事测清了：
+
+1. **静态服务面对扫描的响应**：`/.env` 404、`/../.env` 400、`/assets/../data/kestrel-studio.db` 400
+   （`http/static_files.rs` 的 `resolve_under` 拒绝 `..` 与 NUL，静态根只有 `public/`，所以仓库根那份
+   `.env` 不在这个面的可达范围内）。唯一还能取到的点文件是 `/wasm/.gitignore`（200，1 字节，
+   构建产物自带的忽略文件），没有信息量。
+2. **扫描确实在发生**：11-04 与 11-05 两天共 116 行请求（11-03 是 346 行），路径集中在
+   `/.env`、`/web/.env`、`/wp-config.php.bak`、`/wp-json/`、`/storage/logs/laravel.log`、
+   `/vendor/composer/installed.json` 这一类，外加 11-04 01:57:58 一秒内的四个 POST
+   （三个 `/login`、一个打在 `/` 上）。入口是 openresty 的 443——deployment.md §3 记着安全组只放行
+   80/443，`8848` 虽然发布在 `0.0.0.0` 但不从公网直连。两个服务端都**没有登录限流或失败锁定**
+   （`nest/server/src/auth/` 与 `rust/server/src/auth/` 都查过），这条只记录事实，动不动它是个排期决定。
+
+边界，别把这张表读成「复验已做」：
+
+- 「新会话」是否落到了不带 `?c=` 的 `/`——裸 `GET /` 200 有五次，但它与手工刷新在日志里同形，**分不开**。
+- 控制台噪音任何时候都只在浏览器里，日志证不了。
+- 13:25:55 那一簇判定为浏览器而不是 curl，依据是三条同时成立：`GET /` 返回 200（**带 session
+  cookie 才会**，未认证是 302）、wasm 两个文件在同一秒内成对取走、随后紧跟
+  `GET /api/v1/conversations`。宿主机侧的 curl 探针不带 cookie，也打不进这个需要登录态的接口。
+- 待收的一处运维状态：debug 档位还挂着。收回且保留灰度 = `CLIENT_BUNDLE=wasm docker compose up -d`
+  （重建容器，不重新构建、不登出任何人，这条性质 §20 已实测）。**本次未执行，等用户确认。**
+
+顺带按源码复核了 §19 记下的两个 parity 缺口，**11-06 仍未修**：`nest/client/scripts/main.ts:975`
+的 textarea 随输入长高（wasm 侧 `chat_page.rs` 没有 `input` 监听），以及 `main.ts:985` 的
+`.menu-dropdown` 点外部收起（wasm 侧只在 `Dom::query` 里取过这个元素，没有 document 级委托；
+它已有的那处 outside-click 是下载 `<dialog>` 的 backdrop，不是同一个东西）。两条都不影响正确性，
+只影响手感，所以仍是「等确认」而不是待办。
