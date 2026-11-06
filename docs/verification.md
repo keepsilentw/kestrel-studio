@@ -1484,3 +1484,56 @@ P1 现在只剩两条：**语音的真拨号**（要 `getUserMedia` 权限框 + 
 本次留下的数据：会话 c=9 / c=10 / c=11（11 里有图 18、视频 19、图 20 与两轮对话），
 `messages` 61、`conversation_events` 2,124、`assets` 20、`generation_tasks` 3。模式与档位都还原到位
 （`智能`、`client="wasm"`、`info`）。
+
+## 24. `Last-Event-ID` 自动重连（半证）与一次意外的新缺陷（2026-11-06 16:44–16:50）
+
+### 24.1 先记运维那笔
+
+`docker-compose.yml` 的 `logging` 段加了 `max-size: 10m` / `max-file: 5`，把文件传到宿主机后
+`CLIENT_BUNDLE=wasm docker compose up -d` 重建生效。证据：`HostConfig.LogConfig` =
+`{"Type":"json-file","Config":{"max-file":"5","max-size":"10m"}}`，启动日志仍是 `client="wasm"`，
+`/login` 200，新容器日志当时 1,122 B。§23.1 关掉的只是档位，这条把根因也关掉了。
+
+### 24.2 浏览器带 `Last-Event-ID` 这一半：证到了
+
+| 时刻 | 事件 |
+|---|---|
+| 16:44:11 | `docker compose restart`（日志里 `signal received, closing the listener`）。第一条 stream 被真撕开，Chrome 在控制台记了一条 `Failed to load resource: net::ERR_HTTP2_PROTOCOL_ERROR`——断连的痕迹，不是客户端缺陷 |
+| 16:44:22 | 容器回来，`client="wasm"`，`expired sessions cleared=0`（没人被登出） |
+| 16:44:24 | 重连请求（reqid 6）：URL 仍是客户端建流时的 `?from=0`，但**请求头 `last-event-id: 1181`**，服务端回 200 `text/event-stream` |
+
+服务端 `rust/server/src/http/chat.rs:213-216` 读这个头并**优先于 `?from=`**，所以「浏览器自动重连并带游标」
+与「服务端认这个游标」两半都有实物证据。这也是 §23.4 里 CDP Offline 撕不开流所缺的那一半。
+
+### 24.3 断开期间的缺口回放：没证到，而且原因本身就值得记
+
+要造"断开期间仍在发布事件"，就得让某一轮在那 10 秒里继续跑。第二次尝试正是这样：16:46:2x 在**已有**
+c=12 里提交一轮（`POST /api/v1/conversations/12/turns` 202——顺带第三次复验续轮），6 秒后重启，
+重启瞬间 `max(seq)=2381`，最终 `max(seq)=2921`。
+
+结果不是补播，是**那一轮跟着进程一起死了**：`conversation_events` 的末尾停在 `reasoning`，
+**没有 `turn_done` 也没有 `turn_error`**。于是
+
+- 页面一直卡在"正在生成…"（`sendDisabled=true`、`.content` 长度 0），直到重载才恢复；
+- 重载后放出来的是库里那一行 **`本轮处理失败：服务在轮次完成前中断。`**（messages id=65），
+  由启动收尾 `abandonStalePlaceholders` 写入；
+- 同一次重载再次给出 `data-start-seq=2921` 与 `GET /12/stream?from=2921` 一致，游标读取依旧正确。
+
+**结论：缺口回放仍记「未测」。** 要真验它，得让断开窗口里确实有事件发布——异步视频任务的完成时刻
+不受控，或者得开第二个页面向同一会话发一轮。两条都比"留成未测"更贵，且更像是在凑证据。
+
+### 24.4 顺带挖到一条新缺陷（两个客户端共有，不是 wasm 回归）
+
+**现象**：服务端在一轮进行中被重启，那一轮不会有终态事件；正看着这一轮的页面**永久停在"正在生成…"**，
+只有重载才恢复。
+
+**两端同形**：`nest/client/scripts/main.ts` 的 `streamTurnRunning` 只在 `turn_done` / `turn_error`
+与 `resetToNewConversation` 里复位，没有看门狗；`rust/client/src/chat_page.rs` 的 `turn_running` 一样
+（整个文件里唯一的 `set_timeout` 是下载弹窗的 160 ms 防抖）。
+
+**服务端其实没漏收尾**：启动时会把空占位行写成失败说明，但**这条收尾不产生事件**，所以活着的连接
+永远收不到。修法两个方向：启动收尾顺手往 `conversation_events` 补一帧 `turn_error`（一次改动、
+两个服务端同步、且天然被重放路径带上），或客户端加"订阅后 N 分钟无终态即重载"的看门狗。倾向前者。
+**本次未动代码**——这不在批准范围内，且要两端同改。
+
+**边界**：只验过"轮次进行中重启服务"这一种故障；进程 OOM、网络半开、反代超时没碰。
