@@ -1698,3 +1698,23 @@ view / chat ×2）。与 §20 那条 cargo 假红同一类环境问题，**不�
   `upgrade` 事件，源码结构如此，运行时未取证据）。
 - 两套各自的 `PUBLIC_BASE_URL` 与跨套帧 URL 的签名可达性（deployment.md §1.1 第 2 条）。
 - 双进程同时启动共用一个 SQLite 文件（两侧建表 / 补列 / seed 都在启动时做，这个组合从没跑过）。
+
+### 27.5 同日 16:28 的部署这一笔（它没有改变线上行为）
+
+今天两个提交都没有动 Rust 服务端与客户端，所以 `make deploy` 走的是一条**镜像层全 CACHED**的路径：
+`COPY .build/linux-x86_64/kestrel-studio` 与 `COPY public` 都命中缓存，宿主机上的 image 与 11-06 那份
+同源——**线上字节没变**。真正发生的是**容器被重建了两次**：
+
+1. `make deploy` 那次。它不转发 `CLIENT_BUNDLE`，所以重建把档位带回 compose 默认 `nest`——这是
+   deployment.md §2.2 第 2 条那条性质的又一次兑现（每次部署都要重拨一次，不是可选动作）。
+2. 按 §23.1 那条命令重拨：`CLIENT_BUNDLE=wasm docker compose up -d`。
+
+核对到的（全程只读）：容器 `Up`、启动行 `kestrel-studio listening on http://localhost:8848
+client="wasm"`、容器 env `RUST_LOG=info`（11-06 收回的 debug 档没有被这次部署带回来，`make deploy`
+同样不转发它）、`HostConfig.LogConfig = {"max-file":"5","max-size":"10m"}`（§24.1 那条上限只在
+**重建**时生效，这次正好是重建）、宿主机本地 `/login` 200、公网 HTTPS `/login` 200、
+`/wasm/kestrel_client_bg.wasm` 200、`sessions` 表 3 行。
+
+没取到的两条，别混进上面那张表：**登出与否没有前后基线**——「重建容器不登出任何人」是 §20 验过的
+性质，这次按该性质认定，不是这次的实测；而 **`ACCESS_LOG` 在线上还没有对应物**——镜像里只有 Rust 二
+进制，Nest 那套还没重新上线（roadmap.md §4.5），所以 §2.3 那条开关命令今天仍然只是实现的记录。

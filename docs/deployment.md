@@ -180,7 +180,7 @@ ssh lavo-test "cd /opt/kestrel-studio && docker compose up -d"
 | 值 | `/` 与 `/voice` 加载 | 用途 |
 |---|---|---|
 | `nest`（compose 默认） | `assets/main.js` / `assets/voice.js` | 代码默认与 `make deploy` 的默认，也就是**回滚档**：去掉环境变量就回到这份 |
-| `wasm` | 内联 module loader → `/wasm/kestrel_client.js` + `_bg.wasm`，再调 `initChat` / `initVoice` | **当前线上档位**（11-03 13:23 拨上，之后每次部署都手工重拨；11-06 17:25 仍是它）——roadmap.md §4.3 P3 的灰度 |
+| `wasm` | 内联 module loader → `/wasm/kestrel_client.js` + `_bg.wasm`，再调 `initChat` / `initVoice` | **当前线上档位**（11-03 13:23 拨上，之后每次部署都手工重拨；11-06 17:25 与 11-07 16:28 各重拨一次，最近一次的核对见 verification.md §27.5）——roadmap.md §4.3 P3 的灰度 |
 
 ```bash
 # 打开：只重启容器，不重新构建、不重新上传
