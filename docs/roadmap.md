@@ -15,10 +15,10 @@
 | 一 | 上述一期内容 | 已完成 | 端到端已验证（[verification.md](verification.md) §2） |
 | 二 | 抽出 `/api/v1` + 对话级 SSE（含断线续传）+ 三模式 | 直接服务多端目标，不依赖内核决策，做完不返工 | **已全部落地**（2026-10-21）：三模式早先完成；`/api/v1` + 提交/订阅分离 + `seq` 续传见 [architecture.md](./architecture.md) §4.2，实测证据见 [verification.md](./verification.md) §8 |
 | 三 | 异步任务子系统 + 视频能力 | 独立子系统，与内核决策解耦 | **已落地**，见 `nest/server/src/task/` 与 `rust/server/src/task/`（提交即返回、后台轮询、成功即镜像、追加消息并推送）；端到端**已于 2026-11-06 在新链路上实测**——`视频` 模式在已有 c=11 提交，工具帧回 `Video task 3 submitted`，本轮立即结束，几分钟后 asset 19 无重载落到页面，库侧 `generation_tasks` 第 3 行 `kind=video status=succeeded asset_id=19`，逐条见 [verification.md](./verification.md) §23.3 |
-| 四 | **语音会话**（独立入口 + 工具调用） | 与内核决策无关，走 §2.4.1 之外的一条独立通路。设计已迁至 [architecture.md](./architecture.md) §11 | **已落地**，本地与线上端到端实测均通过（[verification.md](verification.md) §4） |
+| 四 | **语音会话**（独立入口 + 工具调用） | 与内核决策无关，走 §2.4.1 之外的一条独立通路。设计已迁至 [architecture.md](./architecture.md) §11 | **已落地**，本地与线上端到端实测均通过（[verification.md](verification.md) §4）——那句实测是 **Nest 时代**的。新链路上 2026-11-06 只证到 WS upgrade（`voice session opened conversation=13` → `voice call ended`，两次按下都 `frames=0`，§25.1），**真实麦克风采集待收，它就是 §4.4 P1 剩下的那一条**（§26.5） |
 | 五 | 内核选型落地（保持 TS 增强 / 引入 Rust sidecar） | 前面各期完成后，内核的真实收益才有可比基准 | 未开始 |
 | 六 | **语言迁移**：服务端改用 Rust（`rust/server/`） | 与第五期无关的独立变量：先换宿主语言，内核选型才有对照物 | **代码已落地**（2026-10-27），见 [architecture.md](./architecture.md) §13；**已接管交付链并上线**（2026-11-02，§4.4 与 verification.md §13）；离线对拍证据见 verification.md §9 |
-| 七 | **Nest/Node 技术栈退役**：服务端与 Web 客户端全部改 Rust（客户端走 Rust→WASM） | 六期把服务端迁完了，剩下的 Node 面只剩构建链与客户端；一期一期内核不掺和 | **决策已定**（2026-10-30，§4）。分期见 §4.3：P2 已上线（2026-11-02）；P3 两个页面代码到位，模板切换早已不是缺口——`CLIENT_BUNDLE` 开关 11-03 实现（[verification.md](./verification.md) §17），线上档位自 11-03 13:23 起是 `wasm`（§20，11-06 13:58 重拨 §23.1）；P1 部分通过，§13.5 那五条只剩**真实麦克风采集**1 条（§26.5）；**P4 未开工**，闸门等这一条收口 |
+| 七 | **Nest/Node 技术栈退役**（**2026-11-07 撤销退役部分**，改为双后端长期并存，见 §4.5）：服务端与 Web 客户端全部改 Rust（客户端走 Rust→WASM） | 六期把服务端迁完了，剩下的 Node 面只剩构建链与客户端；一期一期内核不掺和 | **决策已定**（2026-10-30，§4）→ **2026-11-07 变更**（§4.5）：`nest/` 不再是删除对象，**P4 取消**。已到位的部分不变——P2 已上线（2026-11-02）；P3 两个页面代码到位，模板切换早已不是缺口，`CLIENT_BUNDLE` 开关 11-03 实现（[verification.md](./verification.md) §17），线上档位自 11-03 13:23 起是 `wasm`（§20，11-06 13:58 重拨 §23.1）；P1 部分通过，§13.5 那五条只剩**真实麦克风采集**1 条（§26.5），而它现在只是 wasm 客户端自身的验收，不再是任何删除动作的前置 |
 
 二期至四期无论内核如何选型都不会白做。
 
@@ -193,6 +193,12 @@ openai 面须置 compat 位 `stream_include_usage = true`，否则全程 `usage:
 
 ## 3. 当前待办
 
+- **2026-11-07 策略变更：不退役 Nest，双后端长期并存**（§4.5）。P4 取消，`nest/` 一行不删也不再是
+  待删对象。三个待定项同日都定了：入口形态 = **按子域反代、各占一个宿主端口**（不是按路径分，原因
+  写在 §4.5 与 deployment.md §1.1）；Nest 侧**访问日志已补**（`common/access-log.ts` + `ACCESS_LOG=1`，
+  deployment.md §2.3）；双进程共用同一个 SQLite 列为**待做的宿主机实测**。**剩下的活**是两件落地动作，
+  都要一次真实部署才验得了：compose 加回 Nest 这个 service（含 `Dockerfile` 的 node 阶段与 `deploy.sh`
+  恢复上传构建上下文），以及 openresty 新增那个 server 块。
 - 红隼 logo 目前是占位 SVG（`nest/client/public/logo.svg`），待替换为正式图片。
 - 对话页有 1 条 Chrome *issue*：`Lazy-loaded images should have explicit dimensions`，来自 SSR 回放
   那一段 `loading="lazy"` 的资产 `<img>`——线上出自 `rust/server/src/view/templates.rs:209`
@@ -302,11 +308,12 @@ openai 面须置 compat 位 `stream_include_usage = true`，否则全程 `usage:
   这一测还顺带证明了缺口回放：那帧事件发布在服务端开始 accept 之前，客户端能收到它只能是
   重连时带 `Last-Event-ID` 被按游标重放的结果。
 
-## 4. Nest 退役与 WASM 客户端（2026-10-30 决策）
+## 4. Nest 退役与 WASM 客户端（2026-10-30 决策；**退役部分已于 2026-11-07 撤销，见 §4.5**）
 
 ### 4.1 决策
 
-目标：**仓库里不再出现 Nest / Node / npm 技术栈**。服务端由 `rust/server/` 接管（第六期），
+目标：**仓库里不再出现 Nest / Node / npm 技术栈**。**这条目标已于 2026-11-07 撤销**（§4.5：双后端
+长期并存，P4 取消）；本节以下按原样留着，是当时的决策与当时的证据。服务端由 `rust/server/` 接管（第六期），
 Web 客户端由 TypeScript + Vite 改为 **Rust→WASM**（选型 B），markdown 改由
 `pulldown-cmark` 承担。**2026-11-06 更正这行的最后一项**：`pulldown-cmark` 只是当时的原案，实测后
 被换掉了——服务端 SSR 与浏览器现在编的是同一个共享子集 `kestrel-md`（`crates/md/`），体积账与理由见
@@ -343,6 +350,8 @@ stdin、对端不落文件），脚本是 `scripts/markdown-census.sql`，口径
 `pulldown-cmark`**——实测多付 74 KB gz 换助手根本不写的语法（§11.5 与它下面那条注解）。所以
 "实时渲染与重载回放不一致"这一类缺陷在 Rust 这一侧已经结构上不可能（SSR 与浏览器编同一个
 crate）；全站还剩 `marked` 那一套，等 P4 删掉 `nest/` 就归一。口径数从三降到**二**，不是降到一。
+**2026-11-07 更正这行的后半句**：P4 已取消（§4.5），「等删掉 `nest/` 就归一」这条归一路径不存在了——
+`marked` 那套是常驻的第二口径，两侧渲染不一致此后要长期按缺陷对待。
 
 ### 4.2 前置事实更正
 
@@ -350,14 +359,14 @@ crate）；全站还剩 `marked` 那一套，等 P4 删掉 `nest/` 就归一。�
 crate 可按需下载。所以本期的成本中心**不是依赖供给**，而是下面三件事：
 Rust 服务端从未真跑、客户端要重写、部署镜像要换形态。
 
-### 4.3 分期（判据不过不进下一期，P4 之前不删任何 Node 文件）
+### 4.3 分期（判据不过不进下一期，P4 之前不删任何 Node 文件；**2026-11-07：P4 已取消，见 §4.5**）
 
 | 期 | 内容 | 完成判据 |
 |---|---|---|
 | P1 | Rust 服务端第一次**真运行**（不在本机） | 本机禁止启动 Docker、禁止为本机起服务做测试，且仓库不保留 CI 配置（CLAUDE.md），所以判据只剩一个去处：**目标主机上的灰度实例**——与现有 Nest 容器并存、占另一个端口，跑通 `/login` 200、静态资源、SSE 续传、出图 / 视频任务 / 语音 / `/admin` 只读回放 + 控制台零噪音。需用户授权并人工执行。**取证边界（11-02 复核补，同日补访问日志后修订）**：写路径一直可正证——出图 / 视频看 `messages`+`assets`（视频另有 `generation_tasks`）的新行，语音看 `voice session opened` 日志与「语音会话」行；`/admin` 回放与 SSE 重放在 13:47 那版上**取不到**（服务端没有请求日志），现在可以看每请求一行的 DEBUG 访问日志（`RUST_LOG=debug`，见 verification.md §13.7 与 deployment.md §2.1；**16:18 已上线**，日志带 ANSI，grep 前先去色，见 §13.8）；控制台噪音任何时候都只在浏览器里，只能由操作者报告并单独标注。另：实际执行与本行设想不同——不是并存占另一端口，而是 compose 直接换掉镜像、Nest 容器被移除（回滚见 deployment.md §1.1） |
 | P2 | 交付链换 Rust | 开发机构建静态 musl 二进制 → `FROM scratch` 运行镜像（服务器零下载，TLS 根证书已有 `webpki-roots`）；先确认宿主机架构；灰度前备份 SQLite 库；已知副作用：**cookie 的签名口径不同，切流时全员重新登录一次**——而且这个方向是不对称的（Nest 读不懂 Rust 写在顶层 `user` 的 sess 行），所以**回滚同样会登出一次**，见 verification.md §13.4 与 deployment.md §1.1 |
 | P3 | 客户端 Rust→WASM | 装 `wasm-pack`（不能用 brew 的 wasm-bindgen CLI，版本 0.2.111 vs crate 0.2.129）；按页拆 `main` / `voice` 两个 wasm 模块；**语音帧序列逻辑与 DOM 分离**，使 `start`/`commit`/排队补发那组断言能在 `cargo test` 里跑（jsdom 测试要退役，而它正是抓住线上"永远停在正在连接…"的那个测试）；`AudioWorklet` 的 JS 留在静态资源里 |
-| P4 | 删除 Node 栈（**顺序变了**：`CLIENT_BUNDLE=wasm` 的灰度属于 P3，P4 仍要等 P1 整体通过） | `nest/server/`（整棵树，含自己的 `package.json` 与 `vitest.config.mts`）、`nest/client/` 的 TS 面（`scripts/`、`styles/`、`__tests__/`、`package.json`、`tsconfig.json`、`vite.config.mts`、`vitest.config.mts`，**留下 `rust/client/`**）、根的 `package.json` + `pnpm-lock.yaml` + `pnpm-workspace.yaml`（workspace 依赖已下沉到两棵树，根清单没有需要手工裁剪的残留）、Makefile 的 Node targets、Dockerfile 的 node 阶段一并移除；删前打 tag，提交按文件面拆分先给计划 |
+| P4 | ~~删除 Node 栈~~ **已取消（2026-11-07，§4.5）**——原计划留在此处备查（`CLIENT_BUNDLE=wasm` 的灰度属于 P3，P4 仍要等 P1 整体通过） | 原清单：`nest/server/`（整棵树，含自己的 `package.json` 与 `vitest.config.mts`）、`nest/client/` 的 TS 面（`scripts/`、`styles/`、`__tests__/`、`package.json`、`tsconfig.json`、`vite.config.mts`、`vitest.config.mts`，**留下 `rust/client/`**）、根的 `package.json` + `pnpm-lock.yaml` + `pnpm-workspace.yaml`、Makefile 的 Node targets、Dockerfile 的 node 阶段。**这些现在全部保留**，删除动作没有任何排期 |
 
 P3 的 DOM 契约测试要同步改：现有 Rust 测试从 `nest/client/scripts/main.ts` 解析
 `requireElement` 得到 17 个 id 来反向钉模板；客户端变成 Rust 后，这份清单应从
@@ -461,3 +470,54 @@ Agent 直接在真人登录态的浏览器里把十项清单跑完，逐条返�
 **17:26 之后只剩那一条**：启动收尾缺陷已上线实测（§26），而那次实测把"断开期间的缺口回放"也一并
 证掉了——客户端收到的正是发布在它断线期间、且早于服务端重新 accept 的那帧终态事件。P1 现在 =
 **真实麦克风采集 1 条**；P4 的闸门等这一条收口后再谈。
+
+### 4.5 2026-11-07 决策变更：不退役，双后端长期并存
+
+**变更内容**：撤销 §4.1 那个目标（「仓库里不再出现 Nest / Node / npm 技术栈」）。`nest/server/`
+与 `nest/client/` 的 TS 面**作为长期在线的第二后端保留**，P4 取消，删除清单作废，不留任何排期。
+本节以上关于 P1/P2/P3 的事实记录与 §4.3 的判据原文都按原样留着——它们是当时的决定与当时的证据。
+
+**不变的部分**：Rust 仍是主交付链（`make deploy` → `scratch` 镜像，§4.4 P2）；`rust/client` 的
+WASM 客户端与 `CLIENT_BUNDLE` 开关继续做完。开关的**含义变了**：从「退役前的过渡手段」变成
+「两套客户端长期并存时的路由档位」，它现在是一个常态配置项，不是一个会随 P4 消失的临时件。
+P1 的判据一条不减（仍是真实麦克风采集 1 条），但它的**后果变了**——以前不过就不能删 `nest/`，
+现在 `nest/` 根本不删，所以这一条只代表 wasm 客户端自身的验收状态。
+
+**三条原本是「反正要删」才成立的决定，现在失去理由**（第一条已于同日闭合）：
+
+1. **Nest 侧没有访问日志**。architecture.md §13.3 那条「刻意不同步」的理由就是「第七期要删掉那棵树」。
+   **已于 2026-11-07 闭合**：`nest/server/src/common/access-log.ts`，开关 `ACCESS_LOG=1`
+   （deployment.md §2.3），每请求一行的形状与 Rust 侧对齐，两处口径差异（升级路径、`latency`）写在
+   architecture.md §13.3。**尚未部署**——compose 里现在只有 Rust 一个 service，所以那一节是实现的
+   记录而不是取证的记录；单元层的输出形状见 verification.md §27。
+2. **新功能不许往 `nest/` 搬**（CLAUDE.md 的同名规则）也是同一个理由推出来的。现在两套都长期
+   对外，同一个能力要不要两端同改，是一个新的排期决定——不同步的代价从「延长退役成本」变成
+   「两套在线实现的行为漂移」。
+3. **markdown 两套口径**（`kestrel-md` 与 `marked`，§4.1.1 末段）从过渡态变成常驻态。
+   原先「等 P4 删掉 `nest/` 就归一」这条归一路径没了，两侧渲染不一致要长期按缺陷对待。
+
+**双后端同时对外服务挡着一个实测过的事实**：两套的 cookie 签名口径不同（同 HMAC-SHA256，
+被签的字符串一个含 `s:` 前缀一个不含），且 `sess` 行只有 **Nest → Rust 单向**可读
+（[verification.md](verification.md) §13.4、architecture.md §13.2）。所以**任何一个方向的切换都会把
+当时在登录态的人登出一次**，按请求轮询分流不可行；可行的形态只有「按入口固定」——两套各占一个
+端口或子域，一个人只会被路由到其中一套。
+
+**同日定下的三件**（用户裁决，按上面那条编号对应）：
+
+- **对外形态 = 反代按子域分**，两个子域各起一个 openresty server 块、各反代到一个宿主端口（Rust 占
+  8848，Nest 另取一个）。**不是按路径分**：两套写的 cookie 同名同作用域（都叫 `connect.sid`、都是
+  `Path=/`——`rust/server/src/auth/session.rs:12,58` 与 `nest/server/src/main.ts`），同一 origin 下
+  按路径分流会互相覆盖 cookie，再叠上签名口径不同，等于每次跨路径浏览都登出一次。细节与两条随之而来
+  的配置项（新增 server 块、每套自己的 `PUBLIC_BASE_URL`）写在 deployment.md §1.1 与 §3。
+- **补日志**：见上面第 1 条，已实现。
+- **双进程共用同一个 SQLite 文件**列为一次**待做的宿主机实测**（两侧建表 / 补列 / seed 都在进程启动
+  时做，这个组合从没同时跑过）。它排在 Nest 那套真正重新上线之后——在那之前这个组合无法构造。
+
+**仍未落地的两件**（要做需要一次真实部署，本机不启动服务也不启动 Docker）：
+
+- `docker-compose.yml` 加回 Nest 作为第二个 service + `Dockerfile` 的 node 阶段 + `deploy.sh` 恢复上传
+  构建上下文。旧管线并不便宜：`deploy.sh` 自 11-02 起不上传 `node_modules`，宿主机盘上那份是
+  2026-09-27 拆分前的残留，不能直接用（deployment.md §1.1 那三条），重新上线等于重走一次旧镜像构建。
+- openresty 的新 server 块（改完 `nginx -t` 再 reload，流程与三个关键点见 deployment.md §3）。
+- 两个进程同时启动、共用同一个 SQLite 文件：两侧的建表 / 补列 / seed **都发生在进程启动时**
+  （§3「多账号与超管」那条），这个组合从来没有同时跑过，是没测的事实，不是已知的风险。

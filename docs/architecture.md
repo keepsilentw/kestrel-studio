@@ -20,7 +20,7 @@
 | 层 | 选型 | 理由 |
 |---|---|---|
 | 服务端 | NestJS 12 + Express | 指定 |
-| 服务端（第二实现） | Rust：axum 0.8 + sqlx + tokio | 与 Nest 版并行的同端实现，见 §13。**2026-11-02 起线上跑的是这一套**，Nest 版仍在仓库里作为回滚底牌 |
+| 服务端（第二实现） | Rust：axum 0.8 + sqlx + tokio | 与 Nest 版并行的同端实现，见 §13。**2026-11-02 起线上跑的是这一套**，Nest 版不是待下架的对象——两套后端长期并存（roadmap.md §4.5，2026-11-07） |
 | 渲染 | hbs (Handlebars) | 单进程 SSR，无独立前端服务，8G 机器内存友好 |
 | 前端 | 原生 TS + Vite 打包 | 无框架，Vite 只做 TS/CSS 打包，产物由 Nest 静态托管 |
 | 传输 | 对话级 SSE（GET + EventSource）+ 持久事件日志 | 提交与订阅分开；seq 续传见 §4.2。轮次事件曾挂在 POST 响应上，已改 |
@@ -297,7 +297,7 @@ kestrel-studio/
     implementation-notes.md  实现期环境踩坑台账
     deployment.md         服务器部署与运维
     verification.md       端点实测与端到端验证
-  nest/server/               NestJS 后端（Node 栈，契约源与回滚底牌；2026-11-02 起线上不再跑它，roadmap.md §4 P4 删除它）
+  nest/server/               NestJS 后端（Node 栈，契约源与并存的第二后端；2026-11-02 起线上不跑它，但按 roadmap.md §4.5 长期保留，P4 已取消）
     package.json        本包的依赖与脚本；nest / drizzle 脚本先 `cd ../..`（cwd 必须是仓库根）
     vitest.config.mts   node 环境的测试配置（`pnpm --dir nest/server test`）
     tsconfig.json       后端；tsconfig.test.json 覆盖测试
@@ -372,8 +372,9 @@ kestrel-studio/
 决定这个形状的三条约定：
 
 - **Node 侧是 pnpm workspace，依赖声明在用到它的那棵树里**。根 `package.json` 不声明任何依赖，
-  只留 `pnpm -r` 的聚合脚本；这样 roadmap.md §4 P4「删 Node 栈」= 删 `nest/server/` 与 `nest/client/` 的 TS 面
-  （配置与依赖跟着树走）+ 根清单和锁整个删掉，不会留下需要手工裁剪的依赖列表。
+  只留 `pnpm -r` 的聚合脚本；这个形状原本的动机是 roadmap.md §4 P4「删 Node 栈」= 删 `nest/server/`
+  与 `nest/client/` 的 TS 面（配置与依赖跟着树走）+ 根清单和锁整个删掉。**2026-11-07 P4 已取消**
+  （§4.5：双后端长期并存），布局不改——按技术栈归属依赖这件事与删不删无关。
   **Rust 侧不合并 Cargo workspace**：四棵 crate 各自解析依赖，合并成一份的收益只是少一个 `target/`。
   仓库只跟踪 `rust/server/Cargo.lock` 与 `rust/client/Cargo.lock`；单独构建 `crates/*` 会就地生成一份
   未跟踪的 lock（`docs/implementation-notes.md` §18）。
@@ -660,8 +661,23 @@ WebSocket 的 upgrade 不经过 Express，所以 `AuthenticatedGuard` 对它无�
 2. **流式响应的 `latency` 是首字节时间**，不是通话或整轮的长度（`on_response` 在响应头出去时
    触发）。读日志时别把它当耗时。
 
-Nest 侧没有对应件（`main.ts` 不挂 morgan、也不开 `useLoggerConfig`）。这是**刻意不同步**：
-第七期的目标是删掉那棵树，给它加可观测性等于给一堆待退役的代码补新功能。
+**2026-11-07 起 Nest 侧也有对应件**：`nest/server/src/common/access-log.ts`。上面那条「刻意不同步」
+的理由是第七期要删掉那棵树，§4.5 撤销退役后它不再成立，于是补上了。形状与 Rust 侧一致——
+每请求一行 `method= uri= status= latency=`，`uri` 保留查询串（续订的流因此读得出 `?from=N`）。
+中间件挂在 `main.ts` 里静态资源处理器**之前**，所以 `/assets/main.css` 同样留行。
+
+三处刻意的差异，读日志时要知道：
+
+1. **开关不同名，也不同宽**。Rust 侧是 `RUST_LOG=debug`，那一档顺带把 sqlx 的语句 span 也放出来
+   （§21 那 16 MB 就是这么来的）；Nest 侧是 `ACCESS_LOG=1`，只放开访问日志这一件事，没有附带噪音。
+   两边默认都是每请求零输出。
+2. **`/api/voice` 不需要排除**。Rust 那条升级路由是 axum 的路由，必须排在 `.layer()` **之后**才不被
+   追踪；Nest 的升级从 HTTP server 的 `upgrade` 事件接（`voice/voice.gateway.ts`），Express 结构上
+   看不见它。`/api/voice/ticket` 是普通 POST，两套都留行。
+3. **`latency` 口径不同**。Nest 记到 `finish`，是整个响应的长度；tower 的 `on_response` 在响应头出去
+   时触发，所以两条流式路由上它是首字节时间。同一次 `/stream` 请求，Nest 的数字是流的时长、Rust
+   的不是。Nest 侧另外接了 `close`（与 `finish` 二者只落一行），客户端中途断开的那一次 SSE
+   第一次会留下行——这正是断线续传取证要找的那一行。
 
 语音的两项遗留**不是移植遗漏，而是需要决策或需要真机**，与 Nest 版同状态：
 
@@ -676,7 +692,8 @@ Nest 侧没有对应件（`main.ts` 不挂 morgan、也不开 `useLoggerConfig`�
 
 ### 13.4 `crates/proto`、`crates/md` 与 `rust/client`：迁移期新增的三个 crate
 
-第七期（Nest/Node 退役，见 roadmap.md §4）与 `rust/server/` 并列立了三个新包：
+第七期（客户端改 Rust→WASM，见 roadmap.md §4；其退役部分已于 2026-11-07 撤销，§4.5）与
+`rust/server/` 并列立了三个新包：
 
 | crate | 职责 | 为什么存在 |
 |---|---|---|
@@ -700,8 +717,9 @@ Nest 侧没有对应件（`main.ts` 不挂 morgan、也不开 `useLoggerConfig`�
 `public/wasm/` 已随部署上线（`/wasm/kestrel_client_bg.wasm` 200，§13.2）。2026-11-03 起模板
 **会**在 `initChat` / `initVoice` 处调用它——但由 `CLIENT_BUNDLE` 决定，默认仍是 `nest`：
 loader 内联在 `view/templates.rs::WASM_LOADER` 里（不落地成第二个 JS 文件，避免 JS 与 wasm
-两份产物的缓存错位）。所以线上目前跑的仍是 `nest/client/scripts/*.ts`，灰度开关与回滚见
-deployment.md §2.2；把 `nest/` 彻底删掉是 roadmap.md §4.3 的 P4，前提仍是 P1 整体通过。
+两份产物的缓存错位）。所以**拨档之前**线上跑的是 `nest/client/scripts/*.ts`，2026-11-06 13:58 起重拨为
+`wasm`（verification.md §23.1），灰度开关与回滚见 deployment.md §2.2。**2026-11-07 更新后半句**：
+不再有「把 `nest/` 彻底删掉」这一步——P4 已取消，`nest/` 与 `rust/` 两套并存（roadmap.md §4.5）。
 
 ## 14. 相关文档
 

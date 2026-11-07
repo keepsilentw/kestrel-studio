@@ -41,12 +41,29 @@ C 侧编得过、链接过不去，2026-10-30 当天删掉换成 zigbuild，全�
 （Nest 时代 1.27 GB）、静态 ELF 直接跑、`docker stats` RSS 1.2 MiB，`/login` / 静态资源 /
 鉴权跳转 / 公网反代 / 一轮真实流式对话均已确认，证据见 [verification.md](verification.md) §13。
 
-### 1.1 回滚到 Node 管线
+### 1.1 把 Nest 管线重新上线（原「回滚到 Node 管线」）
 
-P4 之前 Nest 代码仍在仓库里。回滚 = 把 `Dockerfile` / `docker-compose.yml` /
+**2026-11-07 起这一节不是回滚手册**：roadmap.md §4.5 撤销了退役，`nest/` 与 `rust/` 两套后端
+长期并存，所以下面这套步骤的意义是**让 Nest 作为第二后端重新对外服务**，而不是认错退回。
+
+**入口形态已定（2026-11-07）**：**两个子域各反代到一套后端**，不按路径分。原因是两套写的是**同名同
+作用域**的 cookie——两边都叫 `connect.sid`、都是 `Path=/`（`nest/server/src/main.ts` 的 session 配置
+与 `rust/server/src/auth/session.rs:12,58`），同一个 origin 下按路径分流会让两套互相覆盖对方的 cookie
+值，而签名口径又不同（§1.2），结果是每次跨路径浏览都被登出。子域是**不同的 host**，不带 `Domain`
+属性的 cookie 因此天然互相隔离，一个人恒定落在一套上。
+
+操作形态仍是把 `Dockerfile` / `docker-compose.yml` /
 `scripts/deploy.sh` 退回切换前的提交，并跑一次
 `NEST_BASE_IMAGES=1 scripts/bootstrap-host.sh`。旧管线的两个基础镜像
 （node:24-bookworm-slim、golang:1.24）在 lavo-test 上**已经缓存过**，只有全新机器才需要拉。
+两套**同时在线**时 compose 里是两个 service、两个宿主端口（`HOST_PORT` 那套映射，见 §2；Rust 现在占
+8848，Nest 另取一个），各自一个子域经 §3 的反代分开。**两件随之而来的配置项**：
+
+1. openresty 要新增一个 server 块（`/opt/1panel/www/conf.d/<新子域>.conf`），上游同样写
+   `172.17.0.1:<端口>`，SSE 与语音那两条 `location` 规则照 §3 的三个关键点抄。
+2. **每套自己的 `PUBLIC_BASE_URL`**。i2v 是把签名帧 URL 交给上游让它自己来取的，指向另一套的 origin
+   就是让外部服务去敲另一个端口的门；两套的 `SESSION_SECRET` 相同（同一份 `.env`），所以签名能不能
+   被另一套验通**没有实测过**，别把「凑巧能用」当成设计。
 
 **盘上那份 Nest 残留不能直接用。** `/opt/kestrel-studio` 里还留着 2026-09-27 上传的
 `node_modules/`（353 MB）、`dist/`、`src/`、`package.json`、`nest-cli.json`、
@@ -58,12 +75,12 @@ P4 之前 Nest 代码仍在仓库里。回滚 = 把 `Dockerfile` / `docker-compo
 3. 那份是 macOS 上装的，linux 侧的 better-sqlite3 仍需在构建时重编——这正是旧 Dockerfile
    两阶段在做的事。
 
-所以回滚的真实前提是：退回切换前的提交后**在开发机重装依赖并按旧脚本重新打包上传**，
+所以这一步的真实前提是：退回切换前的提交后**在开发机重装依赖并按旧脚本重新打包上传**，
 不要以为跑一次 `bootstrap-host.sh` 就能起来。旧的 `kestrel-studio` Nest 镜像（1.27 GB /
 1.3 GB 那几层 `<none>`）仍在宿主机上，但 `kestrel-studio:latest` 已被 Rust 镜像占掉，
 用它回滚需要先确认那份 compose 配置与 `.env` 的 `PORT` 仍然匹配——未经实测，别当保险。
 
-**回滚还会再登出一次所有人**：Nest 只认 `sess.passport.user`，读不懂 Rust 写在顶层 `user` 的行
+**Nest 重新接管流量时，会再登出一次所有人**：Nest 只认 `sess.passport.user`，读不懂 Rust 写在顶层 `user` 的行
 （反向是通的，Rust 两个位置都认）。所以凡是在 Rust 上登录过的会话，退回 Nest 后都要重新登录。
 机制与实测见 [verification.md](verification.md) §13.4 与 architecture.md §13.2。
 
@@ -75,6 +92,11 @@ Rust 与 Nest 的 session cookie **签名口径不同**，任何一侧接管网�
 `"s:" + token`，所以同一个 token 算出的摘要必然不同。加上 §1.1 说的 sess 行形状只有单向读得通，
 结论是**两个方向的切换都会登出所有人**。这不是数据损坏，但**必须提前告知使用者**，不能当成意外。
 
+**2026-11-07 补一句（roadmap.md §4.5：双后端长期并存）**：这条性质从「切换日的一次性代价」变成
+**常态约束**——同一个浏览器的登录态只在签发它的那一套里有效，所以两套后端**不能按请求轮询分流**，
+只能按入口固定（一个人恒定落到同一套）。要同一账号在两套之间自由落，得先把 cookie 签名口径与
+`sess` 行形状对齐，那是一次代码改动，不在本节范围内。
+
 ### 相关约束
 
 - **Node 不能直接装在宿主机上。** 服务器是 CentOS 7（glibc 2.17），
@@ -82,7 +104,7 @@ Rust 与 Nest 的 session cookie **签名口径不同**，任何一侧接管网�
   `GLIBC_2.27 not found`。这也是 pm2 方案不可行的原因。Docker 是唯一可行运行时。
 - **基础镜像来自镜像站。** 服务器上 Docker Hub 不可达，用 `dockerproxy.net`
   （实测 `hub.rat.dev` 超时、`docker.nju.edu.cn` 直接失败、`docker.m.daocloud.io` 与
-  `docker.1ms.run` 卡住）。这条约束**目前只剩回滚用得上**：现行 Rust 管线的运行时基础是
+  `docker.1ms.run` 卡住）。这条约束**目前只剩重新上线 Nest 时用得上**：现行 Rust 管线的运行时基础是
   `scratch`，Docker 从不拉取它，新宿主机不需要缓存任何镜像。
 - **不要动 `/etc/docker/daemon.json`，不要重启 docker daemon。** 该机还跑着其他生产
   容器与 1Panel 的 openresty，重启会全部拉挂。镜像站按镜像逐个消费。
@@ -178,6 +200,26 @@ ssh lavo-test "cd /opt/kestrel-studio && docker compose up -d"
 4. **它按 `nest` 起、按 `wasm` 灰度时，出错是页面级而不是服务级**：接口、SSR、登录都还在跑同一份
    Rust 服务端。WASM 加载失败时 loader 会在页面上落一条 `.client-error` 提示并 `console.error`；
    回滚就是上面那条命令。
+
+## 2.3 Nest 侧的访问日志开关（`ACCESS_LOG`，2026-11-07）
+
+§2.1 那个开关是 Rust 二进制的（`RUST_LOG`）。Nest 那套现在也有同形状的访问日志了——
+`nest/server/src/common/access-log.ts`，是 roadmap.md §4.5 撤销退役之后补上的（原来那句「刻意不同步」
+的理由就是「反正要删」）。开关是 `ACCESS_LOG=1`（`true` 也认，其余一律关），放在 compose 的
+`environment` 而不是那份永不覆盖的 `.env`——与 §2 同一条规矩。
+
+```bash
+# 打开（要等 Nest 这个 service 重新上线，service 名以 §1.1 落地时定的为准）
+ssh lavo-test "cd /opt/kestrel-studio && ACCESS_LOG=1 docker compose up -d"
+```
+
+三处与 Rust 侧的口径差异写在 architecture.md §13.3，最要紧两条：**它只放开访问日志**，不会像
+`RUST_LOG=debug` 那样把 sqlx 的语句一起放出来（§2.1 第 4 条那次 16 MB 的事故在这里没有对应物）；
+`latency` 记到响应结束，所以两条流式路由上它是整条流的时长，**不能与 Rust 的首字节时间直接比**。
+
+这一节是**实现的记录，不是取证的记录**：compose 里目前只有 Rust 一个 service，Nest 那套还没重新
+上线（§1.1），所以上面这条命令没有在宿主机上跑过。单元层的形状与结果见
+[verification.md](verification.md) §27。
 
 ## 3. 对外暴露：openresty 反代
 

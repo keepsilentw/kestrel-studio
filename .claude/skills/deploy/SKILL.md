@@ -156,7 +156,11 @@ The repository holds two same-endpoint server implementations over one SQLite
 file. **Production has been `rust/server/` since 2026-11-02 13:24** (three
 deploys that afternoon; the running one started 13:47 — `ENTRYPOINT
 [/app/kestrel-studio]`, image ~10 MB). `nest/server/` stays in the tree as the
-contract source and the rollback option until roadmap.md §4 P4.
+contract source and, since 2026-11-07 (roadmap.md §4.5), as a **permanent second
+backend**: P4 (delete the Node stack) was revoked, so nothing under `nest/` is
+slated for removal. Both stacks share one SQLite file, and a browser's session
+only works on the stack that issued its cookie — route per entry point (separate
+ports or subdomains), never round-robin requests between the two.
 
 What is known from the host, not inferred (docs/verification.md §13):
 

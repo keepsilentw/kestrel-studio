@@ -1652,3 +1652,49 @@ upgrade、服务端建立起上游会话并正常收尾——`initVoice` 与 `/a
 §13.5 那五条里，**出图、视频任务、`/admin` 内容、SSE 续传（含缺口回放）四条已在新链路上实测通过**；
 只剩**真实麦克风采集**一条——它需要人按一下（`§25.1`：upgrade 已通，两次 `frames=0`）。
 本次留下的数据：会话 **c=14**（一条被中断的轮次 + 那帧终态事件）。
+
+## 27. Nest 侧访问日志的形状，与「双后端只能按 origin 分」的源码依据（2026-11-07，单元层）
+
+本轮**没有任何部署动作**（本机不启动服务、不启动 Docker），所以这一节是源码与单元层的证据，不是
+运行时证据。运行时那半留给 Nest 那套真正重新上线的那天（roadmap.md §4.5 末「仍未落地的两件」）。
+
+### 27.1 分流不能按路径：两套写的是同一个 cookie 槽位
+
+| 事实 | 出处 |
+|---|---|
+| Rust 侧 cookie 名写死 `connect.sid`，属性手写成 `Path=/; HttpOnly; SameSite=Lax; Max-Age=…` | `rust/server/src/auth/session.rs:12` 与 `:58` |
+| Nest 侧 `session()` 既没传 `name` 也没传 `cookie.path`，用的就是 express-session 的默认值——同样是 `connect.sid` + `Path=/` | `nest/server/src/main.ts`（cookie 只设了 `httpOnly` / `sameSite` / `maxAge`） |
+| 两边签名口径不同（同 HMAC-SHA256，被签的字符串一个含 `s:` 前缀一个不含），且 `sess` 行只有 Nest → Rust 单向可读 | §13.4 |
+
+**结论**：同一个 origin 下按路径分流，等于让两套互相覆盖对方刚写下的那个 cookie 值，再叠上签名口径
+不同，用户每跨一次路径就被登出一次。**子域是不同的 host**，不带 `Domain` 属性的 cookie 因此天然隔离
+——这是双后端并存唯一干净的分流形态，已按此写进 deployment.md §1.1 与 §3。
+
+### 27.2 实现与单元层输出
+
+- 实现：`nest/server/src/common/access-log.ts`，挂在 `main.ts` 静态资源处理器**之前**（否则
+  `/assets/*.css` 不会留行，而 Rust 侧是留的）。开关 `ACCESS_LOG`（`configuration.ts` 的
+  `readAccessLog()`，认 `1` / `true`，其余一律关）。
+- 质量门：`pnpm --dir nest/server typecheck`（`tsconfig.json` 与 `tsconfig.test.json` 两份）通过；
+  `vitest run __tests__/common/access-log.test.ts __tests__/config/configuration.test.ts`
+  = **2 files / 42 passed**。
+- 默认 sink 真跑出来的一行，即形状证据本身（Nest 的 Logger 在测试里直接打到 stdout）：
+  `[Nest] 37935 - 11/07/2026 4:19:54 PM VERBOSE [access] method=GET uri=/ status=200 latency=0ms`
+- 断言钉住的边界：关档时一行不写但仍然 `next()`；`finish` 与 `close` 都触发时**只写一行**（客户端中途
+  断开的那次 SSE 正是要找的那一行）；时钟回拨夹到 `latency=0ms`；`uri` 保留 `?from=9`。
+
+### 27.3 沙箱里的 nest 全量套件：6 个文件假红
+
+`pnpm --dir nest/server test` → **336 passed / 0 failed / 139 skipped（共 475）**，另有 **6 个测试文件
+加载失败**，报错全部是同一条 `Error: listen EPERM: operation not permitted 0.0.0.0`。这 6 个文件确实是
+会真占端口的控制器测试（`grep -l "app.listen(" nest/server/__tests__` 命中数正好 6：admin / auth ×2 /
+view / chat ×2）。与 §20 那条 cargo 假红同一类环境问题，**不是这次改动弄坏了什么**；判据与对 §20 末句
+的更正记在 implementation-notes.md §21。
+
+### 27.4 还没验的，别当已验
+
+- 那行日志在容器里的实际形状与量级（未部署，deployment.md §2.3 因此是实现的记录而非取证的记录）。
+- Nest 侧 `/api/voice` 的 upgrade 确实不经过 express（`voice/voice.gateway.ts` 接的是 HTTP server 的
+  `upgrade` 事件，源码结构如此，运行时未取证据）。
+- 两套各自的 `PUBLIC_BASE_URL` 与跨套帧 URL 的签名可达性（deployment.md §1.1 第 2 条）。
+- 双进程同时启动共用一个 SQLite 文件（两侧建表 / 补列 / seed 都在启动时做，这个组合从没跑过）。

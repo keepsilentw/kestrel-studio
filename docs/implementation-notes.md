@@ -451,3 +451,27 @@ http::tests::assets_follow_ownership_and_the_signature_is_the_only_authority ---
 判据很简单——**失败信息是 `PermissionDenied` 且发生在建目录/写临时文件那步**，就先按环境问题处理，
 用完整权限复跑一次同一套门再说。Nest 侧（vitest 用 in-memory 或仓库内的临时库）不吃这个亏，
 `nest/server` 28 files / 461 与 `nest/client` 49 在沙箱内外都绿。
+
+## 21. 沙箱里 `pnpm --dir nest/server test` 假红 6 个控制器测试文件（2026-11-07）
+
+```
+Test Files  6 failed | 23 passed (29)
+     Tests  336 passed | 139 skipped (475)
+Error: listen EPERM: operation not permitted 0.0.0.0
+```
+
+红的是 `admin.controller` / `auth.controller` / `guards` / `view.controller` /
+`asset-frame.controller` / `chat.controller` 六个文件，共同点是里面有一句 `await app.listen(0)`：
+它们真起一个监听套接字，而受限沙箱不允许 bind，于是**整个文件在加载阶段就炸**，里面 139 条一条没跑
+（计入 skipped，不是 failed）。`grep -l "app.listen(" nest/server/__tests__` 的命中数正好是 6，
+这条计数本身就能当判据用。
+
+判据与 §20 是同一条族：**报错是 `EPERM` 且发生在 `listen()` / 建临时目录那一步**，先按环境问题处理，
+要全绿就换到允许 bind 的环境复跑同一套门。**不要去 mock 掉 `listen()`**——那六个文件测的正是真实
+HTTP 面上的重定向、状态码与 cookie，把它们改成不起服务就等于把测试改成不测那件事。
+
+**这条同时更正 §20 末句**。那句「Nest 侧不吃这个亏，28 files / 461 在沙箱内外都绿」只对**文件读写**
+那一类成立，对**端口**不成立：今天的计数也对不上，475 - 461 = 14，正是这次新增的
+`access-log.test.ts`（6 条）与 `configuration.test.ts` 里 `ACCESS_LOG` 那组（8 条）。所以要么当年那
+461 是在允许 bind 的环境里跑的，要么那六个文件当时没进同一轮——两种解释都说明**别把 §20 那句当保证
+引用**；跑 nest 全量之前先确认自己在不在沙箱里，需要的是「文件级判据」而不是「一条都没红」的印象。

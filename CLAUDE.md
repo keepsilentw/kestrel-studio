@@ -28,8 +28,9 @@ Web 生成式媒体 Agent：用户在网页给一句话，LLM 流式思考、调
 | 仓库根 | `package.json`（**workspace 根，不声明任何依赖**，只留三条聚合脚本）、`pnpm-lock.yaml`（全仓一份）、`pnpm-workspace.yaml`（`packages: [nest/server, nest/client]` + `allowBuilds`）、`Makefile`、`Dockerfile` / `compose` / `scripts/`、`docs/`、`public/`（产物）、`data/` `storage/`（运行时） |
 
 **拆分的三条口径**：(1) Node 侧是 pnpm workspace：**依赖声明在用到它的那棵树里**，根 `package.json`
-不声明依赖，只有 `pnpm -r build|typecheck|test` 三条聚合脚本，所以 roadmap.md §4 P4 删 Node 栈时
-根不会留下需要手工裁剪的清单（`nest/server/` 与 `nest/client/` 的 TS 面各自连配置带依赖一起消失）。
+不声明依赖，只有 `pnpm -r build|typecheck|test` 三条聚合脚本。这个布局原本是给 roadmap.md §4 P4
+「删 Node 栈」准备的（删一棵树连配置带依赖一起消失，根不留残留）；**2026-11-07 P4 已取消**
+（`docs/roadmap.md` §4.5：双后端长期并存），布局按原样保留——按技术栈归属依赖这件事独立成立。
 Rust 侧**不**合并 Cargo workspace：四棵 crate 各自解析一遍依赖，合并成一份的改动量全在锁文件上，
 收益只是少一个 `target/`。仓库只跟踪两份锁：`rust/server/Cargo.lock` 与 `rust/client/Cargo.lock`；
 **单独对 `crates/proto` 或 `crates/md` 跑 cargo 会就地生成一份没人跟踪的 lock**，`git add -A`
@@ -95,14 +96,17 @@ cwd 拼接），且它的 `assets` **不能写 `outDir`**（写了就按 cwd 拼
   内置凭据等于给线上实例发可用登录。
 - **Rust 实现（`rust/server/`）是线上在跑的那一套服务端**（2026-11-02 起，`make deploy` 走交叉编译的
   静态 musl 二进制 + `FROM scratch` 镜像），质量门是 `make check` +
-  `make test`（含 `cargo check --tests` / `cargo test`）。`nest/server/` 仍是它的契约源与回滚底牌，
+  `make test`（含 `cargo check --tests` / `cargo test`）。`nest/server/` 仍是它的契约源，也是**长期
+  并存的第二后端**（`docs/roadmap.md` §4.5，2026-11-07 起不再是要下架的对象），
   `nest/server/src/` 至今一行未改；**改服务端行为要两侧同步**，否则线上与契约源静默分叉。
   离线 registry 缺 `bcrypt` / `tungstenite` / 模板引擎等件，相关自研与原因见
   `docs/architecture.md` §13，踩坑台账见 `docs/implementation-notes.md` §10-§12。
   **2026-10-30 两点更正与一条决策**：(1)「开发机无出站网络」是**执行环境的网络沙箱**
   造成的误判，这台机器能正常拉 crates.io（`docs/verification.md` §10.1），真实约束只有
-  服务器侧零下载；(2) 已**决定退役 Nest/Node 技术栈**，Web 客户端改 Rust→WASM，分期与
-  判据见 `docs/roadmap.md` §4——**在 P1（Rust 真跑并端到端实测）整体通过前不删任何 Node 文件**；P1 于 2026-11-02 部分通过（交付链已切，Node 文件一个没删）。
+  服务器侧零下载；(2) 曾于 2026-10-30 **决定退役 Nest/Node 技术栈**，**2026-11-07 撤销退役部分**
+  （`docs/roadmap.md` §4.5）：Web 客户端改 Rust→WASM 继续做完，`nest/` 不再删除，服务端与客户端都是
+  **双栈长期并存**。原先那条「P1 整体通过前不删任何 Node 文件」的闸门因此失去对象——现在一行都不删。
+  P1（Rust 真跑并端到端实测）于 2026-11-02 部分通过，它现在只代表 wasm 客户端自身的验收状态。
   (3) 客户端改 WASM 的踩坑（web-sys feature 门、CLI 版本配对、AudioWorklet 那 20 行
   删不掉的 JS）见 `docs/implementation-notes.md` §13。
 - **端到端只验到一部分**：`/login`、静态资源、鉴权跳转、公网 HTTPS 反代、一轮真模型流式对话
@@ -116,7 +120,8 @@ cwd 拼接），且它的 `assets` **不能写 `outDir`**（写了就按 cwd 拼
   `docs/verification.md` §13.7，日志带 ANSI、grep 前要去色见 §13.8）。控制台零噪音任何时候都只在浏览器里，只能由操作者报告并单独标注，不与机器证据混标。
   两类都要登录态，只能人工在浏览器里走；**2026-11-02 决定这轮不补**，所以下次别再把「去走一遍」
   当成默认下一步。要补时照 `docs/verification.md` §13.6 末的清单执行，其后果见
-  `docs/roadmap.md` §4.4 的 P1 行（P4 继续禁止）。
+  `docs/roadmap.md` §4.4 的 P1 行。**2026-11-07 更新**：P4 已取消（§4.5），这轮走查不再卡住任何删除
+  动作，只剩 wasm 客户端自身的验收意义。
   **2026-10-30 明确并重申（覆盖此前任何相反的计划）**：**禁止在本机启动 Docker**，
   **禁止在本机启动服务做测试**。这两条不是临时限制，也不因迁移任务而豁免。
   本仓库**不保留任何 CI 配置**（2026-10-30 写过一份 GitHub Actions 烟测定义，
@@ -146,12 +151,16 @@ cwd 拼接），且它的 `assets` **不能写 `outDir`**（写了就按 cwd 拼
 单个进程内做 SSR + SSE，**没有独立前端服务**。三条边界是理解全局的关键。
 
 **服务端现在有两份同端实现**：线上跑的是 `rust/server/`（2026-11-02 起），`nest/server/` 是它的
-契约源与回滚底牌，两边共用同一个 SQLite 库。本节的端点、事件语义、权限规则按 Nest 版描述，
+契约源，也是长期并存的第二后端（`docs/roadmap.md` §4.5），两边共用同一个 SQLite 库。本节的端点、
+事件语义、权限规则按 Nest 版描述，
 **改服务端行为要两侧同步改**，否则线上与契约源会静默分叉——移植期的对照关系与差异记在
 `docs/architecture.md` §13。
 
-**一条刻意的例外**：可观测性件不必同步。Rust 侧新加的 DEBUG 访问日志（`tower_http::trace`）没有
-往 `nest/server/` 搬，也不许搬——那棵树是回滚底牌、不是演进目标，给它加新功能只是延长退役成本。
+**一条已经闭合的例外**：可观测性件曾刻意不同步——Rust 侧的 DEBUG 访问日志（`tower_http::trace`）没有
+往 `nest/server/` 搬，理由是「那棵树是回滚底牌、不是演进目标」。§4.5 撤销退役后这个理由不再成立，
+2026-11-07 已补齐：`nest/server/src/common/access-log.ts`，开关 `ACCESS_LOG=1`（deployment.md §2.3）。
+两套每请求一行的形状一致，但**开关名与 `latency` 口径不同**（Nest 记到响应结束，tower 记到首字节），
+差异与理由写在 `docs/architecture.md` §13.3——引用日志时别把两边的数字混着读。
 
 ### 1. 两条渲染路，互不重叠
 
