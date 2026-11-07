@@ -156,6 +156,12 @@ cwd 拼接），且它的 `assets` **不能写 `outDir`**（写了就按 cwd 拼
 **改服务端行为要两侧同步改**，否则线上与契约源会静默分叉——移植期的对照关系与差异记在
 `docs/architecture.md` §13。
 
+**但两套现在不能同时接同一个活库。** `nest/` 那套的镜像与 compose service 已就位
+（`make deploy-nest` 建镜像、`make nest-up` 启动，service 挂在 profile 上，寻常 `make deploy`
+不会拉起它）。动手起第二后端之前先读 `docs/architecture.md` §13.2「四处没有进程所有权的写」：
+启动收尾、任务 worker、journal 的 `seq` 这三处都没有 owner 概念，其中「一套重启把另一套在飞的轮次
+判死」已在库副本上实测复现（`docs/verification.md` §28.2）。
+
 **一条已经闭合的例外**：可观测性件曾刻意不同步——Rust 侧的 DEBUG 访问日志（`tower_http::trace`）没有
 往 `nest/server/` 搬，理由是「那棵树是回滚底牌、不是演进目标」。§4.5 撤销退役后这个理由不再成立，
 2026-11-07 已补齐：`nest/server/src/common/access-log.ts`，开关 `ACCESS_LOG=1`（deployment.md §2.3）。

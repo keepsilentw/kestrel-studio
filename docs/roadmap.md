@@ -195,10 +195,26 @@ openai 面须置 compat 位 `stream_include_usage = true`，否则全程 `usage:
 
 - **2026-11-07 策略变更：不退役 Nest，双后端长期并存**（§4.5）。P4 取消，`nest/` 一行不删也不再是
   待删对象。三个待定项同日都定了：入口形态 = **按子域反代、各占一个宿主端口**（不是按路径分，原因
-  写在 §4.5 与 deployment.md §1.1）；Nest 侧**访问日志已补**（`common/access-log.ts` + `ACCESS_LOG=1`，
-  deployment.md §2.3）；双进程共用同一个 SQLite 列为**待做的宿主机实测**。**剩下的活**是两件落地动作，
-  都要一次真实部署才验得了：compose 加回 Nest 这个 service（含 `Dockerfile` 的 node 阶段与 `deploy.sh`
-  恢复上传构建上下文），以及 openresty 新增那个 server 块。
+  写在 §4.5 与 deployment.md §1.1）；Nest 侧**访问日志已补并在宿主机跑通**（`common/access-log.ts` +
+  `ACCESS_LOG=1`，deployment.md §2.3、verification.md §28.3）；双进程共用同一个 SQLite 的那次实测
+  **做了一半**——镜像与单容器已在宿主机验证（§28），并行没测，而且已经测出一处 Critical。
+- **第二后端现在不能接活库**（这是 §4.5 落地过程中查出来的，逐条证据在
+  [architecture.md](./architecture.md) §13.2「四处没有进程所有权的写」）。要做的是给这三件事加上
+  所有权，之后才谈得上 `make nest-up`：
+  1. **启动收尾**要认 owner——现在两套任何一套重启都会把另一套在飞的轮次判死，
+     2026-11-07 在库副本上实测复现（verification.md §28.2）。最小改法是 `messages` 加一个写入者列，
+     收尾谓词只碰自己 owner 且 `created_at` 早于 N 分钟前的行。
+  2. **任务 worker** 要 claim——`UPDATE … SET status='claimed', attempts=attempts+1 WHERE id=?
+     AND status IN ('queued','running')` 之后再动作；否则两套各 8s 的 tick 会把同一个视频任务
+     查两遍、镜像下两遍、`assets` 与消息写两遍。
+  3. **journal 要单一写入者**：`seq` 现在两侧各自算，且 `idx_events_conversation` 是普通索引，
+     没有 UNIQUE 拦重复；Rust 侧那个"事务"其实是 deferred BEGIN（`db.rs:121-123` 的注释与 sqlx
+     实际发的语句不符），并行时会 `SQLITE_BUSY_SNAPSHOT` 回滚**丢帧**。加 UNIQUE 是最后一步——
+     前两条没修好之前加它，等于把库变成启动即报错。
+  - 第四处（每会话单轮的锁只在进程内存）由**入口按子域固定**这条决策来挡，不需要改代码；但它是
+    固定入口真正的理由，不是偏好。
+- openresty 那个新 server 块与第二个子域的 DNS 记录仍是待做的运维动作（deployment.md §1.1 那两件
+  配置项）。子域名叫什么、走 `*.try.*` 还是新记一条 A 记录，要你定。
 - 红隼 logo 目前是占位 SVG（`nest/client/public/logo.svg`），待替换为正式图片。
 - 对话页有 1 条 Chrome *issue*：`Lazy-loaded images should have explicit dimensions`，来自 SSR 回放
   那一段 `loading="lazy"` 的资产 `<img>`——线上出自 `rust/server/src/view/templates.rs:209`
@@ -513,11 +529,17 @@ P1 的判据一条不减（仍是真实麦克风采集 1 条），但它的**后
 - **双进程共用同一个 SQLite 文件**列为一次**待做的宿主机实测**（两侧建表 / 补列 / seed 都在进程启动
   时做，这个组合从没同时跑过）。它排在 Nest 那套真正重新上线之后——在那之前这个组合无法构造。
 
-**仍未落地的两件**（要做需要一次真实部署，本机不启动服务也不启动 Docker）：
+**同日落地的部分**（deployment.md §1.1 的命令与读数，证据在 verification.md §28）：
 
-- `docker-compose.yml` 加回 Nest 作为第二个 service + `Dockerfile` 的 node 阶段 + `deploy.sh` 恢复上传
-  构建上下文。旧管线并不便宜：`deploy.sh` 自 11-02 起不上传 `node_modules`，宿主机盘上那份是
-  2026-09-27 拆分前的残留，不能直接用（deployment.md §1.1 那三条），重新上线等于重走一次旧镜像构建。
-- openresty 的新 server 块（改完 `nginx -t` 再 reload，流程与三个关键点见 deployment.md §3）。
-- 两个进程同时启动、共用同一个 SQLite 文件：两侧的建表 / 补列 / seed **都发生在进程启动时**
-  （§3「多账号与超管」那条），这个组合从来没有同时跑过，是没测的事实，不是已知的风险。
+- `Dockerfile.nest`（单阶段，534 MB）+ compose 里 profile 之后的 `nest` service（默认端口 8849）
+  + `scripts/deploy-nest.sh` + `make deploy-nest / nest-up / nest-down / nest-logs`。已在宿主机
+  建好镜像，并在**库副本**上跑通一次性容器：`/login` 200、`ACCESS_LOG=1` 每请求一行。
+- 因为 `nest` service 挂在 `profiles: ["nest"]` 上，普通 `make deploy` 与 `docker compose up -d`
+  的行为**一个字都没变**，第二后端不会被一次寻常部署顺带拉起来。
+
+**仍未落地的一件，加一道闸**：
+
+- openresty 的新 server 块与第二个子域（要先定域名）。改完 `nginx -t` 再 reload，三个关键点见
+  deployment.md §3。
+- **闸**：在 §3 那三处所有权改造完成之前，`make nest-up` 对着活库跑是已知会坏数据的操作
+  （architecture.md §13.2 第 1、2 条）。这不是「风险」而是已经实测过一次的行为。

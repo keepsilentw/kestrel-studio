@@ -475,3 +475,26 @@ HTTP 面上的重定向、状态码与 cookie，把它们改成不起服务就�
 `access-log.test.ts`（6 条）与 `configuration.test.ts` 里 `ACCESS_LOG` 那组（8 条）。所以要么当年那
 461 是在允许 bind 的环境里跑的，要么那六个文件当时没进同一轮——两种解释都说明**别把 §20 那句当保证
 引用**；跑 nest 全量之前先确认自己在不在沙箱里，需要的是「文件级判据」而不是「一条都没红」的印象。
+
+## 22. Nest 管线重新上线：两处脚本首跑即错，一条构建假设被推翻（2026-11-07）
+
+**其一，白名单漏了 `docker-compose.yml`。** `scripts/deploy-nest.sh` 照抄 Rust 那套「显式白名单」时
+只放了 `Dockerfile.nest` 与 `.dockerignore`，于是宿主机上的 compose 还是上一次 Rust 部署上传的那份，
+里面**没有 `nest` service**，构建直接 `no such service: nest`。判据很干脆：**只要新 service 是这次
+加的，compose 文件本身就必须进同一次上传的上下文**——否则仓库里的定义和宿主机上的定义不是同一份。
+
+**其二，`NEST_HOST_PORT='\${NEST_HOST_PORT:-8849}'` 这个写法是错的。** 本意是"把默认值留给远端展开"，
+实际经 ssh 的参数拼接传到远端成了字面量串，compose 拿它当地址解析，报
+`invalid IP address: ${NEST_HOST_PORT`。两重多余：compose 自己对 `${VAR:-default}` 做插值，不需要
+外面喂；而**构建阶段根本用不到端口**。删掉前缀即可。教训是别在 ssh 的引号里再套一层转义去"预展开"
+别人家的模板语法。
+
+**其三，旧 Dockerfile 的 golang 原生编译阶段已经是死件。** 那条
+`npm_config_nodedir=/usr/local node-gyp rebuild` 是从拆分前的管线抄来的（当时 better-sqlite3 需要
+在 Linux 上重编）。v13 把八个平台的 prebuild 打进包里（`…/better-sqlite3/prebuilds/linux-x64.node`
+等），require 时按平台挑：实测那次 rebuild 花了 **1.8 秒**、`gyp info ok`，但
+`build/Release/` 里只有空的 `obj.target`，**没有 `.node`**——因为压根没东西要编，而应用照样开库。
+判据：**看 `build/Release/*.node` 在不在，别信 `gyp info ok`**；1.8 秒编不出 SQLite。据此
+`Dockerfile.nest` 改成单阶段，镜像从历史那版的 1.27 GB 降到 534 MB，宿主机也不再需要 `golang:1.24`
+这一层。deployment.md §1.1 那三条"盘上残留不能直接用"的告诫随之作废（现在每次都由
+`deploy-nest.sh` 按当前布局重新打包上传）。

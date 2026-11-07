@@ -623,6 +623,42 @@ WebSocket 的 upgrade 不经过 Express，所以 `AuthenticatedGuard` 对它无�
 - **数据模型与事件**：DDL 与 `ADDED_COLUMNS` 逐条照搬；事件日志仍是"先插 `seq`
   再扇出"，重放帧直接吐库里的 `payload` 原文，不重新序列化，故与实时帧逐字节相同。
 
+- **四处没有进程所有权的写**（2026-11-07 新增这一节：上面每条讲的都是「切换」，§4.5 之后
+  「同时在线」成了目标，于是并行这件事必须单独写清楚）。**结论：两套现在不能同时接同一个活库。**
+
+  1. **启动收尾会抓走对方在飞的轮次**——Critical，已在库副本上实测。两侧谓词完全同形，都不带
+     owner、也不带时间下界：`UPDATE messages SET content='本轮处理失败：服务在轮次完成前中断。'
+     WHERE role='assistant' AND content=''`（`rust/server/src/conversation/repo.rs:341`；
+     `nest/server/src/conversation/conversation.service.ts:392,400` 是同谓词的 SELECT + UPDATE）。
+     占位行从创建起就是空串、只有 finalize 会写它、流式期间从不中途写，所以**任何一套重启都会把
+     另一套正在 streaming 的那一轮判死**，还替它往 journal 补一帧 `turn_error`
+     （`rust/server/src/main.rs:113-122` / `nest/server/src/agent/turn-runner.service.ts:52-56`）。
+     实验与读数见 verification.md §28.2。
+  2. **任务 worker 不 claim**——Critical。`active()` 两侧都是纯 SELECT 非终态行
+     （`nest/server/src/task/task.service.ts:79-87`、`rust/server/src/task/service.rs:126-138`），
+     写回是无前置条件的 `UPDATE … WHERE id = ?`，没有 owner 也没有 attempts 递增。两套各自的
+     8s tick 会扫到同一行 → 双份 provider 查询（重复计费）、双份镜像下载、双份 `assets` 行与
+     双份「视频生成完成」消息。非终态窗口是整段渲染（分钟级），所以重复近乎必然。
+  3. **`seq` 分配没有单一写入者**——High。Nest 是 `SELECT MAX(seq)` 再 `INSERT`，两条
+     autocommit 语句（`conversation-events.service.ts:101-118`）；Rust 把它包在 `pool.begin()`
+     里（`conversation/events.rs:57-99`），而 sqlx 发的是**裸 BEGIN（deferred）**——
+     `db.rs:121-123` 注释里写的「BEGIN IMMEDIATE」与实际不符。交叉时有两种坏法：Nest 侧算出同一个
+     `seq`，而 `idx_events_conversation` 是普通索引（`database.module.ts:92` / `db.rs:84`），
+     **没有 UNIQUE 拦它**，重复静默落库；直播与重放都按 `seq >` 过滤，于是同 seq 的兄弟行永远看不见。
+     Rust 侧则是 deferred 事务升级撞 `SQLITE_BUSY_SNAPSHOT`、整个 publish 回滚，**那一帧根本没落库**
+     （失败只落一条 WARN：`rust/server/src/agent/service.rs:271-273`）。
+  4. **「每会话只一轮」的锁只在本进程内存**——High。`rust/server/src/state.rs:28,79-90` 的
+     `claim_turn` 与 Nest 侧的 running Map（`turn-runner.service.ts:29,96-98` + `chat.controller.ts:110-114`
+     的 409）互相看不见，同会话并发两轮就是两次真实扣费——这正是两侧注释里写过的
+     "that duplicated a paid video submission"（`agent.service.ts:152-155`、`repo.rs:328-331`）。
+     §4.5 定的**按子域固定入口**恰好是这条的护栏：一个人恒定落在一套上，就不存在两套同时收到
+     同一会话的提交。这也是为什么入口形态不是偏好问题。
+
+  对齐的部分也记一句，免得下次重复调查：`journal_mode=WAL` + `foreign_keys=ON` 两侧相同
+  （`database.module.ts:129-130` / `db.rs:118-119`），都不设 busy_timeout（默认各自 5000ms），
+  `synchronous` 都保持 FULL，也没有任何事务跨越网络 I/O 或文件写入。**风险不在锁参数上，在上面
+  这四处缺 owner。**
+
 ### 13.3 现状与未做的部分
 
 已实现并通过单元测试（清单见 [verification.md](verification.md) §9）：配置与环境叠加、

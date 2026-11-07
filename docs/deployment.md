@@ -52,12 +52,34 @@ C 侧编得过、链接过不去，2026-10-30 当天删掉换成 zigbuild，全�
 值，而签名口径又不同（§1.2），结果是每次跨路径浏览都被登出。子域是**不同的 host**，不带 `Domain`
 属性的 cookie 因此天然互相隔离，一个人恒定落在一套上。
 
-操作形态仍是把 `Dockerfile` / `docker-compose.yml` /
-`scripts/deploy.sh` 退回切换前的提交，并跑一次
-`NEST_BASE_IMAGES=1 scripts/bootstrap-host.sh`。旧管线的两个基础镜像
-（node:24-bookworm-slim、golang:1.24）在 lavo-test 上**已经缓存过**，只有全新机器才需要拉。
-两套**同时在线**时 compose 里是两个 service、两个宿主端口（`HOST_PORT` 那套映射，见 §2；Rust 现在占
-8848，Nest 另取一个），各自一个子域经 §3 的反代分开。**两件随之而来的配置项**：
+**2026-11-07 的落地形态**：Nest 有了自己的 `Dockerfile.nest` 与自己的 compose service，不再需要
+「把三个文件退回切换前的提交」那套动作。
+
+```bash
+make deploy-nest   # 打包 dist + node_modules + public（归档约 96 MB）→ 上传 → 宿主机建镜像；不启动
+make nest-up       # 真的把第二后端起来 —— 先读下面那条闸
+make nest-down     # 停掉它，Rust 那边一动不动
+make nest-logs
+```
+
+- compose 的 `nest` service 挂在 **profile** 上（`profiles: ["nest"]`），所以 `make deploy` 与
+  `docker compose up -d` 这些既有路径**一个字都没变**：第二后端不会因为一次普通部署被顺带拉起来。
+  `make deploy-status` 因此改成 `docker compose ps --all`，否则第二后端在核对里是隐形的。
+- 镜像是**单阶段**的，基础层只用宿主机已缓存的 `dockerproxy.net/library/node:24-bookworm-slim`
+  （建完 534 MB）。旧管线里那个 golang:1.24 的原生编译阶段不需要了：better-sqlite3 v13 在包里带了
+  八个平台的 prebuild，require 时按平台挑。实测那条 `node-gyp rebuild` 只产出一个空的
+  `build/Release/obj.target`，而应用照样开库、`/login` 200（verification.md §28.1，
+  踩坑台账 implementation-notes.md §22）。宿主机上那六层 1.3 GB 的 `<none>` 是旧管线的遗产，
+  与这条路径无关了。
+- **`NEST_BASE_IMAGES=1 scripts/bootstrap-host.sh` 这一步也不再需要**（node 基础层已在）。全新宿主机
+  才按 §1 的镜像站规矩预热。
+- 盘上 2026-09-27 那份残留（`src/`、`dist/`、拆分前的根 `node_modules`、`nest-cli.json` 等）跟这条
+  路径再无关系——`deploy-nest.sh` 每次按当前 monorepo 布局重新打包上传。它们现在只是没清理的磁盘占用。
+- 端口按 §2 那条老规矩由 compose 注入（`PORT=${NEST_HOST_PORT:-8849}`），**不进那份永不覆盖的
+  `.env`**：`.env` 里还留着 `PORT=8848`，两套各自的 `environment` 会盖住它，谁也不会读到那个残留值。
+
+两套**同时在线**时是两个 service、两个宿主端口（Rust 占 8848，Nest 默认 8849），各自一个子域经 §3
+的反代分开。**两件随之而来的配置项**：
 
 1. openresty 要新增一个 server 块（`/opt/1panel/www/conf.d/<新子域>.conf`），上游同样写
    `172.17.0.1:<端口>`，SSE 与语音那两条 `location` 规则照 §3 的三个关键点抄。
@@ -65,20 +87,11 @@ C 侧编得过、链接过不去，2026-10-30 当天删掉换成 zigbuild，全�
    就是让外部服务去敲另一个端口的门；两套的 `SESSION_SECRET` 相同（同一份 `.env`），所以签名能不能
    被另一套验通**没有实测过**，别把「凑巧能用」当成设计。
 
-**盘上那份 Nest 残留不能直接用。** `/opt/kestrel-studio` 里还留着 2026-09-27 上传的
-`node_modules/`（353 MB）、`dist/`、`src/`、`package.json`、`nest-cli.json`、
-`tsconfig.json`、`vite.config.mts`，但：
-
-1. `deploy.sh` 自 10-30 起**不再上传 `node_modules`**，回滚时得把那份旧文件重新塞进构建上下文；
-2. 仓库在 11-02 已按后端技术栈拆包（依赖下沉到 `nest/server/` 与 `nest/client/` 两份清单），
-   而盘上那份是**拆分前的根 `node_modules`**，与退回后的目录布局不一定对得上；
-3. 那份是 macOS 上装的，linux 侧的 better-sqlite3 仍需在构建时重编——这正是旧 Dockerfile
-   两阶段在做的事。
-
-所以这一步的真实前提是：退回切换前的提交后**在开发机重装依赖并按旧脚本重新打包上传**，
-不要以为跑一次 `bootstrap-host.sh` 就能起来。旧的 `kestrel-studio` Nest 镜像（1.27 GB /
-1.3 GB 那几层 `<none>`）仍在宿主机上，但 `kestrel-studio:latest` 已被 Rust 镜像占掉，
-用它回滚需要先确认那份 compose 配置与 `.env` 的 `PORT` 仍然匹配——未经实测，别当保险。
+**`make nest-up` 前面有一道闸**：动手之前读 architecture.md §13.2 那「四处没有进程所有权的写」。
+两套共用同一个 SQLite 文件与同一个 `storage/`，其中两处判为 Critical——启动收尾会替对方把在飞的轮次
+判死（2026-11-07 在库副本上实测复现，verification.md §28.2），任务 worker 不 claim 会把一个视频任务
+跑两遍。**在加上 owner 之前，对着活库起第二后端是已知会坏数据的操作。**要做隔离验证就用
+`deploy-nest.sh` 末尾那段 `docker run`：拿 `.backup` 出来的库副本挂进去，别挂 `./data`。
 
 **Nest 重新接管流量时，会再登出一次所有人**：Nest 只认 `sess.passport.user`，读不懂 Rust 写在顶层 `user` 的行
 （反向是通的，Rust 两个位置都认）。所以凡是在 Rust 上登录过的会话，退回 Nest 后都要重新登录。

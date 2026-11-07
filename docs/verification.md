@@ -1699,6 +1699,60 @@ view / chat ×2）。与 §20 那条 cargo 假红同一类环境问题，**不�
 - 两套各自的 `PUBLIC_BASE_URL` 与跨套帧 URL 的签名可达性（deployment.md §1.1 第 2 条）。
 - 双进程同时启动共用一个 SQLite 文件（两侧建表 / 补列 / seed 都在启动时做，这个组合从没跑过）。
 
+## 28. Nest 镜像在宿主机建起来跑通了，顺带实测「启动收尾会抓走对方的轮次」（2026-11-07）
+
+全程没动活库：镜像构建之后，一次性容器挂在 `sqlite3 .backup` 出来的**库副本**上，只监听
+`127.0.0.1:8849`，测完删容器与副本。活库那侧只做过 `mode=ro` 查询。
+
+### 28.1 镜像
+
+- `scripts/deploy-nest.sh` 归档 **96 MB**（`dist` + `node_modules` + `public` + `Dockerfile.nest` +
+  `docker-compose.yml`）→ 宿主机解包 → `docker compose --profile nest build nest`。
+- **单阶段镜像 534 MB**（历史两阶段版 1.27 GB）。基础层 `dockerproxy.net/library/node:24-bookworm-slim`
+  已在宿主机缓存（230 MB），`golang:1.24` 不再被引用。
+- better-sqlite3 **不需要在宿主机重编**：包内 `prebuilds/` 带着八个平台的 `.node`
+  （`linux-x64`、`linuxmusl-x64`、`darwin-arm64`…），require 时按平台挑。原来按旧管线保留的
+  `node-gyp rebuild` 实测只产出一个空 `build/Release/obj.target`，应用照样开库，于是从
+  `Dockerfile.nest` 删掉了（台账 implementation-notes.md §22）。
+- 容器起来即服务：`GET /login` **200**，路由表全部映射成功，`Nest application successfully started`。
+
+### 28.2 那条 Critical 是实测出来的，不是推的
+
+1. 活库当前 `role='assistant' AND content=''` 的行是 **0 条**——此刻没有在飞轮次会被误伤，
+   但代码路径是通的。
+2. 副本初始读数：`users=2 | messages=67 | conversation_events=6471 | turn_error=1`。
+3. 手工植入一条空占位行，模拟 Rust 正在 streaming 的那一轮。
+4. 起 Nest 容器，8 秒后读数：**占位行 0 条**，带「本轮处理失败：服务在轮次完成前中断。」的行
+   由 2 变 **3**，journal 里 `turn_error` 由 1 变 **2**，末尾三行是
+   `14|1427|turn_error` / `14|1426|turn_error` / `14|1425|text`（1426 那帧是 §26 那次启动收尾留下的）。
+   → **Nest 一启动就把另一套在飞的那一轮判死，并替它发出终态帧**，与 architecture.md §13.2
+   第 1 条预测一致。页面侧的症状会是：composer 提前解锁显示"失败"，随后又收到同一 `messageId`
+   的真实内容。
+5. 顺带一条幂等性正证：`users` 仍是 2 行（`1|admin|user`、`2|tww316|super`）——Nest 的 seed 与
+   超管创建在已有库上没有重复插行。
+
+### 28.3 访问日志在宿主机上的运行时形状
+
+```
+[Nest] 1 - 11/07/2026, 8:52:53 AM VERBOSE [access] method=GET uri=/login status=200 latency=19ms
+[Nest] 1 - 11/07/2026, 8:52:53 AM VERBOSE [access] method=GET uri=/assets/main.css status=200 latency=11ms
+[Nest] 1 - 11/07/2026, 8:52:53 AM VERBOSE [access] method=GET uri=/admin status=302 latency=3ms
+[Nest] 1 - 11/07/2026, 8:52:53 AM VERBOSE [access] method=GET uri=/ status=302 latency=1ms
+```
+
+4 个请求 4 行，`ACCESS_LOG=1` 是开关（关档时一行不写，由单测钉着）；静态资源留行这点与 Rust 侧
+对齐。**日志带 ANSI 色码**，`docker logs | grep` 前要先去色——同 §13.8 那条坑，这次也没绕过去。
+
+### 28.4 边界：这不是「双后端可以上线了」
+
+- **两套同时跑没有测过。** §13.2 那四处里只有第 1 处（启动收尾）本次被实测；worker 不 claim、
+  `seq` 无 UNIQUE、内存单轮锁这三处都要并行才会兑现，单容器实验碰不到。
+- 植入行是手工 `INSERT` 的，不是 Rust 真实生成的轮次；谓词命中一致，但形状不完全等价。
+- 第二后端**没接任何流量**：8849 只发布在宿主机 127.0.0.1（安全组仍只放行 80/443），openresty 里
+  没有新 server 块，`nest` service 在 compose 里仍处于 profile 之后、未启动状态。
+- `PUBLIC_BASE_URL` 跨套可达性仍未测（deployment.md §1.1 第 2 件配置项）。
+- Rust 容器全程未受影响：`make deploy` 之后与本次实验之后各核对一次，`Up`、`/login` 200、
+  `client="wasm"` 保持原样（§27.5 那笔）。
 ### 27.5 同日 16:28 的部署这一笔（它没有改变线上行为）
 
 今天两个提交都没有动 Rust 服务端与客户端，所以 `make deploy` 走的是一条**镜像层全 CACHED**的路径：
