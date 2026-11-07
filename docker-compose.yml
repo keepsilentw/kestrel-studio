@@ -47,3 +47,44 @@ services:
     volumes:
       - ./data:/app/data
       - ./storage:/app/storage
+
+  # The second backend. Both stacks are long-lived (docs/roadmap.md §4.5), so this
+  # is not a rollback copy — it is the Nest service, permanently alongside Rust.
+  #
+  # It sits behind a compose profile on purpose: `docker compose up -d` — which is
+  # what `make deploy` and `make deploy-restart` run — must keep starting exactly
+  # the Rust container it started before. Bringing this one up is a deliberate
+  # action (`make nest-up`), because the two processes share one SQLite file and one
+  # storage directory, and that combination has never run (the pending check in
+  # roadmap.md §4.5). Until it passes, staying profile-gated is the safe default.
+  nest:
+    profiles: ["nest"]
+    build:
+      context: .
+      dockerfile: Dockerfile.nest
+    image: kestrel-studio-nest:latest
+    container_name: kestrel-studio-nest
+    restart: unless-stopped
+    ports:
+      # Published on the same interface as the Rust service (compose's default).
+      # Neither port is reachable from the public network: the security group only
+      # allows 80/443, and openresty is the only entry point (deployment.md §3).
+      - "${NEST_HOST_PORT:-8849}:8849"
+    env_file:
+      - .env
+    environment:
+      # Same rule as the Rust service's PORT: injected by compose, never read from
+      # the never-rewritten `.env`.
+      - PORT=${NEST_HOST_PORT:-8849}
+      # The Nest counterpart of RUST_LOG (deployment.md §2.3, architecture.md §13.3).
+      # Empty means off; only `1` / `true` turn the per-request line on, and like
+      # RUST_LOG it must never be baked into `.env`.
+      - ACCESS_LOG=${ACCESS_LOG:-}
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    volumes:
+      - ./data:/app/data
+      - ./storage:/app/storage

@@ -101,6 +101,8 @@ help:
 	@echo "    make build-linux            交叉编译静态 musl 二进制（需 zig + cargo-zigbuild）"
 	@echo "    make deploy                 一键部署到 $(DEPLOY_HOST)"
 	@echo "    make deploy-status / deploy-logs / deploy-restart / deploy-down"
+	@echo "    make deploy-nest            打包并构建 Nest 那套的镜像（不启动，见目标注释）"
+	@echo "    make nest-up / nest-down / nest-logs   第二后端的启停与日志（共用同一个库，先读 §13.2）"
 	@echo ""
 	@echo "  单个包的 check/test 直接调 pnpm --dir 或 cargo（这里只保留跨包编排）。"
 
@@ -269,6 +271,24 @@ build-linux:
 deploy: build-linux build-wasm
 	./scripts/deploy.sh
 
+# The second backend (roadmap.md §4.5). This ships the context and builds the
+# image, then stops: the two processes share one SQLite file and one storage
+# directory, and three of their writes carry no process ownership — the boot
+# finalizer, the task worker and the per-conversation `seq` (architecture.md
+# §13.2). Starting it is therefore `make nest-up`, a separate deliberate step, not
+# a side effect of a deploy.
+deploy-nest: build-nest
+	./scripts/deploy-nest.sh
+
+nest-up:
+	ssh $(DEPLOY_HOST) "cd $(DEPLOY_DIR) && docker compose --profile nest up -d nest"
+
+nest-down:
+	ssh $(DEPLOY_HOST) "cd $(DEPLOY_DIR) && docker compose --profile nest stop nest"
+
+nest-logs:
+	ssh $(DEPLOY_HOST) "docker logs --tail=100 -f kestrel-studio-nest"
+
 # The subset in crates/md is a deliberate choice, so "does the assistant actually
 # write tables / images / task lists" is a question to measure, not to remember.
 # Open the live database read-only: the server holds it, and this must never write.
@@ -281,7 +301,10 @@ census-prod:
 	ssh $(DEPLOY_HOST) 'sqlite3 "file:$(DEPLOY_DIR)/data/kestrel-studio.db?mode=ro"' < scripts/markdown-census.sql
 
 deploy-status:
-	ssh $(DEPLOY_HOST) "cd $(DEPLOY_DIR) && docker compose ps"
+	# --all so a service started under the `nest` profile shows up here too; without
+	# it compose lists only the default-profile services and the second backend is
+	# invisible to whoever is checking.
+	ssh $(DEPLOY_HOST) "cd $(DEPLOY_DIR) && docker compose ps --all"
 
 deploy-logs:
 	ssh $(DEPLOY_HOST) "cd $(DEPLOY_DIR) && docker compose logs -f --tail=100"
