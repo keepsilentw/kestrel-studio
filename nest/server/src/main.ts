@@ -8,6 +8,7 @@ import hbs from 'hbs';
 import { join } from 'node:path';
 import passport from 'passport';
 import { AppModule } from '@/app.module';
+import { createAccessLogMiddleware } from '@/common/access-log';
 import { loadConfig } from '@/config/configuration';
 import { loadEnvFile } from '@/config/env-file';
 import { SQLITE_CONNECTION } from '@/database/database.module';
@@ -20,6 +21,11 @@ async function bootstrap(): Promise<void> {
   const config = loadConfig();
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   app.disable('x-powered-by');
+
+  // Mounted first, before the static handler, so an asset request leaves a line
+  // too — the Rust server logs `/assets/main.css` and the two have to stay
+  // comparable. Gated by `ACCESS_LOG`, which is off by default (common/access-log.ts).
+  app.use(createAccessLogMiddleware({ enabled: config.accessLog }));
 
   // The build product is `nest/server/dist`, so the compiled entry point sits
   // three levels under the repo root. `public/` is the asset directory both

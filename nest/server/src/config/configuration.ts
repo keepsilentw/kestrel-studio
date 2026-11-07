@@ -50,6 +50,13 @@ export interface AppConfig {
   databaseFile: string;
   storageDir: string;
   publicBaseUrl: string;
+  /**
+   * One access line per request (`common/access-log.ts`). Off unless asked for, so
+   * nobody turns production log volume up by accident — the Rust server gates the
+   * same thing behind `RUST_LOG=debug`, and a forgotten debug arm grew that log to
+   * 16 MB in 2.8 days (docs/verification.md §21, docs/deployment.md §2.1).
+   */
+  accessLog: boolean;
   /** Null when either `SUPER_ADMIN_*` variable is absent — then no super admin is seeded. */
   superAdmin: SeedAccount | null;
   bailian: BailianConfig;
@@ -114,6 +121,15 @@ function readSessionSecret(isProduction: boolean): string {
 }
 
 /**
+ * `ACCESS_LOG=1` (or `true`, any case). Anything else — including a blank value —
+ * keeps the access log off, which is also what a normal deploy gets.
+ */
+function readAccessLog(): boolean {
+  const raw = readEnv('ACCESS_LOG');
+  return raw !== null && (raw === '1' || raw.toLowerCase() === 'true');
+}
+
+/**
  * Both variables must be present, and neither may be blank: a half-configured
  * super admin is a locked-out /admin with no way to notice.
  */
@@ -135,6 +151,7 @@ export function loadConfig(): AppConfig {
     databaseFile: readEnv('DATABASE_FILE') ?? join('data', 'kestrel-studio.db'),
     storageDir: readEnv('STORAGE_DIR') ?? 'storage',
     publicBaseUrl: (readEnv('PUBLIC_BASE_URL') ?? DEFAULT_PUBLIC_BASE_URL).replace(/\/+$/, ''),
+    accessLog: readAccessLog(),
     superAdmin: readSuperAdmin(),
     bailian: {
       baseUrl: (readEnv('BAILIAN_BASE_URL') ?? DEFAULT_BASE_URL).replace(/\/+$/, ''),

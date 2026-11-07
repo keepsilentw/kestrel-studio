@@ -22,6 +22,7 @@ const ENV_KEYS = [
   'BAILIAN_REASONING_EFFORT',
   'BAILIAN_VIDEO_MODEL_T2V',
   'BAILIAN_VIDEO_MODEL_I2V',
+  'ACCESS_LOG',
 ] as const;
 
 const saved = new Map<string, string | undefined>();
@@ -54,6 +55,8 @@ describe('loadConfig — 默认值', () => {
     expect(config.databaseFile).toBe(join('data', 'kestrel-studio.db'));
     expect(config.storageDir).toBe('storage');
     expect(config.publicBaseUrl).toBe('https://try.kestrel.justwork.link');
+    // Off unless asked for: a deployment must not turn its log volume up by accident.
+    expect(config.accessLog).toBe(false);
     // No super admin without credentials — the repository must not describe a
     // working login for a deployed instance.
     expect(config.superAdmin).toBeNull();
@@ -106,6 +109,20 @@ describe('loadConfig — BAILIAN_REASONING_EFFORT', () => {
     // panel, which is the feature this setting exists to drive.
     process.env.BAILIAN_REASONING_EFFORT = 'extreme';
     expect(loadConfig().bailian.reasoningEffort).toBe('high');
+  });
+});
+
+describe('loadConfig — ACCESS_LOG', () => {
+  it.each(['1', 'true', 'TRUE', ' true '])('%s 打开访问日志', (value) => {
+    process.env.ACCESS_LOG = value;
+    expect(loadConfig().accessLog).toBe(true);
+  });
+
+  it.each(['0', 'false', 'yes', 'debug'])('%s 不打开', (value) => {
+    // Deliberately not a general truthiness read: `ACCESS_LOG=0` must not turn the
+    // log on, and a Rust-style `RUST_LOG=debug` value has no meaning here.
+    process.env.ACCESS_LOG = value;
+    expect(loadConfig().accessLog).toBe(false);
   });
 });
 
