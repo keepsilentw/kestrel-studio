@@ -14,11 +14,11 @@
 |---|---|---|---|
 | 一 | 上述一期内容 | 已完成 | 端到端已验证（[verification.md](verification.md) §2） |
 | 二 | 抽出 `/api/v1` + 对话级 SSE（含断线续传）+ 三模式 | 直接服务多端目标，不依赖内核决策，做完不返工 | **已全部落地**（2026-10-21）：三模式早先完成；`/api/v1` + 提交/订阅分离 + `seq` 续传见 [architecture.md](./architecture.md) §4.2，实测证据见 [verification.md](./verification.md) §8 |
-| 三 | 异步任务子系统 + 视频能力 | 独立子系统，与内核决策解耦 | **已落地**，见 `nest/server/src/task/`（提交即返回、后台轮询、成功即镜像、追加消息并推送）；端到端未记录 |
+| 三 | 异步任务子系统 + 视频能力 | 独立子系统，与内核决策解耦 | **已落地**，见 `nest/server/src/task/` 与 `rust/server/src/task/`（提交即返回、后台轮询、成功即镜像、追加消息并推送）；端到端**已于 2026-11-06 在新链路上实测**——`视频` 模式在已有 c=11 提交，工具帧回 `Video task 3 submitted`，本轮立即结束，几分钟后 asset 19 无重载落到页面，库侧 `generation_tasks` 第 3 行 `kind=video status=succeeded asset_id=19`，逐条见 [verification.md](./verification.md) §23.3 |
 | 四 | **语音会话**（独立入口 + 工具调用） | 与内核决策无关，走 §2.4.1 之外的一条独立通路。设计已迁至 [architecture.md](./architecture.md) §11 | **已落地**，本地与线上端到端实测均通过（[verification.md](verification.md) §4） |
 | 五 | 内核选型落地（保持 TS 增强 / 引入 Rust sidecar） | 前面各期完成后，内核的真实收益才有可比基准 | 未开始 |
 | 六 | **语言迁移**：服务端改用 Rust（`rust/server/`） | 与第五期无关的独立变量：先换宿主语言，内核选型才有对照物 | **代码已落地**（2026-10-27），见 [architecture.md](./architecture.md) §13；**已接管交付链并上线**（2026-11-02，§4.4 与 verification.md §13）；离线对拍证据见 verification.md §9 |
-| 七 | **Nest/Node 技术栈退役**：服务端与 Web 客户端全部改 Rust（客户端走 Rust→WASM） | 六期把服务端迁完了，剩下的 Node 面只剩构建链与客户端；一期一期内核不掺和 | **决策已定**（2026-10-30，§4）。分期见 §4.3：P2 已上线、P3 代码到位但模板未切、P1 部分通过、**P4 未开工** |
+| 七 | **Nest/Node 技术栈退役**：服务端与 Web 客户端全部改 Rust（客户端走 Rust→WASM） | 六期把服务端迁完了，剩下的 Node 面只剩构建链与客户端；一期一期内核不掺和 | **决策已定**（2026-10-30，§4）。分期见 §4.3：P2 已上线（2026-11-02）；P3 两个页面代码到位，模板切换早已不是缺口——`CLIENT_BUNDLE` 开关 11-03 实现（[verification.md](./verification.md) §17），线上档位自 11-03 13:23 起是 `wasm`（§20，11-06 13:58 重拨 §23.1）；P1 部分通过，§13.5 那五条只剩**真实麦克风采集**1 条（§26.5）；**P4 未开工**，闸门等这一条收口 |
 
 二期至四期无论内核如何选型都不会白做。
 
