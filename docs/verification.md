@@ -1772,3 +1772,85 @@ client="wasm"`、容器 env `RUST_LOG=info`（11-06 收回的 debug 档没有被
 没取到的两条，别混进上面那张表：**登出与否没有前后基线**——「重建容器不登出任何人」是 §20 验过的
 性质，这次按该性质认定，不是这次的实测；而 **`ACCESS_LOG` 在线上还没有对应物**——镜像里只有 Rust 二
 进制，Nest 那套还没重新上线（roadmap.md §4.5），所以 §2.3 那条开关命令今天仍然只是实现的记录。
+
+## 29. `?new=1`：空舞台第一次有了自己的 URL（2026-11-08）
+
+本轮没有任何部署动作，所以这里是**源码、单元层，以及缺陷在修复前的线上包上的复现**。修复后的那一屏
+留给下次部署后复跑（§29.2）。
+
+**报来的现象**：点「新会话」，内容区清了；刷新浏览器，那条会话又完整出现在内容区。
+**不是缓存**（`localStorage` 只有 `kestrel-studio:mode`；SSR 的 HTML 不带 `Cache-Control`），是
+`GET /` 在 `?c=` 缺失时回落到「最近更新的那条」。§22.3 那次修复把地址栏改成裸 pathname，可回落不看
+query——`/` 画的仍是最近一条，所以那次修的是「这一屏」，用户报的是「下一屏」。根因与判据记在
+implementation-notes.md §23，首屏三条选择规则现在写在 architecture.md §4.1。
+
+**改法**：`?new=1` 两端同形（`rust/server/src/view/controller.rs::chat`、
+`nest/server/src/view/view.controller.ts::chat`），两个客户端把地址栏写成 `pathname?new=1`
+（`reset_to_new_conversation`、`resetToNewConversation`）。值只认 `1`，其余写法等同于不带。
+
+**质量门读数**：
+
+| 门 | 结果 |
+|---|---|
+| `cargo test`（rust server） | **168 passed** + 2 条假红（`admin::removing_an_account…` 与 `http::assets_follow_ownership…`，都是 `PermissionDenied` 建 storage 目录，§20 同一条判据）；新增那条单独跑 `ok` |
+| `vitest run __tests__/view/view.controller.test.ts` | **35 passed**（沙箱外跑的——这六个文件之一会 `app.listen(0)`，沙箱内是 §21 那条 EPERM 假红） |
+| `pnpm --dir nest/client test` | **2 files / 50 passed**（比 §22.3 那轮多一条：新会话按钮写 `?new=1`；删当前会话那条的地址栏断言同步改成 `?new=1`） |
+| 两份 `tsc --noEmit` | 通过（`nest/server` 的 tsconfig 与 tsconfig.test 各一份） |
+| `cargo test`（rust client） | **39 passed**；`cargo check --target wasm32-unknown-unknown --tests` 无 warning |
+
+**钉住的边界**（`rust/server/src/http/tests.rs::the_new_flag_paints_the_empty_shell_that_survives_a_reload`
+与 nest 侧同名用例）：带标记时 `data-conversation-id=""`、`data-start-seq=""`、无 `<article>`、侧栏那一行
+还在但不高亮；不带标记时同一路径画的仍是最近一条；`?new=on` 不认；零会话账号两种请求渲染结果相同。
+
+### 29.1 缺陷在修复前的线上包上复现了一次（2026-11-08，chrome-devtools MCP，新标签页）
+
+档位在 `wasm`，线上跑的是 11-03 13:21 那版包（§27.5：11-07 那次 `make deploy` 镜像层全 CACHED，字节
+没变），所以这一屏测的是**将被替换掉的行为**，不是这次的改动。读数：
+
+| 动作 | 地址栏 | `body[data-conversation-id]` | `#stream` 里的 `<article>` | 侧栏高亮 |
+|---|---|---|---|---|
+| 打开 `/` | `/` | `14`（`data-start-seq="1426"`） | 2 | 「请分十五个要点…」 |
+| 点「新会话」 | `/`（`search=""`） | 无 | **0** | 无 |
+| 刷新 | `/`（`search` 仍是 `""`） | **又变回 `14`** | **2** | 又亮 |
+
+刷新后 URL 一个字都没变而内容区回到了会话 14：画它的不是缓存、也不是地址栏里的残留，是服务端
+`GET /` 在 `?c=` 缺失时的回落。顺带两条——**控制台零条**（复现全程的导航，含那次刷新）；
+`fetch('/?new=1')` 在线上这一版仍返回 `data-conversation-id="14"` + 2 个 `<article>` + 1 个高亮行，
+即**这个标记还没上线**，本次改动目前只在仓库里。全程零 `POST`（空舞台上没有 id 可提），用完的标签页已关。
+
+### 29.2 修复后的那一屏还没验（下次部署后照这张表反着走）
+
+前提是按 §23.1 重拨过 `CLIENT_BUNDLE=wasm`——`make deploy` 本身会把档位带回 `nest`。
+
+1. 打开一条已有会话 → 点「新会话」→ 刷新。预期地址栏 `/?new=1`、内容区空、侧栏无高亮、
+   控制台零条、**不发任何 `POST`**（没有会话 id 可提）。
+2. 在这个空舞台上发一句话 → 刷新。预期地址栏已被 `create_conversation` 改写成 `/?c=<新 id>`、
+   那一轮由 SSR 回放 + 事件流接上，`?new=1` 不残留。
+
+## 30. 快捷键提示搬进输入框：显隐与几何（2026-11-08，chrome-devtools MCP）
+
+按用户要求把页脚那行 `Enter 发送，Shift + Enter 换行` 移进输入框，聚焦显示、失焦隐藏。设计口径与
+那条跨模板的耦合写在 architecture.md §8。
+
+**量法**：本轮不构建、不起服务（硬规则），所以拿一份**照模板逐字写的 composer 骨架**
+（`~/tmp/kestrel-hint/composer.html`，用完已删）在 `file://` 下 `<link>` **真实的**
+`nest/client/styles/main.css`，在 Chrome 里按四个状态量 `getBoundingClientRect()` 与
+`getComputedStyle()`，并把 TS 客户端那段 auto-grow（`min(scrollHeight, 200)`）照搬进去复现多行态。
+读数（视口 1440×812）：
+
+| 状态 | `opacity` | `visibility` | 提示盒高 | 提示顶 vs textarea 内容底 | `.composer-form` 高 |
+|---|---|---|---|---|---|
+| 未聚焦 | `0` | `hidden` | 11 px | 772 ≥ 769 | 82 px |
+| 聚焦（空） | `1` | `visible` | 11 px | 772 ≥ 769 | 82 px |
+| 聚焦 + 四行（长到 130 px） | `1` | `visible` | 11 px | 772 ≥ 769 | 随输入增高 |
+| 焦点在发送键上 | `0` | `hidden` | 11 px | —— | 82 px |
+
+三条结论：提示整个落在 textarea 的 14 px 下内边距带里（那条带不放正文，所以多行也不会被压住）；
+`absolute` 出画入画都不占位，焦点切换时表单高度**没变过**（82 px 三次一致）；触发器用
+`.composer-input:focus ~ .composer-hint` 而不是 `:focus-within`，最后一行就是这条的实测——焦点在
+发送键上时提示不出现。**控制台零条**，截图目视通过（提示在框内右下、发送键左侧那一角）。
+
+**仍未验的**：真实页面那一屏。`/public/` 是构建产物（`.gitignore` 第 16 行），CSS 要经
+`make build-web` 才落到 `public/assets/main.css`，模板改动要经 `make deploy` 才上线；两侧模板的
+嵌套由 §30 提到的两条契约用例钉住（rust view 套件 12 passed、nest view 套件 36 passed），
+所以漂移这一条在测试层已经关掉了，剩下的只是"上线后眼睛看一遍"。

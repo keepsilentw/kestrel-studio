@@ -616,6 +616,12 @@ fn close_stream(page: &Handle) {
 /// same call by clearing the stage in place (`resetToNewConversation` in
 /// `nest/client/scripts/main.ts`); both the 新会话 button and deleting the
 /// conversation on screen come through here, so they cannot drift apart.
+///
+/// Stripping the query was not enough, and that is what the address bar is for:
+/// `GET /` with no `?c=` still falls back to the most recent conversation, so a
+/// reload after this reset painted the page right back. The empty stage now asks
+/// for itself by name — `?new=1` (`rust/server/src/view/controller.rs`,
+/// `nest/server/src/view/view.controller.ts`).
 fn reset_to_new_conversation(page: &Handle) {
     close_stream(page);
     let dom = page.borrow().dom.clone();
@@ -649,11 +655,13 @@ fn reset_to_new_conversation(page: &Handle) {
     // The index sidebar hides with its rows, the way `clearTurnAnchors` did it.
     sync_index_visibility(page);
     // Keep the address bar honest: reloading this URL must not resurrect the
-    // conversation the page just let go of.
+    // conversation the page just let go of, which needs the empty shell to be part
+    // of the URL rather than merely the absence of one.
     if let Some(window) = web_sys::window() {
         let path = window.location().pathname().unwrap_or_default();
+        let url = format!("{path}?new=1");
         if let Ok(history) = window.history() {
-            let _ = history.replace_state_with_url(&JsValue::NULL, "", Some(&path));
+            let _ = history.replace_state_with_url(&JsValue::NULL, "", Some(&url));
         }
     }
     refresh_history(page);

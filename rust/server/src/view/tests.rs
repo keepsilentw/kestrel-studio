@@ -128,6 +128,26 @@ fn the_chat_page_carries_every_element_the_client_script_requires() {
     }
 }
 
+/// The shortcut hint moved inside the input box: the CSS only paints it while the
+/// textarea has focus (`.composer-input:focus ~ .composer-hint`), and that sibling
+/// selector is only true when the two are in the same `.composer-field`. A template
+/// that drifts back to a footer row loses the hint with no console error at all,
+/// so the position is pinned here instead. The Nest template is the same shape; its
+/// counterpart is nest/server/__tests__/view/view.controller.test.ts.
+#[test]
+fn the_shortcut_hint_sits_inside_the_input_box() {
+    let rendered = super::templates::chat_page(&page_fixture(&[], &[], Some(4), Some(12), false));
+    // The logout form in the header also closes a <form>, so measure from the
+    // composer's own opening tag.
+    let composer = rendered.find("id=\"composer-form\"").expect("the composer is rendered");
+    let field = rendered[composer..].find("class=\"composer-field\"").expect("the field wraps the textarea") + composer;
+    let hint = rendered[composer..].find("class=\"composer-hint\"").expect("the hint is rendered") + composer;
+    let form_end = rendered[composer..].find("</form>").expect("the composer form closes") + composer;
+
+    assert!(field < hint, "the hint must be inside .composer-field, not below it: {rendered}");
+    assert!(hint < form_end, "the hint must be inside the form: {rendered}");
+}
+
 #[test]
 fn the_body_cursor_attributes_match_what_the_stream_endpoint_expects() {
     let with_conversation = page_fixture(&[], &[], Some(4), Some(12), false);

@@ -231,19 +231,21 @@ const COMPOSER_AND_DIALOGS: &str = r#"  <footer class="composer">
     </div>
 
     <form class="composer-form" id="composer-form">
-      <textarea
-        id="prompt"
-        class="composer-input"
-        rows="1"
-        placeholder="描述你想要的图片，例如：一只站在岩石上的红隼，清晨逆光"
-      ></textarea>
+      <div class="composer-field">
+        <textarea
+          id="prompt"
+          class="composer-input"
+          rows="1"
+          placeholder="描述你想要的图片，例如：一只站在岩石上的红隼，清晨逆光"
+        ></textarea>
+        <p class="composer-hint"><kbd>Enter</kbd> 发送，<kbd>Shift</kbd> + <kbd>Enter</kbd> 换行</p>
+      </div>
       <button type="submit" class="composer-send" id="send" aria-label="发送">
         <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
           <path d="M3 20.5 21 12 3 3.5 3 10l12 2-12 2z" fill="currentColor"/>
         </svg>
       </button>
     </form>
-    <p class="composer-hint"><kbd>Enter</kbd> 发送，<kbd>Shift</kbd> + <kbd>Enter</kbd> 换行</p>
   </footer>
 
   <dialog class="preview" id="preview">

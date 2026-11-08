@@ -84,6 +84,21 @@ hbs 只负责渲染首屏骨架：登录态判断、历史会话侧栏、页面�
 **主体区域从第一个 token 起就全部由客户端 JS 拼 DOM**，服务端不流式吐 HTML 片段。
 这条边界必须在实现时守住，否则容易出现「服务端模板里塞了流式占位逻辑」的拧巴写法。
 
+`GET /` 的首屏画哪一条会话，只有三个来源（两侧同形：`rust/server/src/view/controller.rs::chat`、
+`nest/server/src/view/view.controller.ts::chat`）：
+
+| 请求 | 首屏 |
+|---|---|
+| `/?c=<id>`，且是本人未删除的会话 | 打开它 |
+| `/?c=` 缺失、解析不出、或指向别人的会话 | **回落到最近更新的那条**（`ORDER BY updated_at DESC, id DESC` 的第一行）；账号下一条会话都没有时是空舞台 |
+| `/?new=1` | **空舞台**：不回落，主体区不画任何东西，`data-conversation-id` / `data-start-seq` 留空，侧栏照旧列出全部会话但不高亮 |
+
+`?new=1` 存在的原因是「新会话」这个状态在地址栏里得有地方放：回落**不由 query 决定**，所以
+「没有 `?c=`」表达不了「从头开始」，它表达的正是「我最近那条」。两个客户端点新会话（以及删掉
+当前会话）时把地址栏写成 `pathname?new=1`，刷新才停在空舞台上；一旦提交出新会话，`create`
+回来的 id 会把地址栏改写成 `?c=<id>`，那个标记不会跟着一条已存在的会话赖在栏里。
+值只认 `1`（与 `/login?error=1` 同口径），其余写法等同于不带这个参数。
+
 ### 4.2 提交与订阅分开：一条对话级事件流
 
 轮次不再挂在发起它的 POST 上。产品 API（`/api/v1`，为 App / 小程序预留同一张
@@ -258,6 +273,14 @@ sequenceDiagram
 客户端用 `textContent` 追加，两条通路必须一致。把用户输入也喂给 `marked` 会多出一个 `<p>`
 连同它的段间距，于是重载后的一轮比实时那轮高一截。思考过程按纯文本流式追加，不解析。模板只负责
 首屏骨架，其余全部由客户端拼 DOM（见 §4.1）。
+
+**输入框里的快捷键提示**（`Enter 发送，Shift + Enter 换行`）不是页脚的一行，而是画在输入框内：
+`.composer-field` 包着 `textarea#prompt` 与 `p.composer-hint`，提示绝对定位在 textarea 的下内边距带里
+（那条带从不放正文，多行输入也压不到它），显隐只由 `.composer-input:focus ~ .composer-hint` 决定——
+用兄弟选择器而不是 `:focus-within`，是为了让 Tab 到发送键时不冒出这行字。**两侧模板必须保持这个
+嵌套**：漂回 `</form>` 之后，提示会静默消失（CSS 不再命中，控制台一个字都不报），所以位置由
+`rust/server/src/view/tests.rs::the_shortcut_hint_sits_inside_the_input_box` 与
+`nest/server/__tests__/view/view.controller.test.ts` 的同形用例钉住。
 
 页面布局（用户给定）：
 

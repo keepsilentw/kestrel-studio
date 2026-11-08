@@ -38,7 +38,10 @@ const FIXTURE = `
     <button type="button" class="mode-option" data-mode="video" role="radio" aria-checked="false">视频</button>
   </div>
   <form id="composer-form">
-    <textarea id="prompt"></textarea>
+    <div class="composer-field">
+      <textarea id="prompt"></textarea>
+      <p class="composer-hint"><kbd>Enter</kbd> 发送，<kbd>Shift</kbd> + <kbd>Enter</kbd> 换行</p>
+    </div>
     <button type="submit" id="send">发送</button>
   </form>
   <dialog id="preview"><button type="button" id="preview-close"></button><img id="preview-image" alt="" /></dialog>
@@ -261,6 +264,18 @@ describe('启动', () => {
   it('新会话时不打开事件流', async () => {
     await boot({ conversationId: '' });
     expect(openedStreams).toEqual([]);
+  });
+
+  it('新会话按钮把地址栏写成 ?new=1，刷新才会停在空舞台', async () => {
+    // Stripping the query was never enough: `GET /` without ?c= falls back to the
+    // most recent conversation, so a reload repainted the one just left.
+    await boot({ conversationId: '5', startSeq: '55' });
+    stubApi({ list: [{ id: 5, title: '画一只红隼' }] });
+
+    element<HTMLButtonElement>('#new-conversation').click();
+
+    expect(document.body.dataset.conversationId).toBeUndefined();
+    expect(window.location.search).toBe('?new=1');
   });
 });
 
@@ -724,7 +739,7 @@ describe('历史会话删除', () => {
 
     expect(document.body.dataset.conversationId).toBeUndefined();
     expect(element('#stream').children).toHaveLength(0);
-    expect(window.location.search).toBe('');
+    expect(window.location.search).toBe('?new=1');
     expect(document.querySelector('button[data-delete-conversation="6"]')).not.toBeNull();
   });
 

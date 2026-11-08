@@ -207,6 +207,30 @@ describe('GET / — 会话选择', () => {
     expect(html).toContain(`data-conversation-id="${empty}"`);
     expect(html).not.toContain('早先的消息');
   });
+
+  /**
+   * The URL the 新会话 button leaves behind (both clients rewrite the address bar
+   * to `?new=1`). The fallback above is not query-driven, so "no ?c=" cannot mean
+   * "start fresh" — it means "the most recent one", which is exactly what a reload
+   * used to repaint. See docs/implementation-notes.md §23.
+   */
+  it('?new=1 打开空舞台，刷新后仍是空舞台', async () => {
+    const mine = conversations.create(ALICE, '我的');
+    conversations.appendUserMessage(mine, '画一只红隼', 'chat');
+
+    const html = await (await get('/?new=1')).text();
+    expect(html).toContain('data-conversation-id=""');
+    expect(html).toContain('data-start-seq=""');
+    // 会话本身还在：侧栏留着它那一行，只是不再高亮，主体区也没有回放。
+    expect(html).toContain(`class="conversation-link" href="/?c=${mine}"`);
+    expect(html).not.toContain('conversation-link is-active');
+    expect(html).not.toContain('<article');
+
+    // 同一个 URL 不带这个标记时画的还是最近一条 —— 两者不是同一个请求。
+    expect(await (await get('/')).text()).toContain(`data-conversation-id="${mine}"`);
+    // 认不出来的值不是这个标记：两个客户端只会写 `?new=1`。
+    expect(await (await get('/?new=on')).text()).toContain(`data-conversation-id="${mine}"`);
+  });
 });
 
 describe('GET / — 历史回放', () => {
@@ -458,6 +482,28 @@ describe('模板与客户端脚本的契约', () => {
 
     const missing = requiredIds.filter((id) => !html.includes(`id="${id}"`));
     expect(missing).toEqual([]);
+  });
+
+  /**
+   * 快捷键提示挪进了输入框：CSS 只在 textarea 拿到焦点时画它
+   * （`.composer-input:focus ~ .composer-hint`），而这个兄弟选择器只有在两个元素同处
+   * 一个 `.composer-field` 时才成立。模板要是漂回 form 后面那一行，提示就静静消失了，
+   * 控制台一个字都不会报，所以位置钉在这里。Rust 侧的同形用例：
+   * rust/server/src/view/tests.rs::the_shortcut_hint_sits_inside_the_input_box。
+   */
+  it('快捷键提示在输入框内：与 textarea 同居 composer-field，且在 form 之内', async () => {
+    const html = await (await get('/')).text();
+    // 顶栏的退出表单也闭一个 </form>，所以从 composer 自己的开标签量起。
+    const composer = html.indexOf('id="composer-form"');
+    const field = html.indexOf('class="composer-field"', composer);
+    const hint = html.indexOf('class="composer-hint"', composer);
+    const formEnd = html.indexOf('</form>', composer);
+
+    expect(composer).toBeGreaterThanOrEqual(0);
+    expect(field).toBeGreaterThanOrEqual(0);
+    expect(hint).toBeGreaterThanOrEqual(0);
+    expect(field).toBeLessThan(hint);
+    expect(hint).toBeLessThan(formEnd);
   });
 
   it('模式选择器把四个模式都交给客户端', async () => {

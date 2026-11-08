@@ -65,7 +65,12 @@ export class ViewController {
    */
   @UseGuards(ViewAuthGuard)
   @Get()
-  chat(@Req() req: Request, @Res() res: Response, @Query('c') c: string | undefined): void {
+  chat(
+    @Req() req: Request,
+    @Res() res: Response,
+    @Query('c') c: string | undefined,
+    @Query('new') fresh: string | undefined,
+  ): void {
     const user = req.user;
     if (user === undefined) {
       res.redirect('/login');
@@ -74,10 +79,15 @@ export class ViewController {
 
     const list = this.conversations.listByUser(user.id);
     const requested = readPositiveInt(c);
+    // `?new=1` names the empty shell explicitly. The fallback below is not
+    // query-driven, so an absent `?c=` cannot mean "start fresh" — see
+    // docs/implementation-notes.md §23 for the reload that used to resurrect it.
     const active =
-      requested !== null && this.conversations.isOwnedBy(requested, user.id)
-        ? requested
-        : (list[0]?.id ?? null);
+      fresh === '1'
+        ? null
+        : requested !== null && this.conversations.isOwnedBy(requested, user.id)
+          ? requested
+          : (list[0]?.id ?? null);
 
     const conversations: RenderedConversation[] = list.map((item) => ({
       ...item,

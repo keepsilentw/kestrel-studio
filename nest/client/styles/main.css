@@ -403,16 +403,45 @@ body {
 }
 
 .composer-hint {
-  max-width: 760px;
-  margin: 8px auto 0;
   color: var(--muted);
-  font-size: 12px;
+  font-size: 11px;
+  line-height: 1;
   text-align: right;
+  white-space: nowrap;
   user-select: none;
+  /* 输入框内的左下角留白带：textarea 的下内边距（14px）从不放正文——正文从内容盒
+   * 顶部往下排，滚到底也只是排到那条带之上——所以提示压在带里不会被多行输入顶掉。
+   * 出画入画都不占位（absolute），焦点切换时输入框不跳高度。
+   */
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  margin: 0;
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.15s ease, visibility 0.15s ease;
+}
+
+/* 触发器是输入框本身而不是整个 form：Tab 到发送键时不该冒出这行字。
+ * 与 .logout-form 用的是同一套 opacity + visibility 显隐写法。
+ */
+.composer-input:focus ~ .composer-hint {
+  opacity: 1;
+  visibility: visible;
+}
+
+/* The flex child that used to be the textarea is now this wrapper, so the hint can
+ * sit inside the box without taking a row of its own. */
+.composer-field {
+  position: relative;
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
 }
 
 .composer-hint kbd {
-  padding: 1px 5px;
+  padding: 0 4px;
   border: 1px solid var(--border);
   border-radius: 4px;
   background: var(--surface);

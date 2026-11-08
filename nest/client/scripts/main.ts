@@ -1053,8 +1053,11 @@ function resetToNewConversation(): void {
   streamTurnRunning = false;
   clearTurnAnchors();
   syncComposer();
-  // Drop ?c=<id>, otherwise a reload re-renders the conversation we just left.
-  window.history.replaceState(null, '', window.location.pathname);
+  // Name the empty shell in the URL. Dropping ?c=<id> was not enough: `GET /`
+  // without it falls back to the most recent conversation, so a reload re-rendered
+  // the very conversation this function had just let go of
+  // (docs/implementation-notes.md §23).
+  window.history.replaceState(null, '', `${window.location.pathname}?new=1`);
   void refreshConversationList();
 }
 

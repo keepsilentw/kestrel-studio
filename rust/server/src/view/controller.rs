@@ -56,9 +56,19 @@ pub async fn chat(
     // A `?c=` that is not the caller's own live conversation is ignored, not an
     // error: the page falls back to the most recent one, and if there is none it
     // opens nothing.
-    let active = match requested {
-        Some(id) if state.conversations.is_owned_by(id, user.id).await? => Some(id),
-        _ => list.first().map(|item| item.id),
+    //
+    // `?new=1` asks for that empty shell by name. The fallback is not query-driven,
+    // so "no `?c=`" is not a way to say "start fresh": the 新会话 button used to
+    // strip the query and still repaint the conversation it had just let go of on
+    // the next reload (docs/implementation-notes.md §23).
+    let fresh = params.get("new").map(String::as_str) == Some("1");
+    let active = if fresh {
+        None
+    } else {
+        match requested {
+            Some(id) if state.conversations.is_owned_by(id, user.id).await? => Some(id),
+            _ => list.first().map(|item| item.id),
+        }
     };
 
     let conversations: Vec<ConversationEntry> = list

@@ -498,3 +498,31 @@ HTTP 面上的重定向、状态码与 cookie，把它们改成不起服务就�
 `Dockerfile.nest` 改成单阶段，镜像从历史那版的 1.27 GB 降到 534 MB，宿主机也不再需要 `golang:1.24`
 这一层。deployment.md §1.1 那三条"盘上残留不能直接用"的告诫随之作废（现在每次都由
 `deploy-nest.sh` 按当前布局重新打包上传）。
+
+## 23. 「丢掉 `?c=` 刷新就不会画回来」是错的前提：回落不由 query 决定（2026-11-08）
+
+症状是用户报的：点「新会话」，内容区清了；**刷新一下浏览器，那条会话又完整地在内容区出现**。
+
+第一反应是找缓存。没有缓存可找：`localStorage` 全仓只有一个键 `kestrel-studio:mode`
+（`nest/client/scripts/main.ts` 与 `rust/client/src/chat_page.rs` 的 `MODE_STORAGE_KEY`），存的是模式
+选择；SSR 的 HTML 响应不带 `Cache-Control`（只有静态资源带 `no-cache`）。画回内容区的是服务端
+`GET /` 的会话选择规则本身——`?c=` 缺失时回落到「最近更新的那条」。
+
+真正的坑在于**那次修复的注释写着一个不成立的前提**。verification.md §22 那轮走查之后，两个客户端
+都把地址栏改成裸 pathname，注释是「Drop ?c=<id>, otherwise a reload re-renders the conversation we
+just left」（`resetToNewConversation` / `reset_to_new_conversation`）。清场本身是对的、也确实把 §22
+那三条复验过了；但删掉 query 并不能防住刷新：回落不看 query，`/` 与 `/?c=5` 在「5 就是最近一条」时
+渲染结果一模一样。也就是说那次提交修的是「这一屏」，用户报的是「下一屏」，两者从没对上过。
+
+判据（下次写这类状态时照它检查）：**一个状态如果只能靠地址栏里某个参数的「缺失」来表达，而这个
+缺失又是另一件事的触发条件，那它就重载不保**。要么给它一个自己的名字，要么把默认档改成它。
+这里选前者——`?new=1` 两端同形，`?c=` 的既有语义与登录跳转 `302 → /` 的手感都不动。
+
+顺带两条口径：值只认 `1`（跟 `/login?error=1` 一致，`?new` 或 `?new=on` 等同于不带）；创建出新会话
+后 `create_conversation` 会把地址栏改写成 `?c=<id>`，所以游标低于保留窗口时那次 `resync → reload`
+不会落在空舞台上（空舞台上根本不会有开着的流）。
+
+**缺陷在修复前的线上包上复现过一次**（2026-11-08，三次导航的读数表在 verification.md §29.1：点完
+「新会话」`search=""`、`<article>` 归零，刷新后 `search` 仍是 `""` 而 `data-conversation-id` 又变回
+`14`）。**修复后的那一屏仍未验**——它要等下次部署（线上这一版还认不出 `?new=1`，§29.1 末那条 fetch
+就是证据），验法是把那张表反着走一遍。

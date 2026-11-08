@@ -100,6 +100,52 @@ async fn the_first_paint_is_ssr_only_and_the_guard_bounces_anonymously() {
     assert!(!body.contains("conversation-link is-active"), "{body}");
 }
 
+/// The URL the 新会话 button leaves behind. `GET /` without `?c=` cannot mean
+/// "start fresh" — the fallback above is not query-driven — so the empty shell is
+/// named by `?new=1` instead, and reloading the page keeps it empty.
+#[tokio::test]
+async fn the_new_flag_paints_the_empty_shell_that_survives_a_reload() {
+    let (app, state) = app().await;
+    let (cookie, owner) = account(&state, "fresh", Role::User).await;
+    let conversation_id = state.conversations.create(owner, "画一只红隼").await.expect("create");
+    state
+        .conversations
+        .append_user_message(conversation_id, "画一只红隼", Some(Mode::Chat))
+        .await
+        .expect("user row");
+
+    // No flag, no `?c=`: the most recent conversation is painted. This is the
+    // reload that used to resurrect the conversation the button had just let go of.
+    let body = text_body(app.clone().oneshot(get("/", Some(&cookie))).await.expect("fallback")).await;
+    assert!(body.contains(&format!("data-conversation-id=\"{conversation_id}\"")), "{body}");
+    assert!(body.contains("画一只红隼"), "{body}");
+
+    // `?new=1` asks for the empty shell by name. The conversation still exists and
+    // still shows in the sidebar; nothing is painted, nothing is active, and there
+    // is no cursor to subscribe with.
+    let body = text_body(app.clone().oneshot(get("/?new=1", Some(&cookie))).await.expect("fresh shell")).await;
+    assert!(body.contains("data-conversation-id=\"\""), "{body}");
+    assert!(body.contains("data-start-seq=\"\""), "{body}");
+    assert!(
+        body.contains(&format!("class=\"conversation-link\" href=\"/?c={conversation_id}\">画一只红隼</a>")),
+        "sidebar keeps the row: {body}"
+    );
+    assert!(!body.contains("conversation-link is-active"), "{body}");
+    assert!(!body.contains("<article"), "{body}");
+
+    // An unrecognised value is not the flag: only `?new=1` is written by either
+    // client, and a hand-typed `?new` behaves like an absent one.
+    let body = text_body(app.clone().oneshot(get("/?new=on", Some(&cookie))).await.expect("not the flag")).await;
+    assert!(body.contains(&format!("data-conversation-id=\"{conversation_id}\"")), "{body}");
+
+    // A brand-new account has nothing to fall back to, so the flag changes nothing
+    // visible — the shell is the same one `GET /` already renders.
+    let (stranger, _) = account(&state, "nobody", Role::User).await;
+    let body = text_body(app.clone().oneshot(get("/?new=1", Some(&stranger))).await.expect("no history")).await;
+    assert!(body.contains("data-conversation-id=\"\""), "{body}");
+    assert!(body.contains("id=\"stream\""), "{body}");
+}
+
 #[tokio::test]
 async fn pending_tasks_and_the_catch_up_cursor_are_painted() {
     let (app, state) = app().await;
