@@ -1775,8 +1775,8 @@ client="wasm"`、容器 env `RUST_LOG=info`（11-06 收回的 debug 档没有被
 
 ## 29. `?new=1`：空舞台第一次有了自己的 URL（2026-11-08）
 
-本轮没有任何部署动作，所以这里是**源码、单元层，以及缺陷在修复前的线上包上的复现**。修复后的那一屏
-留给下次部署后复跑（§29.2）。
+写这一节时还没有任何部署动作，所以前半是源码与单元层的证据，§29.1 是缺陷在**修复前的线上包**上的复现；
+同日 17:58 部署 + 重拨 `wasm` 之后，修复后的那一屏在同一个浏览器里复跑关闭（§29.2 末）。
 
 **报来的现象**：点「新会话」，内容区清了；刷新浏览器，那条会话又完整出现在内容区。
 **不是缓存**（`localStorage` 只有 `kestrel-studio:mode`；SSR 的 HTML 不带 `Cache-Control`），是
@@ -1827,6 +1827,23 @@ implementation-notes.md §23，首屏三条选择规则现在写在 architecture
 2. 在这个空舞台上发一句话 → 刷新。预期地址栏已被 `create_conversation` 改写成 `/?c=<新 id>`、
    那一轮由 SSR 回放 + 事件流接上，`?new=1` 不残留。
 
+**同日 17:58 部署后两条都过了**（提交 `79a177e`，chrome-devtools MCP 新标签页，真人登录态）：
+
+- 部署：`make deploy`（build-linux + build-wasm + build-web + deploy.sh）→ 新镜像
+  `sha256:36066b588a2d…`、容器 Recreated/Started；它不带 `CLIENT_BUNDLE`，档位按 §2.2 回到 `nest`，
+  随后 `CLIENT_BUNDLE=wasm docker compose up -d` 重拨，启动行 `kestrel-studio listening on
+  http://localhost:8848 client="wasm"`。宿主机只读核对：`Up`、
+  `logs={json-file map[max-file:5 max-size:10m]}`、`restart=unless-stopped`、本地 `/login` 200、
+  以 `mode=ro` 打开库查得 `conversations` 15 行 / max id 15。
+- 第 1 步：`/` 画的仍是最近一条（c=14，2 个 `<article>`）→ 点「新会话」→ 地址栏 `/?new=1`、
+  `data-conversation-id` 消失、`<article>` 归零 → **刷新后地址栏仍是 `/?new=1`，
+  `data-conversation-id=""`、`data-start-seq=""`、`<article>` 0 个、侧栏 10 行无一高亮**。
+  §29.1 那张表里"刷新又变回 14"的那一行到此关掉。全程零 `POST`。
+- 第 2 步：在这个空舞台上选「对话」模式发一句话 → 提交后地址栏被改写成 **`/?c=15`**（`?new=1`
+  没残留）→ 那一轮流式跑到「新会话可用」→ 刷新 → SSR 回放 2 个 `<article>`、侧栏高亮在 c=15、
+  `data-start-seq="4"`。**留下的数据**：会话 c=15（一条验证用的对话轮次，未删）。
+- 控制台：整轮（三次导航 + 一次真轮次）**零条**。
+
 ## 30. 快捷键提示搬进输入框：显隐与几何（2026-11-08，chrome-devtools MCP）
 
 按用户要求把页脚那行 `Enter 发送，Shift + Enter 换行` 移进输入框，聚焦显示、失焦隐藏。设计口径与
@@ -1850,7 +1867,17 @@ implementation-notes.md §23，首屏三条选择规则现在写在 architecture
 `.composer-input:focus ~ .composer-hint` 而不是 `:focus-within`，最后一行就是这条的实测——焦点在
 发送键上时提示不出现。**控制台零条**，截图目视通过（提示在框内右下、发送键左侧那一角）。
 
-**仍未验的**：真实页面那一屏。`/public/` 是构建产物（`.gitignore` 第 16 行），CSS 要经
-`make build-web` 才落到 `public/assets/main.css`，模板改动要经 `make deploy` 才上线；两侧模板的
-嵌套由 §30 提到的两条契约用例钉住（rust view 套件 12 passed、nest view 套件 36 passed），
-所以漂移这一条在测试层已经关掉了，剩下的只是"上线后眼睛看一遍"。
+### 30.1 同日 17:58 部署后，真实页面那一屏也量过了
+
+`/public/` 是构建产物（`.gitignore` 第 16 行），CSS 经 `make build-web` 落进镜像、模板经
+`make deploy` 上线（部署读数见 §29.2 末）。在 `try.kestrel.justwork.link`（`wasm` 档）上：
+
+- `fetch('/assets/main.css')` 里 `.composer-field` 与 `.composer-input:focus~.composer-hint`
+  两条规则都在；DOM 上 `p.composer-hint` 的父元素就是 `composer-field`。
+- 失焦 `opacity=0 / visibility=hidden` → 聚焦 `opacity=1 / visible` → 再失焦回到 `0/hidden`；
+  三个状态里提示盒都落在 textarea 的下内边距带内（`insideBand` 与 `insideBox` 全为真）。
+- 一条随之而来的性质，记下来免得日后当 bug 查：**那行字在无障碍树里也跟着焦点进出**——
+  `visibility: hidden` 会把它从 a11y 树剪掉，失焦时的快照里没有它、聚焦时的快照里有六个节点
+  （`Enter` / ` 发送，` / `Shift` / ` + ` / `Enter` / ` 换行`）。这与既有的 `.logout-form`
+  用的是同一套显隐写法（architecture.md §8），要它常驻可读就得换成不剪 a11y 树的另一种显隐。
+- 控制台零条。
