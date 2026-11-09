@@ -922,11 +922,11 @@ fn append_asset(
         media.set_attribute("preload", "metadata").ok();
     } else {
         media.set_attribute("alt", "生成的图片").ok();
-        if let (Some(width), Some(height)) = (width, height) {
-            if width > 0 && height > 0 {
-                media.set_attribute("width", &width.to_string()).ok();
-                media.set_attribute("height", &height.to_string()).ok();
-            }
+        // The rule itself lives in `chat_core::image_box` where `cargo test` can
+        // reach it; this half only writes the attributes.
+        if let Some((width, height)) = crate::chat_core::image_box(width, height) {
+            media.set_attribute("width", &width.to_string()).ok();
+            media.set_attribute("height", &height.to_string()).ok();
         }
     }
     let caption = build(document, "figcaption", "asset-actions");

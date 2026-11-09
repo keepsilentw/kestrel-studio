@@ -29,6 +29,25 @@ pub fn stored_mode(raw: Option<&str>) -> Option<Mode> {
     Mode::from_storage(raw)
 }
 
+/// The `width`/`height` pair a lazy `<img>` should carry, if it has one.
+///
+/// Both or neither. A lone dimension lets the browser fall back to its own default
+/// ratio, so the reserved box comes out wrong — which is worse than the reflow the
+/// attributes exist to remove (`docs/roadmap.md` §3, and the measurement in
+/// `docs/verification.md` §42). Zero and negative are rejected for the same reason:
+/// `width="0"` reserves a box of nothing, and the row is really "unknown".
+///
+/// This lives here rather than inline in `chat_page.rs` because that file has no host
+/// tests — it is the DOM half of the split, and a rule with an edge case belongs where
+/// `cargo test` can reach it. The server's templates apply the same rule on their side
+/// (`rust/server/src/view/templates.rs`, `nest/server/.../partials/turn.hbs`).
+pub fn image_box(width: Option<i64>, height: Option<i64>) -> Option<(i64, i64)> {
+    match (width, height) {
+        (Some(width), Some(height)) if width > 0 && height > 0 => Some((width, height)),
+        _ => None,
+    }
+}
+
 /// What the DOM layer is asked to do, in the order the events arrived. The stream
 /// is the only source of order; the page never re-sorts it.
 #[derive(Clone, Debug, PartialEq)]
@@ -296,6 +315,25 @@ mod tests {
     use super::*;
     use kestrel_proto::event::{AssetView, ToolCallRecord};
     use kestrel_proto::{TaskKind, TaskStatus};
+
+    /// The both-or-neither rule for the lazy `<img>` box. These four cases are the
+    /// whole contract; the DOM layer just forwards them.
+    #[test]
+    fn image_box_requires_a_pair() {
+        assert_eq!(image_box(Some(1024), Some(576)), Some((1024, 576)));
+        assert_eq!(image_box(Some(1024), None), None, "half a pair is not a box");
+        assert_eq!(image_box(None, Some(576)), None);
+        assert_eq!(image_box(None, None), None, "a row predating the columns");
+    }
+
+    #[test]
+    fn image_box_rejects_zero_and_negative_as_unknown() {
+        // `width="0"` would reserve a box of nothing, which is the very symptom the
+        // attributes exist to remove — so a non-positive value means "not known".
+        assert_eq!(image_box(Some(0), Some(0)), None);
+        assert_eq!(image_box(Some(1024), Some(0)), None);
+        assert_eq!(image_box(Some(-1), Some(576)), None);
+    }
 
     fn stored(id: i64) -> MessageView {
         MessageView {
