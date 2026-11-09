@@ -275,8 +275,17 @@ openai 面须置 compat 位 `stream_include_usage = true`，否则全程 `usage:
   （`turn()`，由 `view/tests.rs:209` 钉住），`nest/server/src/view/views/partials/turn.hbs:39` 是它的
   契约源，两条同形。2026-11-06 按源码补一条边界：**只有回放路径会命中**——两个客户端拼流式 DOM 时
   都不带 `loading` 属性（`nest/client/scripts/main.ts` 全文无 `loading`，`rust/client` 的
-  `append_asset` 也不设），所以它只在刷新回已有会话那一屏出现。不是错误也不是警告，属既有代码；
-  要修得先知道图片尺寸，而尺寸由模型选，暂无好办法，先记着。
+  `append_asset` 也不设），所以它只在刷新回已有会话那一屏出现。不是错误也不是警告，属既有代码。
+  ~~要修得先知道图片尺寸，而尺寸由模型选，暂无好办法，先记着。~~
+  **那句"暂无好办法"是没去量过的推断，已推翻（2026-11-09）**：尺寸一直在落盘字节的头部里。
+  现在 `assets.width/height` 两列由两侧探针（`media/dims.rs`、`media/image-dims.ts`）在 `store()`
+  时读一次，`AssetView` 带上线，模板与两个客户端**成对才输出**属性。
+  为什么不能用请求里的 `size`：生产 19 张图逐张对撞过，一张请求 `1024*448`、供应商返回
+  `1536×640`（它会吸附尺寸），照请求值写就是错宽高比的盒子，比要修的跳动更糟。
+  测量、判据与门读数在 verification.md §40，坑在 implementation-notes.md §30。**未部署**，
+  **未部署**。旧行也不会一直留着 NULL：**启动时有一趟有界回填**（两侧各 500 行/趟、只选
+  `width IS NULL`、读不出继续留 NULL），设计、被测试纠正过的那处理解（unreadable 每趟会重试）
+  与门读数在 verification.md §41。部署后第一次启动预期打一条 `backfilled pixel dimensions …`。
   2026-11-06 下午在新链路上量到了实际条数：产品页 c=11 是 **count=2**，只读回放页
   `/admin/conversations/3`（11 个资产）是 **count=11**——与"只有回放命中"的判断一致（verification.md §23.5）。
 - 语音的遗留项（设计与已落地的部分见 [architecture.md](./architecture.md) §11）：

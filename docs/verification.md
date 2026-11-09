@@ -2479,3 +2479,121 @@ markdown 给），不是这次要关的东西。真要关，方向是让 marked 
    wasm 客户端的既有验收（§22–§26 那一串）换成另一套实现，不是这次该做的事。
 2. 颊纹/眼在 16 px favicon 下的实际观感由截图判断，没有在真实标签页尺寸上量过像素。
 3. 并行（两套同时接同一个文件）仍然没做过，而且按 §37.3 那个决定，它现在没有对外场景。
+
+## 40. 回放图的尺寸从哪来：拿生产 19 张图对撞出来的答案（2026-11-09）
+
+§3 挂着的那条 Chrome *issue*（`Lazy-loaded images should have explicit dimensions`）此前写着
+「要修得先知道图片尺寸，而尺寸由模型选，暂无好办法」。这条判断是错的——尺寸是已知的，
+只是**不在请求里**。这一节是先测量、后写代码的过程。
+
+### 40.1 请求尺寸能不能当真实尺寸用：不能
+
+把生产 `storage/` 的 19 张图片取回本地，逐张读文件头得到真实尺寸，再与库里
+`messages.tool_calls` 记录的请求 `size` 对撞（宿主机 sqlite 3.7 没有 JSON 函数，
+所以取的是库快照、在本地用 python 的 sqlite 3.53 查）：
+
+| 结果 | 数 |
+|---|---|
+| 图片资产 | 19（库里 23 条资产 = 19 图 + 4 视频） |
+| 请求值 == 真实值 | 18 |
+| **请求值 != 真实值** | **1**：asset 6 请求 `1024*448`，落盘是 **1536×640** |
+
+供应商把不支持的尺寸**吸附**到它支持的档位。照请求值写 `width`/`height`，就会给这张图预留一个
+错宽高比的盒子——比它要修的跳动更糟。**结论：尺寸只能来自落盘字节自己的头部。**
+
+顺带量到两件别的事：
+- 23 条资产里 **6 条的 `file_path` 仍是旧的绝对路径**（`/app/storage/…`），与 architecture.md §5
+  「搬迁前写入的绝对路径仍被兼容」一致；按 basename 匹配才核到全部 19 张。
+- 真实尺寸并非只有 1024 见方：出现过 `1000×1000`、`1536×640`、`1536×1024`。
+
+### 40.2 实现与它的判据
+
+探针两侧各一份、同格式同断言：`rust/server/src/media/dims.rs`（PNG IHDR / JPEG SOF /
+GIF / WebP VP8X·VP8L·VP8）与 `nest/server/src/media/image-dims.ts`。在 `store()` 拿到字节的
+那一刻读一次，不回头再开盘。
+
+**没有加依赖。** 两个栈都没有图片解码库，而加一个意味着：Rust 侧把它编进发给每个用户的静态
+二进制（§11.5 拒绝 `pulldown-cmark` 就是同一条理由），Nest 侧要动 `package.json` 与
+`pnpm-lock.yaml`。这里需要的是四个魔数，不是编解码器。
+
+链路：`StoredAsset` 带 `width/height` → `assets` 两列（DDL + `ADDED_COLUMNS`，两侧同形）→
+`AssetView`（`crates/proto` 线类型）与 `asset` 事件帧 → 模板与两个客户端。
+**规则是成对才输出**：只有一个数就不写属性（`width` 单独存在时浏览器按自己的默认比例摆盒子）。
+视频永远 NULL——探针只读图片头，`<video>` 靠 `preload="metadata"` 拿内在尺寸。
+
+| 门 | 读数 |
+|---|---|
+| `cargo test`（rust server） | **182 条全过**（沙箱内 180 + §20 那 2 条 storage 假红在沙箱外复跑） |
+| `cargo test`（rust client 宿主层） | **42 passed**；`cargo check --target wasm32-unknown-unknown --tests` 干净 |
+| `vitest`（nest server） | **492 条全过**（沙箱内 351 + §21 那 6 个文件在沙箱外 141） |
+| `vitest`（nest client） | **57 passed**（含新增「尺寸未知就不带 width/height，也不带半个」） |
+| `tsc --noEmit` ×3 | 都通过 |
+
+新钉的判据（两侧同形）：`rust/server/src/view/tests.rs` 断言 `<img … width="1024" height="576" …>`
+整串，并断言**只给一半时输出里没有 `width=`**；`nest/server/__tests__/view/view.controller.test.ts`
+对 hbs 模板断同一条；`conversation.service` 两侧断言这对值写进行又读回 `AssetView`；
+`chat_core.rs` 那条 wire 往返测试顺带证明新字段按 camelCase 进出。
+旧 fixture（无尺寸）保持原样，它现在钉的是「没有尺寸时 `<img>` 与改造前逐字节相同」。
+
+### 40.3 这一节没证的
+
+1. **没部署。** 线类型、模板、两列都还在仓库里；线上第一次跑到它会顺带给活库补这两列
+   （可空、无索引，走 §32.1 那种温和路径）。
+2. ~~**旧行不会变好。** 那 23 条既有资产是 NULL……要给旧行回填得单独跑一次头部读，没做。~~
+   **同日已做**：启动时的有界回填，两侧同改，见 §41。（仍然没部署，所以线上此刻还是旧行为。）
+3. wasm 客户端的 DOM 组装（`chat_page.rs::append_asset`）**没有宿主层断言**——`chat_page.rs`
+   里没有 `#[test]`。这一侧的证据是核心层（`Paint::Asset` 带上两字段）+ 服务端模板 +
+   Nest 客户端 jsdom 那条。真实浏览器里 `img` 的盒子效果要等上线后看。
+4. 探针在真实字节上的正确性是靠**离线拿那 19 张生产图**验的（Rust 实现逐张读出的尺寸与 python
+   独立实现完全一致，19/19），不是只靠手造 fixture。
+
+## 41. 旧行的尺寸回填（2026-11-09，两侧同改，未部署）
+
+§40 那句「旧行不会变好」是半成品状态下的实话。这一节把它关掉：既有资产行的尺寸现在会在**启动时**补上。
+
+### 41.1 为什么放在启动，而不是一个脚本
+
+文件只在宿主机上，开发机跑不了；而部署是常规动作。所以按这个仓库既有的口径办——
+**数据库文件活过部署，数据迁移就长在进程里**（architecture.md §5，`ADDED_COLUMNS` 与
+`enforce_unique_event_seq` 都是同一形状）。两侧入口：`rust/server/src/main.rs` 在 seed 与
+启动收尾之后、sweep 之前；Nest 侧 `ConversationService implements OnApplicationBootstrap`
+（`implements` 不是装饰：Nest 按方法名在运行时找钩子，少了这句，方法名写错就**静默不跑**）。
+
+### 41.2 三条设计约束
+
+| 约束 | 为什么 |
+|---|---|
+| **每趟有界**（两侧同为 500 行） | `deploy.sh` 起来后轮询健康 180 秒；一趟读几千个文件会把「部署失败」演出来。剩下的下一趟接着做 |
+| **幂等** | 只选 `width IS NULL`，UPDATE 再带一次 `AND width IS NULL`，所以两套同时启动也不会互相写出不一致；填过的行永不再开盘，稳态成本是一次表扫描 |
+| **读不出就留 NULL** | 文件被删、格式不认识、头太短——都不编一对数。错宽高比的盒子比它要修的跳动更糟 |
+
+一条被测试纠正出来的理解：我原本给"幂等"写的断言是第二次返回 `{filled:0, unreadable:0}`，
+**错了**——读不出的那行仍然没有尺寸，所以每趟都会重试一次（`{filled:0, unreadable:1}`）。
+这不是缺陷，是留 NULL 语义的直接结果：代价是一个小文件的头，收益是文件被恢复后尺寸会自己补上。
+
+### 41.3 门读数
+
+| 门 | 读数 |
+|---|---|
+| `cargo test`（rust server） | **184 全过**（沙箱内 182 + §20 那 2 条 storage 假红在沙箱外复跑） |
+| `cargo test`（rust client） | **42**；`cargo check --target wasm32-unknown-unknown --tests` 干净 |
+| `vitest`（nest server） | **493 全过**（沙箱内 352 + §21 那 6 个文件在沙箱外 141） |
+| `vitest`（nest client） | **57** |
+| `tsc --noEmit` ×3 | 通过 |
+
+新增用例各 2 条（两侧同形）：一行"旧写法"的资产（INSERT 不带 `width`/`height`）配一个**真的 PNG 头字节**，
+断言回填后行里出现 `1536×640`、视图层也带上这对值、第二次调用 `filled` 归零；另一行指向不存在的文件，
+断言它被计为 unreadable 且**两列仍是 NULL**。fixture 用真字节而不是随手写的字符串，是因为
+回填读的就是字节——一个只有形状对的 fixture 会测到一条不存在的路径。
+
+顺带确认：那 6 个会启动整个 Nest 应用的控制器测试（`view` / `chat` / `admin` / `auth`）在沙箱外
+141 条全过，也就是新挂上的启动钩子没有把它们的路径带坏。
+
+### 41.4 没证的
+
+1. **没部署。** 回填第一次真正跑是在线上那 23 条资产上（其中 19 条图片），还没发生。
+   一趟 500 的上限对它们绰绰有余，所以预期是启动日志里一条 `backfilled pixel dimensions …`
+   带 `filled=19`（或 `filled` 少几个，若有文件已不在），`remaining=0`。
+2. 线上真实文件的可读性没验过（本地那 19 张是拷贝过来的，读得出来；容器里 `storage/` 是挂载卷，
+   路径解析走的是同一套 `resolve_asset_path`）。
+3. 回填**不会**改动任何已有列，也不会删文件；最坏情况是某行永远留在 NULL 并被每趟重试一次。

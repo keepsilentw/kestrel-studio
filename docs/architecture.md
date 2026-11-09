@@ -161,7 +161,7 @@ hbs 只负责渲染首屏骨架：登录态判断、历史会话侧栏、页面�
 | `sessions` | sid, sess, expire —— Nest 侧由 better-sqlite3-session-store 独占管理，不纳入 drizzle schema；Rust 侧由 `auth/session.rs` 读写同一张表，形状差异见 §13.2 |
 | `conversations` | id, user_id, title, deleted_at, created_at, updated_at |
 | `messages` | id, conversation_id, role, content, reasoning, tool_calls, mode, created_at |
-| `assets` | id, message_id, kind, file_path, source_url, mime, bytes, created_at |
+| `assets` | id, message_id, kind, file_path, source_url, mime, bytes, width, height, created_at |
 | `generation_tasks` | 异步生成任务（视频）：提交即落库、后台轮询、成功即镜像落盘并追加一条 assistant 消息 |
 | `conversation_events` | id, conversation_id, seq, message_id, type, payload, created_at —— 流日志，见 §4.2 |
 
@@ -185,6 +185,19 @@ hbs 只负责渲染首屏骨架：登录态判断、历史会话侧栏、页面�
   （`nest/server/src/media/asset-path.ts`）——目录是运行环境的属性，写进数据就等于绑死一次部署。
   搬迁前写入的绝对路径仍被兼容：文件还在原处就原样用。踩坑经过见
   [implementation-notes.md](implementation-notes.md) §7。
+- `assets.width` / `assets.height` 存**像素尺寸**，为的是回放页那条 Chrome *issue*：
+  `loading="lazy"` 的 `<img>` 没有显式尺寸就不预留盒子，图片逐张到达时下面的正文一路跳。
+  数值来自**落盘字节自己的头部**（`rust/server/src/media/dims.rs` 与
+  `nest/server/src/media/image-dims.ts`，同一套格式、同一套断言），**不是**请求里的 `size`：
+  2026-11-09 拿生产 19 张图逐张对撞过，其中一张请求 `1024*448`、供应商返回 `1536x640`——
+  它会把不支持的尺寸吸附到别的档位，照请求值写就会得到一个错宽高比的盒子，比它要修的跳动更糟。
+  因此三种情况都是 NULL：视频（探针只读图片头）、认不出的格式、这一列之前的旧行；
+  模板与两个客户端的规则是**成对才输出**，只有一个数就不写属性。读数在
+  [verification.md](verification.md) §40。
+- 上面那句「这一列之前的旧行是 NULL」不会一直成立：**启动时有一趟有界的回填**
+  （`backfill_asset_dimensions`，两侧各 500 行/趟，只选 `width IS NULL`，读不出就继续留 NULL）。
+  它长在进程里而不是脚本里，理由与 `ADDED_COLUMNS` 同一条——库文件活过部署，而文件只在宿主机上。
+  约束与读数见 [verification.md](verification.md) §41。
 - 初始化时 seed 账号（`admin` 本地引导账号；超管凭据来自 `SUPER_ADMIN_*` 环境变量），
   密码经 bcrypt 哈希后入库，不存明文。`NODE_ENV=production` 下 `admin` 不建号。
   约束与权限模型见 §12。
