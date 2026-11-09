@@ -400,6 +400,8 @@ openai 面须置 compat 位 `stream_include_usage = true`，否则全程 `usage:
     [architecture.md](./architecture.md) §11.6；门读数与**它没验到的部分**在
     [verification.md](./verification.md) §43。它和那条「人再按一次」是同一件事：一次真实按住
     同时收两条——守卫那条路（§35/§37）与打断这条路。
+    **14:45 已随 `make deploy` + 重拨 `wasm` 上线**（§43.5）：那份包被真实浏览器下载并初始化了
+    （`/voice` 只加载 wasm，控制台 0 条），但「按下即静下来」仍只有单元读数——它等的是同一按。
   - **顺带量到的一条既有行为（读码，非运行）**：第一次按住之后麦克风并不关。松手提交后，
     worklet 的每一帧仍照发 `{"type":"audio"}`，中继也照 append 进上游的输入缓冲——直到上游
     拒绝（`blocked` / `refused`）为止。两套同形（`voice_core::audio_chunk` 只看 `blocked`

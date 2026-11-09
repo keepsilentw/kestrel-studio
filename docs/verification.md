@@ -2684,7 +2684,7 @@ assetImages=11  videos=0  lazy=11  missingDims=0  layoutShifts=0
 3. 新产生的图片（下一次真实出图）没走线上——`store()` 里那条读头部的路径这次只被单元断言与
    离线 19 张图证过。
 
-## 43. 打断（barge-in）：那条 `cancel` 帧两侧的断言与门读数（2026-11-09，未部署）
+## 43. 打断（barge-in）：那条 `cancel` 帧两侧的断言与门读数（2026-11-09；14:45 已上线，读数在 §43.5）
 
 设计、三方职责与上游出处在 [architecture.md](./architecture.md) §11.6；这里只放读数。
 判据是**帧序**——「有没有真的静下来」要人耳，而「按下之后线上跑了哪几帧、服务端转发了哪几条
@@ -2742,3 +2742,18 @@ assetImages=11  videos=0  lazy=11  missingDims=0  layoutShifts=0
    我们吞掉了它的错误，但没在浏览器里验过那条错误确实不存在。
 6. 没做**压测**：打断引入的额外一条 `cancel` 帧与「提前收尾」不改变并发通话数那笔账
    （§3 里仍未评估的那条）。
+
+### 43.5 上线（2026-11-09 14:44 `make deploy`、14:45 重拨 `wasm`）
+
+| 步骤 | 读数 |
+|---|---|
+| 快照 | `data/backup-20261109-pre-barge-in.db`（983,040 字节）。**它与主库 md5 不同**，但 `cmp -l` 逐字节只有 **6 个字节**不同，位置 28 / 44 / 96——SQLite 头里「文件变更计数」「schema format number」「version-valid-for」各末位一字节：宿主机的 sqlite 是 3.7.17，写快照时把 format 记成 1（主库是 4）。表级对账全等：users 2 / conversations 16 / messages 76 / assets 23 / conversation_events 6,827 / generation_tasks 4，`pragma integrity_check` = **ok**。这条路径的判据因此不能是 md5，只能是**行数 + integrity_check** |
+| `make deploy` | 镜像 `sha256:67c764b8…`，容器 Recreated/Started，健康探测通过；起来的档位是 compose 默认的 `nest`（启动行 `client="nest"`） |
+| 重拨 | `CLIENT_BUNDLE=wasm docker compose up -d` → 启动行 `client="wasm"`，`/login` 200 |
+| 日志 | 部署后 20 分钟窗口 ERROR+WARN **0 条**；`voice session opened` **0 条**（没人拨号） |
+| 库侧 | 上线之后再数：**16/76/23/6,827/4，与快照逐个相同**——这次部署与我的页面走查没有写进任何一行 |
+| 包侧 | 本地构建 = 主机副本 = **服务出去的字节**：`kestrel_client_bg.wasm` md5 `cf246955e7aa…`（380,032 字节）三处一致（本地 `md5 -q` / 主机 `md5sum` / `curl` 回读进管道）；`strings -a` 在**线上那份**里读到一段连着的 `commitcancelstop`，`cancel` 一共命中 3 处。上一版包没留档，所以没有对照读数——这一条只证明「`cancel` 这个标签在跑着的包里」 |
+| 浏览器 | 新开标签页 `/voice`：`wasmResources=["/wasm/kestrel_client.js","/wasm/kestrel_client_bg.wasm"]`、`tsResources=[]`、状态「按住按钮开始说话」、按钮未禁用（`initVoice` 执行到底），**控制台 0 条**；`/`：两张懒加载图仍带 `width/height=1024`，零错误零警告，只剩 §42.3 那条已定性的 Chrome *issue*（count=2 == 该页懒加载图数，不再当判据） |
+
+**上线不等于走过**：以上全是「新包被真实下载、编译、初始化」的证据，不是「按下会静下来」的证据。
+后者要真人对喇叭说话（roadmap.md §3）；那一按一旦做过，就同时把 §35/§37 那条守卫的浏览器路径收掉。
