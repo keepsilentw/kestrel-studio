@@ -22,6 +22,9 @@ pub enum Command {
     AppendAudio(String),
     Commit,
     CreateResponse,
+    /// Stop the response that is generating. Sent only when the call believes one
+    /// is in flight: with nothing to cancel the endpoint answers with an error.
+    CancelResponse,
     /// A tool result. The sender resolves when the endpoint acknowledges the
     /// created item, or after `ACK_TIMEOUT`.
     ToolOutput {
@@ -53,6 +56,7 @@ impl std::fmt::Debug for Command {
             Self::AppendAudio(pcm) => write!(formatter, "AppendAudio({} bytes b64)", pcm.len()),
             Self::Commit => formatter.write_str("Commit"),
             Self::CreateResponse => formatter.write_str("CreateResponse"),
+            Self::CancelResponse => formatter.write_str("CancelResponse"),
             Self::ToolOutput { call_id, output, .. } => formatter
                 .debug_struct("ToolOutput")
                 .field("call_id", call_id)
@@ -118,6 +122,7 @@ pub fn command_frame(command: &Command) -> Frame {
         Command::AppendAudio(pcm) => Frame::Text(message::append_audio(pcm).to_string()),
         Command::Commit => Frame::Text(message::commit().to_string()),
         Command::CreateResponse => Frame::Text(message::response_create().to_string()),
+        Command::CancelResponse => Frame::Text(message::response_cancel().to_string()),
         Command::ToolOutput { call_id, output, .. } => {
             Frame::Text(message::function_call_output(call_id, output).to_string())
         }
@@ -297,6 +302,10 @@ mod tests {
         assert_eq!(
             text_of(&command_frame(&Command::CreateResponse)),
             json!({"type":"response.create"}).to_string()
+        );
+        assert_eq!(
+            text_of(&command_frame(&Command::CancelResponse)),
+            json!({"type":"response.cancel"}).to_string()
         );
         assert_eq!(
             text_of(&command_frame(&Command::ToolOutput {

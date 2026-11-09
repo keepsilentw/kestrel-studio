@@ -13,6 +13,10 @@
 //! * an `error` frame blocks the rest of the hold. The endpoint already refused
 //!   this utterance, and feeding it more of the same is what turned one refusal
 //!   into hundreds of error lines on the page (docs/verification.md §7.1).
+//! * pressing the button **while the assistant is still speaking** interrupts it:
+//!   the speaker goes silent at once, the turn is cancelled on the socket, and the
+//!   new hold's utterance is handed over only once the interrupted turn has
+//!   actually closed (docs/architecture.md §11.6).
 //!
 //! The frame types come from `kestrel_proto` — the same types the server
 //! serialises, which is the drift the hand-restated TS shapes allowed.
@@ -60,6 +64,10 @@ pub enum Effect {
     SetButtonEnabled(bool),
     SetButtonActive(bool),
     PlayAudio { pcm: String },
+    /// Silence the speaker now: everything queued for the interrupted answer is
+    /// dropped. Paired with [`Effect::PlayAudio`] being withheld while the page is
+    /// muted, which is what keeps a cancelled answer from restarting itself.
+    StopPlayback,
     ShowAsset { kind: String, url: String },
 }
 
@@ -97,6 +105,20 @@ pub struct Session<S: Transport> {
     /// empty buffer reads this, and `press` resets it — the count is per hold, not
     /// per session, because the failure is per press.
     frames_this_hold: u32,
+    /// The answer being spoken right now: audio arrived for this turn and the turn
+    /// has not closed. A press is only an interruption when this is true — that is
+    /// the one state where the user hears something they may want to stop, and the
+    /// one state in which the server has a response to cancel.
+    spoke: bool,
+    /// The page must not play anything: set when the user interrupts, cleared when
+    /// the interrupted turn closes. Without it the chunks already on their way from
+    /// the cancelled answer would resume the very speech they just stopped.
+    muted: bool,
+    /// This hold **interrupted** a turn that is still owned by the server, so its
+    /// commit has to wait for that turn to close. Committing earlier is not merely
+    /// early — the server refuses an utterance while a turn is running, and the
+    /// words would vanish without a trace.
+    interrupting: bool,
 }
 
 impl<S: Transport> Session<S> {
@@ -112,6 +134,9 @@ impl<S: Transport> Session<S> {
             conversation_id: None,
             hold_deadline: None,
             frames_this_hold: 0,
+            spoke: false,
+            muted: false,
+            interrupting: false,
         }
     }
 
@@ -135,8 +160,14 @@ impl<S: Transport> Session<S> {
 
     /// Pointer went down.
     pub fn press(&mut self, now_ms: u64) -> Vec<Effect> {
-        if self.busy || self.holding {
+        if self.holding {
             return Vec::new();
+        }
+        if self.busy {
+            // A press during a turn is only refused while there is nothing to hear.
+            // Once the answer is speaking the user is talking over it, and that is
+            // an interruption, not a queue jump (docs/architecture.md §11.6).
+            return if self.spoke { self.interrupt(now_ms) } else { Vec::new() };
         }
         self.holding = true;
         self.blocked = false;
@@ -160,6 +191,35 @@ impl<S: Transport> Session<S> {
         effects
     }
 
+    /// Pointer went down **while the assistant was speaking**: go silent, tell the
+    /// server to stop talking, and start collecting the new utterance.
+    ///
+    /// `busy` deliberately stays set. The turn is not ours to hand over until the
+    /// server says it closed it — see [`Session::close_turn`] — and an empty
+    /// interrupt is still an interrupt, so `release` reads `frames_this_hold` the
+    /// same way it always has.
+    fn interrupt(&mut self, now_ms: u64) -> Vec<Effect> {
+        self.holding = true;
+        self.blocked = false;
+        self.frames_this_hold = 0;
+        self.muted = true;
+        self.interrupting = true;
+        self.transport.send(&ClientFrame::Cancel);
+        let mut effects = vec![
+            Effect::StopPlayback,
+            Effect::SetButtonActive(true),
+            Effect::SetStatus(STATUS_LISTENING),
+        ];
+        match self.phase {
+            Phase::Ready => self.arm(now_ms),
+            // Defensive: `busy` with no session cannot be reached through the
+            // public methods, and if it ever is, the hold must not claim to be
+            // listening to an endpoint that is not there.
+            Phase::Idle | Phase::Connecting => effects.push(Effect::SetStatus(STATUS_CONNECTING)),
+        }
+        effects
+    }
+
     /// Pointer went up, or left the button.
     pub fn release(&mut self) -> Vec<Effect> {
         if !self.holding {
@@ -168,6 +228,19 @@ impl<S: Transport> Session<S> {
         self.holding = false;
         self.hold_deadline = None;
         let mut effects = vec![Effect::SetButtonActive(false)];
+        if self.interrupting {
+            if self.frames_this_hold == 0 {
+                self.interrupting = false;
+                return self.end_hold_without_audio(effects);
+            }
+            // The interrupted turn has not closed yet, and the server refuses an
+            // utterance while a turn is running — committing now would lose the
+            // words without a trace. `close_turn` sends it the moment they can land.
+            self.interrupting = false;
+            self.pending_commit = true;
+            effects.push(Effect::SetStatus(STATUS_THINKING));
+            return effects;
+        }
         if self.busy {
             // Already handed over by the cap, or a turn is running.
             return effects;
@@ -237,6 +310,9 @@ impl<S: Transport> Session<S> {
         self.busy = false;
         self.blocked = false;
         self.hold_deadline = None;
+        self.spoke = false;
+        self.muted = false;
+        self.interrupting = false;
         let mut effects = vec![
             Effect::ConversationStream(None),
             Effect::SetButtonEnabled(true),
@@ -278,22 +354,32 @@ impl<S: Transport> Session<S> {
                 kind: kind.as_str().to_string(),
                 url,
             }],
-            ServerFrame::Audio { pcm } => vec![
-                Effect::SetStatus(STATUS_ANSWERING),
-                Effect::PlayAudio { pcm },
-            ],
+            ServerFrame::Audio { pcm } => {
+                if self.muted {
+                    // A cancelled answer does not stop the instant the endpoint is
+                    // told to: the chunks already on the wire would restart the very
+                    // speech the user just interrupted.
+                    return Vec::new();
+                }
+                self.spoke = true;
+                vec![Effect::SetStatus(STATUS_ANSWERING), Effect::PlayAudio { pcm }]
+            }
             ServerFrame::AssistantText { text } => {
                 vec![Effect::AppendEntry { kind: "assistant", text }]
             }
-            ServerFrame::Done => {
-                self.busy = false;
-                vec![Effect::SetButtonEnabled(true), Effect::SetStatus(STATUS_IDLE)]
-            }
+            ServerFrame::Done => self.close_turn(),
             ServerFrame::Error { message } => {
                 // Whatever the endpoint refused, more of the same will not help.
                 self.blocked = true;
                 self.busy = false;
                 self.hold_deadline = None;
+                self.spoke = false;
+                self.muted = false;
+                self.interrupting = false;
+                // An utterance held back behind an interrupted turn has nowhere to
+                // go now: the refusal is about this call, and re-sending into it is
+                // how one refusal became a wall of them (docs/verification.md §7.1).
+                self.pending_commit = false;
                 vec![
                     Effect::AppendEntry { kind: "error", text: message },
                     Effect::SetButtonEnabled(true),
@@ -324,7 +410,14 @@ impl<S: Transport> Session<S> {
         self.blocked = true;
         self.busy = true;
         self.hold_deadline = None;
-        self.transport.send(&ClientFrame::Commit);
+        if self.interrupting {
+            // The cap ends the hold, not the interruption: the turn being
+            // interrupted still owns the server, so this commit waits for it too.
+            self.interrupting = false;
+            self.pending_commit = true;
+        } else {
+            self.transport.send(&ClientFrame::Commit);
+        }
         vec![
             Effect::AppendEntry {
                 kind: "note",
@@ -352,6 +445,9 @@ impl<S: Transport> Session<S> {
         self.blocked = true;
         self.busy = false;
         self.pending_commit = false;
+        self.spoke = false;
+        self.muted = false;
+        self.interrupting = false;
         self.queued.clear();
         self.hold_deadline = None;
         vec![
@@ -385,6 +481,37 @@ impl<S: Transport> Session<S> {
         self.hold_deadline = Some(now_ms.saturating_add(MAX_HOLD_MS));
     }
 
+    /// The turn that was running has closed.
+    ///
+    /// Three things happen here that cannot happen anywhere else: the button comes
+    /// back, the page stops being muted, and an utterance that was held back — by an
+    /// interruption, or by a session that was still coming up — is finally handed
+    /// over. The server refuses a commit while a turn runs, so this is the earliest
+    /// moment at which the words are not lost.
+    fn close_turn(&mut self) -> Vec<Effect> {
+        self.busy = false;
+        self.spoke = false;
+        self.muted = false;
+        self.interrupting = false;
+        let mut effects = vec![Effect::SetButtonEnabled(true)];
+        if self.pending_commit {
+            self.pending_commit = false;
+            self.busy = true;
+            self.transport.send(&ClientFrame::Commit);
+            effects.push(Effect::SetStatus(STATUS_THINKING));
+            return effects;
+        }
+        // A hold that is still feeding keeps "正在听…": the answer it was waiting
+        // for was interrupted, and the microphone is still open.
+        let listening = self.holding && !self.blocked;
+        effects.push(Effect::SetStatus(if listening {
+            STATUS_LISTENING
+        } else {
+            STATUS_IDLE
+        }));
+        effects
+    }
+
     /// Ends a hold that produced **no audio at all**, without handing anything over.
     ///
     /// Not the `abort` path: there, the page knows capture failed — it asked for the
@@ -403,6 +530,7 @@ impl<S: Transport> Session<S> {
     fn end_hold_without_audio(&mut self, mut effects: Vec<Effect>) -> Vec<Effect> {
         self.blocked = true;
         self.pending_commit = false;
+        self.interrupting = false;
         self.queued.clear();
         self.hold_deadline = None;
         effects.push(Effect::AppendEntry {
@@ -818,6 +946,169 @@ mod tests {
                 kind: "video".to_string(),
                 url: "/api/v1/assets/3/download".to_string()
             }]
+        );
+    }
+
+    const AUDIO: &str = r#"{"type":"audio","pcm":"AAA="}"#;
+    const DONE: &str = r#"{"type":"done"}"#;
+
+    /// Brings a session up to the point where the assistant is speaking: press,
+    /// connect, ready, one utterance committed, and the first chunk of the answer.
+    fn speaking_session() -> Session<Recorder> {
+        let mut session = session();
+        session.press(0);
+        session.on_socket_open();
+        session.on_server_frame(READY, 0);
+        session.audio_chunk("AAA=".to_string());
+        session.release();
+        session.on_server_frame(AUDIO, 0);
+        session
+    }
+
+    /// The barge-in. Before this the press was swallowed and the answer went on
+    /// talking over the user (docs/architecture.md §11.6).
+    #[test]
+    fn pressing_while_the_answer_speaks_interrupts_it() {
+        let mut session = speaking_session();
+        let effects = session.press(1_000);
+        assert_eq!(effects.first(), Some(&Effect::StopPlayback));
+        assert!(effects.contains(&Effect::SetButtonActive(true)));
+        assert_eq!(
+            effects.last(),
+            Some(&Effect::SetStatus(STATUS_LISTENING)),
+            "the page is now listening to the user, not playing"
+        );
+        assert!(session.is_holding(), "the interrupting press is a hold like any other");
+        assert_eq!(
+            session.hold_deadline(),
+            Some(1_000 + MAX_HOLD_MS),
+            "and it is capped like any other"
+        );
+        assert_eq!(
+            session.transport().frames.last(),
+            Some(&ClientFrame::Cancel),
+            "the server is told to stop talking, after the commit of the last utterance"
+        );
+    }
+
+    /// A press is only an interruption when there is something to hear. While the
+    /// model is thinking — or running a tool — there is no speech to stop, and the
+    /// server would refuse the commit that follows anyway, so the press stays a
+    /// no-op exactly as it was before.
+    #[test]
+    fn pressing_while_the_model_is_thinking_is_still_refused() {
+        let mut session = session();
+        session.press(0);
+        session.on_socket_open();
+        session.on_server_frame(READY, 0);
+        session.audio_chunk("AAA=".to_string());
+        session.release();
+        session.on_server_frame(r#"{"type":"transcript","text":"画一只红隼"}"#, 0);
+        assert!(session.press(1_000).is_empty(), "nothing is playing");
+        assert!(!session.is_holding());
+        assert_eq!(
+            session.transport().frames.last(),
+            Some(&ClientFrame::Commit),
+            "and no cancel went out either"
+        );
+    }
+
+    /// A cancelled answer does not stop the instant the endpoint is told to: the
+    /// chunks already on the wire would restart the speech the user interrupted.
+    #[test]
+    fn the_rest_of_a_cancelled_answer_is_not_played() {
+        let mut session = speaking_session();
+        session.press(1_000);
+        assert!(
+            session.on_server_frame(AUDIO, 1_500).is_empty(),
+            "muted until the interrupted turn closes"
+        );
+        session.on_server_frame(DONE, 1_600);
+        assert_eq!(
+            session.on_server_frame(AUDIO, 2_000),
+            vec![Effect::SetStatus(STATUS_ANSWERING), Effect::PlayAudio { pcm: "AAA=".to_string() }],
+            "the next answer plays"
+        );
+    }
+
+    /// The words spoken over an answer are handed over when the interrupted turn
+    /// closes — not before. Committing early is not merely early: the server refuses
+    /// an utterance while a turn runs, and the user would hear nothing at all.
+    #[test]
+    fn an_interrupting_hold_hands_over_its_words_when_the_turn_closes() {
+        let mut session = speaking_session();
+        session.press(1_000);
+        session.audio_chunk("BBB=".to_string());
+        let effects = session.release();
+        assert_eq!(effects.last(), Some(&Effect::SetStatus(STATUS_THINKING)));
+        assert_eq!(
+            session.transport().frames,
+            vec![
+                ClientFrame::Start,
+                ClientFrame::Audio { pcm: "AAA=".to_string() },
+                ClientFrame::Commit,
+                ClientFrame::Cancel,
+                ClientFrame::Audio { pcm: "BBB=".to_string() },
+            ],
+            "the audio went out as it was captured; the commit is what is held"
+        );
+
+        session.on_server_frame(DONE, 2_000);
+        assert_eq!(
+            session.transport().frames,
+            vec![
+                ClientFrame::Start,
+                ClientFrame::Audio { pcm: "AAA=".to_string() },
+                ClientFrame::Commit,
+                ClientFrame::Cancel,
+                ClientFrame::Audio { pcm: "BBB=".to_string() },
+                ClientFrame::Commit,
+            ],
+            "the held audio went out before the deferred commit"
+        );
+    }
+
+    /// The 25 s cap hands over an interrupting hold the same way a release does:
+    /// the audio goes, the commit waits for the turn being interrupted to close.
+    #[test]
+    fn the_cap_defers_an_interrupting_hold_too() {
+        let mut session = speaking_session();
+        session.press(1_000);
+        session.audio_chunk("CCC=".to_string());
+        // The cap fires with an utterance behind it: deferred like `release`.
+        let effects = session.tick(1_000 + MAX_HOLD_MS);
+        assert_eq!(effects.last(), Some(&Effect::SetStatus(STATUS_THINKING)));
+        assert_eq!(
+            session.transport().frames.last(),
+            Some(&ClientFrame::Audio { pcm: "CCC=".to_string() }),
+            "no commit ahead of the turn still running"
+        );
+        session.on_server_frame(DONE, 2_000);
+        assert_eq!(session.transport().frames.last(), Some(&ClientFrame::Commit));
+    }
+
+    /// A hold that is still feeding keeps "正在听…" when the turn it was waiting on
+    /// closes; it is the answer that ended, not the press.
+    #[test]
+    fn a_close_while_still_holding_keeps_the_page_listening() {
+        let mut session = session();
+        session.press(0);
+        session.on_socket_open();
+        session.on_server_frame(READY, 0);
+        session.audio_chunk("AAA=".to_string());
+        session.release();
+        assert_eq!(
+            session.on_server_frame(DONE, 1_000),
+            vec![Effect::SetButtonEnabled(true), Effect::SetStatus(STATUS_IDLE)],
+            "released: the hold is over"
+        );
+
+        let mut holding = speaking_session();
+        holding.press(1_000);
+        assert_eq!(
+            holding.on_server_frame(DONE, 1_500),
+            vec![Effect::SetButtonEnabled(true), Effect::SetStatus(STATUS_LISTENING)],
+            "the user is still talking over the answer"
         );
     }
 }

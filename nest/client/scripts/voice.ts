@@ -188,6 +188,14 @@ interface Capture {
 
 let capture: Capture | null = null;
 let playHead = 0;
+/**
+ * The chunks still on the playback schedule, each with the time it finishes. Kept
+ * because an interrupted answer has to come off the speaker, and the only way to
+ * take a scheduled source back is to reach it by handle. Pruned as it plays, so this
+ * cannot grow across a long call. Mirrors `AudioGraph::scheduled` in
+ * `rust/client/src/audio.rs`.
+ */
+let scheduled: { source: AudioBufferSourceNode; endsAt: number }[] = [];
 
 async function openAudio(): Promise<AudioContext> {
   // A non-default rate is honoured exactly by Chrome, which is what lets the
@@ -250,6 +258,29 @@ function playChunk(base64: string): void {
   playHead = Math.max(playHead, capture.context.currentTime);
   source.start(playHead);
   playHead += buffer.duration;
+  const now = capture.context.currentTime;
+  scheduled = scheduled.filter((entry) => entry.endsAt > now);
+  scheduled.push({ source, endsAt: playHead });
+}
+
+/**
+ * Take everything off the speaker.
+ *
+ * This is the audible half of an interruption: the user pressed to talk over the
+ * answer, so the chunks already queued for it must not play. The queue head is
+ * reset because the next answer starts fresh — leaving it where the cancelled
+ * speech would have ended would make the next chunk wait out a silence that never
+ * played.
+ */
+function stopPlayback(): void {
+  const pending = scheduled;
+  scheduled = [];
+  playHead = 0;
+  for (const entry of pending) {
+    // Off the graph rather than `stop()`: a source with no outgoing connection
+    // reaches nobody's speaker, and one that already finished is a no-op.
+    entry.source.disconnect();
+  }
 }
 
 /* ---------- socket ---------- */
@@ -270,6 +301,17 @@ let holdTimer: number | null = null;
  * `voice_core.rs`'s `frames_this_hold`.
  */
 let framesThisHold = 0;
+/**
+ * The answer is being spoken: audio arrived for this turn and it has not closed. A
+ * press is only an interruption when this is true — that is the one state where the
+ * user hears something they may want to stop, and the one in which the server has a
+ * response to cancel. Mirrors `voice_core.rs`'s `spoke`.
+ */
+let spoke = false;
+/** The page must not play anything: set on interrupt, cleared when that turn closes. */
+let muted = false;
+/** This hold interrupted a turn the server still owns, so its commit waits for it. */
+let interrupting = false;
 
 async function ensureSocket(): Promise<WebSocket> {
   if (socket !== null) {
@@ -309,6 +351,9 @@ async function ensureSocket(): Promise<WebSocket> {
   opened.onclose = () => {
     socket = null;
     ready = false;
+    spoke = false;
+    muted = false;
+    interrupting = false;
     closeEventStream();
     if (conversationId !== null) {
       appendEntry('note', NOTE_RECONNECT);
@@ -385,15 +430,19 @@ function handleFrame(raw: string): void {
     }
 
     case 'audio': {
+      if (muted) {
+        // A cancelled answer does not stop the instant the endpoint is told to: the
+        // chunks already on the wire would restart the speech the user interrupted.
+        break;
+      }
+      spoke = true;
       setStatus('正在回答…');
       playChunk(readString(parsed, 'pcm'));
       break;
     }
 
     case 'done': {
-      busy = false;
-      button.disabled = false;
-      setStatus('按住按钮开始说话');
+      closeTurn();
       break;
     }
 
@@ -403,6 +452,13 @@ function handleFrame(raw: string): void {
       // feeding it for the rest of this hold.
       blocked = true;
       busy = false;
+      spoke = false;
+      muted = false;
+      interrupting = false;
+      // An utterance held back behind an interrupted turn has nowhere to go now:
+      // the refusal is about this call, and re-sending into it is how one refusal
+      // became a wall of them (docs/verification.md §7.1).
+      pendingCommit = false;
       button.disabled = false;
       break;
     }
@@ -491,7 +547,14 @@ function endHoldAtLimit(): void {
   }
   blocked = true;
   busy = true;
-  send({ type: 'commit' });
+  if (interrupting) {
+    // The cap ends the hold, not the interruption: the turn being interrupted
+    // still owns the server, so this commit waits for it too.
+    interrupting = false;
+    pendingCommit = true;
+  } else {
+    send({ type: 'commit' });
+  }
   appendEntry('note', NOTE_HOLD_LIMIT);
   setStatus('正在思考…');
 }
@@ -515,6 +578,7 @@ function endHoldAtLimit(): void {
 function endHoldWithoutAudio(): void {
   blocked = true;
   pendingCommit = false;
+  interrupting = false;
   pending = [];
   clearHoldTimer();
   appendEntry('note', NOTE_EMPTY_HOLD);
@@ -522,8 +586,69 @@ function endHoldWithoutAudio(): void {
   setStatus('按住按钮开始说话');
 }
 
+/**
+ * The turn that was running has closed.
+ *
+ * Three things happen here and nowhere else: the button comes back, the page stops
+ * being muted, and an utterance that was held back — by an interruption, or by a
+ * session that was still coming up — is finally handed over. The server refuses a
+ * commit while a turn runs, so this is the earliest moment at which the words are
+ * not lost. Mirrors `voice_core.rs`'s `close_turn`.
+ */
+function closeTurn(): void {
+  busy = false;
+  spoke = false;
+  muted = false;
+  interrupting = false;
+  button.disabled = false;
+  if (pendingCommit) {
+    pendingCommit = false;
+    busy = true;
+    send({ type: 'commit' });
+    setStatus('正在思考…');
+    return;
+  }
+  // A hold that is still feeding keeps "正在听…": the answer it was waiting for was
+  // interrupted, and the microphone is still open.
+  setStatus(holding && !blocked ? '正在听…' : '按住按钮开始说话');
+}
+
+/**
+ * Pointer went down **while the assistant was speaking**: go silent, tell the server
+ * to stop talking, and start collecting the new utterance.
+ *
+ * `busy` deliberately stays set — the turn is not ours to hand over until the server
+ * says it closed it — and an empty interrupt is still an interrupt, so `release`
+ * reads `framesThisHold` the same way it always has.
+ */
+function interruptPress(): void {
+  holding = true;
+  blocked = false;
+  framesThisHold = 0;
+  muted = true;
+  interrupting = true;
+  send({ type: 'cancel' });
+  stopPlayback();
+  button.classList.add('voice-button-active');
+  if (ready) {
+    setStatus('正在听…');
+    armHoldLimit();
+  } else {
+    setStatus('正在连接…');
+  }
+}
+
 async function press(): Promise<void> {
-  if (busy || holding) {
+  if (holding) {
+    return;
+  }
+  if (busy) {
+    // A press during a turn is only refused while there is nothing to hear. Once
+    // the answer is speaking the user is talking over it, and that is an
+    // interruption, not a queue jump (docs/architecture.md §11.6).
+    if (spoke) {
+      interruptPress();
+    }
     return;
   }
   holding = true;
@@ -577,6 +702,20 @@ function release(): void {
   holding = false;
   clearHoldTimer();
   button.classList.remove('voice-button-active');
+  if (interrupting) {
+    if (framesThisHold === 0) {
+      interrupting = false;
+      endHoldWithoutAudio();
+      return;
+    }
+    // The interrupted turn has not closed yet, and the server refuses an utterance
+    // while a turn is running — committing now would lose the words without a trace.
+    // `closeTurn` sends them the moment they can land.
+    interrupting = false;
+    pendingCommit = true;
+    setStatus('正在思考…');
+    return;
+  }
   if (busy) {
     // Already handed over by the hold limit, or a turn is running.
     return;

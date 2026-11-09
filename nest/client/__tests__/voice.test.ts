@@ -105,16 +105,58 @@ class FakeAudioWorkletNode {
   disconnect(): void {}
 }
 
+/**
+ * One scheduled chunk of the answer. `disconnected` is what the interrupt
+ * assertions read: taking a source off the graph is how the page goes silent.
+ */
+class FakeAudioBufferSourceNode {
+  static instances: FakeAudioBufferSourceNode[] = [];
+  buffer: unknown = null;
+  startedAt: number | null = null;
+  disconnected = false;
+  constructor() {
+    FakeAudioBufferSourceNode.instances.push(this);
+  }
+  connect(): void {}
+  start(when?: number): void {
+    this.startedAt = when ?? 0;
+  }
+  disconnect(): void {
+    this.disconnected = true;
+  }
+}
+
+class FakeAudioBuffer {
+  readonly duration: number;
+  private readonly channel: Float32Array;
+  constructor(samples: number, rate: number) {
+    this.channel = new Float32Array(samples);
+    this.duration = samples / rate;
+  }
+  getChannelData(_index: number): Float32Array {
+    return this.channel;
+  }
+}
+
 class FakeAudioContext {
+  static instances: FakeAudioContext[] = [];
   readonly sampleRate: number;
   readonly destination = {};
   readonly audioWorklet = { addModule: async (): Promise<void> => {} };
+  currentTime = 0;
   constructor(options?: { sampleRate?: number }) {
     this.sampleRate = options?.sampleRate ?? 48000;
+    FakeAudioContext.instances.push(this);
   }
   async resume(): Promise<void> {}
   createMediaStreamSource(): { connect: () => void } {
     return { connect: (): void => {} };
+  }
+  createBuffer(_channels: number, length: number, rate: number): FakeAudioBuffer {
+    return new FakeAudioBuffer(length, rate);
+  }
+  createBufferSource(): FakeAudioBufferSourceNode {
+    return new FakeAudioBufferSourceNode();
   }
 }
 
@@ -137,6 +179,8 @@ async function boot(): Promise<void> {
   FakeWebSocket.instances = [];
   FakeAudioWorkletNode.instances = [];
   FakeEventSource.instances = [];
+  FakeAudioBufferSourceNode.instances = [];
+  FakeAudioContext.instances = [];
   vi.stubGlobal('WebSocket', FakeWebSocket);
   vi.stubGlobal('EventSource', FakeEventSource);
   vi.stubGlobal('AudioContext', FakeAudioContext);
@@ -447,5 +491,123 @@ describe('单段时长上限', () => {
     emitMicChunk();
 
     expect(framesOf(socket)).toEqual(['start', 'audio', 'commit', 'audio']);
+  });
+});
+
+/**
+ * 打断：上一句还在播时再按住。断的是帧序与静音动作，不是声音——真机那一按仍归人
+ * (docs/roadmap.md §3)。与 `rust/client/src/voice_core.rs` 里的同名断言一对。
+ */
+describe('打断正在播的回答', () => {
+  function framesOf(socket: FakeWebSocket): string[] {
+    return socket.frames().map((frame) => String(frame.type));
+  }
+
+  /** 一路走到「助手正在说话」：按住、就绪、说一句、松手提交、第一块回答到达。 */
+  async function answering(): Promise<FakeWebSocket> {
+    stubTicket();
+    await boot();
+    const socket = await socketAfterPress();
+    socket.open();
+    socket.emit({ type: 'ready', conversationId: 7 });
+    await vi.waitFor(() => {
+      expect(statusText()).toBe('正在听…');
+    });
+    emitMicChunk();
+    release();
+    socket.emit({ type: 'audio', pcm: 'AAA=' });
+    await vi.waitFor(() => {
+      expect(statusText()).toBe('正在回答…');
+    });
+    return socket;
+  }
+
+  it('按下即静音：这一句排着的音频块全部从喇叭上摘掉', async () => {
+    const socket = await answering();
+    const queued = FakeAudioBufferSourceNode.instances[0];
+    if (queued === undefined) {
+      throw new Error('the answer never reached the speaker');
+    }
+
+    press();
+    await vi.waitFor(() => {
+      expect(statusText()).toBe('正在听…');
+    });
+    expect(queued.disconnected).toBe(true);
+    expect(framesOf(socket)).toEqual(['start', 'audio', 'commit', 'cancel']);
+  });
+
+  it('取消之后仍在路上的回答不再播，本轮结束后才恢复', async () => {
+    const socket = await answering();
+    press();
+    await vi.waitFor(() => {
+      expect(framesOf(socket)).toHaveLength(4);
+    });
+
+    socket.emit({ type: 'audio', pcm: 'BBB=' });
+    expect(FakeAudioBufferSourceNode.instances).toHaveLength(1);
+
+    socket.emit({ type: 'done' });
+    socket.emit({ type: 'audio', pcm: 'CCC=' });
+    await vi.waitFor(() => {
+      expect(FakeAudioBufferSourceNode.instances).toHaveLength(2);
+    });
+  });
+
+  it('打断期间松手，话先存着，等本轮结束才 commit', async () => {
+    const socket = await answering();
+    press();
+    await vi.waitFor(() => {
+      expect(framesOf(socket)).toHaveLength(4);
+    });
+    emitMicChunk();
+    release();
+    expect(framesOf(socket)).toEqual(['start', 'audio', 'commit', 'cancel', 'audio']);
+    expect(statusText()).toBe('正在思考…');
+
+    socket.emit({ type: 'done' });
+    await vi.waitFor(() => {
+      expect(framesOf(socket)).toEqual([
+        'start',
+        'audio',
+        'commit',
+        'cancel',
+        'audio',
+        'commit',
+      ]);
+    });
+  });
+
+  it('正在想、还没出声时按下，不取消任何东西', async () => {
+    stubTicket();
+    await boot();
+    const socket = await socketAfterPress();
+    socket.open();
+    socket.emit({ type: 'ready', conversationId: 7 });
+    await vi.waitFor(() => {
+      expect(statusText()).toBe('正在听…');
+    });
+    emitMicChunk();
+    release();
+    socket.emit({ type: 'transcript', text: '画一只红隼' });
+    expect(statusText()).toBe('正在思考…');
+
+    press();
+    expect(framesOf(socket)).toEqual(['start', 'audio', 'commit']);
+    expect(statusText()).toBe('正在思考…');
+  });
+
+  it('上一句正常结束后，下一次按住走原来的路', async () => {
+    const socket = await answering();
+    socket.emit({ type: 'done' });
+    await vi.waitFor(() => {
+      expect(statusText()).toBe('按住按钮开始说话');
+    });
+
+    press();
+    await vi.waitFor(() => {
+      expect(statusText()).toBe('正在听…');
+    });
+    expect(framesOf(socket)).toEqual(['start', 'audio', 'commit']);
   });
 });

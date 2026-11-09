@@ -282,6 +282,15 @@ pub mod message {
         json!({ "type": "response.create" })
     }
 
+    /// Stops the response that is being generated. The endpoint writes whatever it
+    /// had already produced into the item chain and answers with a `response.done`
+    /// whose status is `cancelled`, so the turn still closes. Sending this when
+    /// nothing is in flight is an error at the endpoint, which is why the caller
+    /// only sends it while it believes a response is running.
+    pub fn response_cancel() -> Value {
+        json!({ "type": "response.cancel" })
+    }
+
     /// A tool's result. The caller waits for the server to acknowledge this before
     /// `response_create`: sending both in one tick makes the model re-issue the
     /// identical tool call (docs/verification.md §3.2).
@@ -473,6 +482,7 @@ mod vocabulary {
         assert_eq!(message::append_audio("AAA="), json!({"type":"input_audio_buffer.append","audio":"AAA="}));
         assert_eq!(message::commit(), json!({"type":"input_audio_buffer.commit"}));
         assert_eq!(message::response_create(), json!({"type":"response.create"}));
+        assert_eq!(message::response_cancel(), json!({"type":"response.cancel"}));
         assert_eq!(
             message::function_call_output("c1", "asset 7"),
             json!({"type":"conversation.item.create","item":{"type":"function_call_output","call_id":"c1","output":"asset 7"}})

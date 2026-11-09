@@ -56,6 +56,15 @@ pub struct VoiceCall {
     failures: usize,
     refused: bool,
     busy: bool,
+    /// A response the endpoint is generating right now: set when we ask for one,
+    /// cleared when it closes. `cancel` is only forwarded while this holds, because
+    /// with nothing in flight the endpoint answers the cancel with an error frame
+    /// (help.aliyun.com/zh/model-studio/fun-audiochat-client-events).
+    responding: bool,
+    /// The user interrupted the response in flight. The turn was already closed on
+    /// our side, so the endpoint's own `response.done` for it must not close it a
+    /// second time, and nothing it still has on the way may reach the speaker.
+    interrupted: bool,
     closed: bool,
     silence: Option<std::pin::Pin<Box<Sleep>>>,
 }
@@ -77,6 +86,8 @@ impl VoiceCall {
             failures: 0,
             refused: false,
             busy: false,
+            responding: false,
+            interrupted: false,
             closed: false,
             silence: None,
         }
@@ -163,8 +174,41 @@ impl VoiceCall {
                 self.audio_frames = 0;
                 self.arm_silence_guard();
             }
+            ClientFrame::Cancel => self.interrupt().await,
             ClientFrame::Stop => self.close().await,
         }
+    }
+
+    /// The button went down again while the assistant was talking.
+    ///
+    /// The speaker went silent in the browser before this frame arrived; the two
+    /// halves here are the parts only the server can do — stop the endpoint from
+    /// generating the rest of that answer, and close the turn **now**. Closing it is
+    /// what lets the next utterance be accepted: `Commit` is refused while a turn
+    /// runs, so waiting for the endpoint's own `response.done` would drop the words
+    /// the user is speaking over it (docs/architecture.md §11.6).
+    ///
+    /// Tool calls the cancelled response had already emitted are dropped rather than
+    /// run. The user asked to stop, and a generation that lands after the
+    /// interruption speaks over the answer they are about to give.
+    async fn interrupt(&mut self) {
+        if !self.busy || !self.responding {
+            // Nothing to interrupt. Forwarding the cancel anyway earns an error
+            // frame from the endpoint, which the browser would read as the user's
+            // utterance having been refused.
+            tracing::warn!(
+                busy = self.busy,
+                responding = self.responding,
+                "ignoring a cancel with no response in flight"
+            );
+            return;
+        }
+        tracing::info!(audio_frames = self.audio_frames, "voice turn interrupted");
+        self.responding = false;
+        self.interrupted = true;
+        self.pending_calls.clear();
+        self.command(Command::CancelResponse).await;
+        self.finalize_turn().await;
     }
 
     async fn start(&mut self) {
@@ -232,13 +276,18 @@ impl VoiceCall {
                 self.open_turn(&text).await;
                 // Push-to-talk does not auto-answer: with `turn_detection: null`
                 // the server commits the audio and waits to be asked.
-                self.command(Command::CreateResponse).await;
+                self.ask_for_response().await;
             }
             RealtimeEvent::AssistantText(text) => {
                 // Trimmed per segment: the upstream transcript carries a trailing
                 // newline, and joining those verbatim leaves blank lines in history.
                 let trimmed = text.trim();
                 if trimmed.is_empty() {
+                    return;
+                }
+                if self.interrupted {
+                    // The row for that answer is already written; a late segment
+                    // would otherwise be filed under the next turn.
                     return;
                 }
                 if !self.assistant_text.is_empty() {
@@ -248,13 +297,36 @@ impl VoiceCall {
                 self.send(ServerFrame::AssistantText { text: trimmed.to_string() })
                     .await;
             }
-            RealtimeEvent::Audio(pcm) => self.send(ServerFrame::Audio { pcm }).await,
+            RealtimeEvent::Audio(pcm) => {
+                if self.interrupted {
+                    // Already on its way from the cancelled answer. The browser is
+                    // muted too, but dropping it here is what keeps the bytes off
+                    // the wire on a 65 KB/s uplink.
+                    return;
+                }
+                self.send(ServerFrame::Audio { pcm }).await
+            }
             RealtimeEvent::FunctionCall { call_id, name, arguments } => {
+                if self.interrupted {
+                    // Emitted by the answer the user stopped. The turn is closed, so
+                    // running it would spend a generation nobody asked to keep.
+                    return;
+                }
                 self.pending_calls.push((call_id, name.clone(), arguments));
                 self.send(ServerFrame::ToolCall { name, status: "running".to_string() })
                     .await;
             }
             RealtimeEvent::ResponseDone => {
+                self.responding = false;
+                if self.interrupted {
+                    // The cancelled response closing. The turn was finalised when
+                    // the interrupt arrived; a second `done` would hand the browser
+                    // a button it is already holding, and swallow the next answer's
+                    // own close. Events arrive in order on this one socket, so the
+                    // endpoint cannot have started the next response yet.
+                    self.interrupted = false;
+                    return;
+                }
                 if self.pending_calls.is_empty() {
                     self.finalize_turn().await;
                 } else {
@@ -264,6 +336,7 @@ impl VoiceCall {
             RealtimeEvent::Failed(message) => {
                 self.failures += 1;
                 self.refused = true;
+                self.responding = false;
                 tracing::warn!(%message, failures = self.failures, "voice turn failed");
                 // One line in the UI per turn: a run of failures is one problem,
                 // and the page can only show so many.
@@ -394,6 +467,17 @@ impl VoiceCall {
             self.finalize_turn().await;
             return;
         }
+        self.ask_for_response().await;
+    }
+
+    /// Asks the endpoint to speak, and records that a response is now in flight.
+    ///
+    /// Also the reset point for `interrupted`. Events arrive in order on one socket,
+    /// so a cancelled response has closed long before this can be reached; if it
+    /// somehow never closed, this is where the call stops dropping its own audio.
+    async fn ask_for_response(&mut self) {
+        self.responding = true;
+        self.interrupted = false;
         self.command(Command::CreateResponse).await;
     }
 
@@ -638,6 +722,126 @@ mod tests {
         assert!(commands.try_recv().is_err(), "the UI disables the button; a stray press is dropped");
     }
 
+    /// The barge-in, server half: the page has already gone silent, and this is
+    /// what stops the endpoint going on talking. Three things must happen and none
+    /// of them may wait — the cancel goes upstream, the turn closes now (a commit
+    /// arriving while a turn runs is dropped, and the interrupted user's words
+    /// would be the thing dropped), and the partial answer is filed as the answer.
+    #[tokio::test]
+    async fn a_cancel_while_an_answer_is_speaking_cancels_upstream_and_closes_the_turn() {
+        let (mut call, mut commands, _events, mut out, state) = fixture().await;
+        let conversation_id = call.conversation_id.expect("conversation");
+        call.assistant_message_id = Some(
+            state
+                .conversations
+                .create_assistant_placeholder(conversation_id, None)
+                .await
+                .expect("placeholder"),
+        );
+        call.busy = true;
+        call.responding = true;
+        call.assistant_text = "我先画一只红隼".to_string();
+
+        call.receive(ClientFrame::Cancel).await;
+
+        assert!(matches!(commands.recv().await, Some(Command::CancelResponse)));
+        assert!(!call.busy, "the turn is over, so the next utterance can be accepted");
+        assert!(!call.responding);
+        assert!(call.interrupted, "the endpoint still owes a response.done for it");
+        let closed = frames(&mut out);
+        assert!(
+            closed.iter().any(|frame| frame.contains("\"type\":\"done\"")),
+            "the browser is told the turn closed: {closed:?}"
+        );
+        let views = state.conversations.views(conversation_id).await.expect("views");
+        assert_eq!(
+            views.last().expect("assistant").content,
+            "我先画一只红隼",
+            "what it managed to say is the answer of record"
+        );
+    }
+
+    /// A cancelled response is cancelled: whatever the endpoint had already decided
+    /// to call does not get run, and whatever it had already queued to say does not
+    /// get spoken. The user asked to stop, and a generation that lands afterwards
+    /// would speak over the answer they are about to give.
+    #[tokio::test]
+    async fn the_interrupted_turn_drops_its_tool_calls_and_its_late_frames() {
+        let (mut call, mut commands, _events, mut out, state) = fixture().await;
+        let conversation_id = call.conversation_id.expect("conversation");
+        call.assistant_message_id = Some(
+            state
+                .conversations
+                .create_assistant_placeholder(conversation_id, None)
+                .await
+                .expect("placeholder"),
+        );
+        call.busy = true;
+        call.responding = true;
+        call.pending_calls.push((
+            "call-1".to_string(),
+            "generate_image".to_string(),
+            "{\"prompt\":\"红隼\"}".to_string(),
+        ));
+
+        call.receive(ClientFrame::Cancel).await;
+        assert!(call.pending_calls.is_empty(), "an interrupted call is not run");
+        assert!(
+            frames(&mut out)
+                .iter()
+                .any(|frame| frame.contains("\"type\":\"done\"")),
+            "the close for the turn the interrupt ended"
+        );
+
+        // The remainder of the cancelled answer, still on its way.
+        call.on_realtime(RealtimeEvent::Audio("AAA=".to_string())).await;
+        call.on_realtime(RealtimeEvent::AssistantText("，稍等".to_string())).await;
+        call.on_realtime(RealtimeEvent::FunctionCall {
+            call_id: "call-2".to_string(),
+            name: "generate_image".to_string(),
+            arguments: "{}".to_string(),
+        })
+        .await;
+        assert!(frames(&mut out).is_empty(), "nothing of the cancelled turn reaches the page");
+        assert!(call.pending_calls.is_empty());
+
+        // The endpoint's own close for it arrives and is swallowed: the turn was
+        // already finalised, and a second `done` would hand back a button the user
+        // is already holding down.
+        call.on_realtime(RealtimeEvent::ResponseDone).await;
+        assert!(frames(&mut out).is_empty(), "the swallowed close sends nothing");
+        assert!(!call.interrupted);
+        while let Ok(command) = commands.try_recv() {
+            assert!(
+                !matches!(command, Command::ToolOutput { .. }),
+                "a dropped call must not be answered upstream: {command:?}"
+            );
+        }
+    }
+
+    /// The other half of the gate: with no response in flight the endpoint answers a
+    /// cancel with an error frame, and the browser reads that as the user's
+    /// utterance having been refused. Between two responses of one turn — while a
+    /// tool is running — there is nothing to cancel.
+    #[tokio::test]
+    async fn a_cancel_with_no_response_in_flight_is_not_forwarded() {
+        let (mut call, mut commands, _events, mut out, _state) = fixture().await;
+        call.receive(ClientFrame::Cancel).await;
+        assert!(commands.try_recv().is_err(), "no turn is running at all");
+        assert!(frames(&mut out).is_empty());
+
+        // A turn running on a tool, with no response generating.
+        call.receive(ClientFrame::Commit).await;
+        assert!(matches!(commands.recv().await, Some(Command::Commit)));
+        assert!(call.busy && !call.responding);
+        call.receive(ClientFrame::Cancel).await;
+        assert!(
+            !commands.try_recv().is_ok_and(|command| matches!(command, Command::CancelResponse)),
+            "nothing to cancel upstream"
+        );
+        assert!(call.busy, "the turn is untouched");
+    }
+
     #[tokio::test]
     async fn the_silence_guard_releases_a_turn_that_never_transcribed() {
         let (mut call, _commands, _events, mut out, _state) = fixture().await;
@@ -716,6 +920,7 @@ mod tests {
                         "tool_output"
                     }
                     Command::CreateResponse => "create_response",
+                    Command::CancelResponse => "cancel_response",
                     Command::Commit => "commit",
                     Command::AppendAudio(_) => "append_audio",
                     Command::Configure(_) => "configure",

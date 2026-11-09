@@ -35,9 +35,9 @@ use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
 use wasm_bindgen_futures::{JsFuture, spawn_local};
 use web_sys::{
-    AudioContext, AudioContextOptions, AudioWorkletNode, AudioWorkletNodeOptions,
-    ChannelCountMode, MediaStream, MediaStreamAudioSourceNode, MediaStreamConstraints,
-    MediaStreamTrack, MessageEvent, MessagePort,
+    AudioBufferSourceNode, AudioContext, AudioContextOptions, AudioWorkletNode,
+    AudioWorkletNodeOptions, ChannelCountMode, MediaStream, MediaStreamAudioSourceNode,
+    MediaStreamConstraints, MediaStreamTrack, MessageEvent, MessagePort,
 };
 
 /// The upstream's sample rate. Asking the browser for it is what lets the browser
@@ -56,11 +56,16 @@ pub struct AudioGraph {
     context: Option<AudioContext>,
     mic: Option<Mic>,
     play_head: f64,
+    /// Chunks still on the playback schedule, each with the time it finishes. Held
+    /// because an interrupted answer has to come off the speaker, and the only way
+    /// to take a scheduled `AudioBufferSourceNode` back is to reach it by handle.
+    /// Pruned as it plays, so this cannot grow across a long call.
+    scheduled: Vec<(AudioBufferSourceNode, f64)>,
 }
 
 impl AudioGraph {
     pub fn new() -> Self {
-        AudioGraph { context: None, mic: None, play_head: 0.0 }
+        AudioGraph { context: None, mic: None, play_head: 0.0, scheduled: Vec::new() }
     }
 
     pub fn has_context(&self) -> bool {
@@ -127,12 +132,35 @@ impl AudioGraph {
             .connect_with_audio_node(&context.destination())
             .map_err(|error| format!("cannot connect playback: {error:?}"))?;
 
-        self.play_head = self.play_head.max(context.current_time());
+        let now = context.current_time();
+        self.play_head = self.play_head.max(now);
         source
             .start_with_when(self.play_head)
             .map_err(|error| format!("cannot start playback: {error:?}"))?;
         self.play_head += buffer.duration();
+        self.scheduled.retain(|(_, ends_at)| *ends_at > now);
+        self.scheduled.push((source, self.play_head));
         Ok(())
+    }
+
+    /// Take everything off the speaker.
+    ///
+    /// This is the audible half of an interruption: the user pressed to talk over
+    /// the answer, so the chunks already queued for it must not play. The queue
+    /// head is reset because the next answer starts fresh — leaving it where the
+    /// cancelled speech would have ended would make the next chunk wait out an
+    /// silence that never played.
+    pub fn stop_playback(&mut self) {
+        let pending = std::mem::take(&mut self.scheduled);
+        for (source, _) in pending {
+            // Off the graph rather than `stop()`: web-sys deprecates `stop` on
+            // `AudioBufferSourceNode` (it moved up to `AudioScheduledSourceNode`),
+            // and a source with no outgoing connection reaches nobody's speaker.
+            // One that already finished answers with an error, which is the success
+            // case wearing an error.
+            let _ = source.disconnect();
+        }
+        self.play_head = 0.0;
     }
 
     /// Tear the microphone down, leaving the context reusable.

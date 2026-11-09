@@ -151,6 +151,18 @@ class VoiceConnection {
   private work: Promise<void> = Promise.resolve();
   /** A turn is in flight; further utterances are refused until it settles. */
   private busy = false;
+  /**
+   * A response the endpoint is generating right now: set when we ask for one,
+   * cleared when it closes. `cancel` is only forwarded while this holds, because
+   * with nothing in flight the endpoint answers the cancel with an error frame.
+   */
+  private responding = false;
+  /**
+   * The user interrupted the response in flight. The turn was already closed on
+   * our side, so the endpoint's own `response.done` must not close it a second
+   * time, and nothing it still has on the way may reach the speaker.
+   */
+  private interrupted = false;
   private closed = false;
 
   constructor(
@@ -198,10 +210,42 @@ class VoiceConnection {
         this.audioFrames = 0;
         this.armSilenceGuard();
         break;
+      case 'cancel':
+        this.interrupt();
+        break;
       case 'stop':
         this.close();
         break;
     }
+  }
+
+  /**
+   * The button went down again while the assistant was talking.
+   *
+   * The browser has already gone silent; the two halves here are the ones only the
+   * server can do — stop the endpoint from generating the rest of that answer, and
+   * close the turn **now**. Closing it is what lets the next utterance be accepted:
+   * a commit arriving while a turn runs is dropped, and the words the user is
+   * speaking over it would be the thing dropped (docs/architecture.md §11.6).
+   *
+   * Tool calls the cancelled response had emitted are dropped rather than run.
+   */
+  private interrupt(): void {
+    if (!this.busy || !this.responding) {
+      // Nothing to interrupt. Forwarding the cancel anyway earns an error frame
+      // from the endpoint, which the browser would read as the user's utterance
+      // having been refused.
+      this.logger.warn(
+        `Ignoring a cancel with no response in flight (busy=${this.busy})`,
+      );
+      return;
+    }
+    this.logger.log(`Voice turn interrupted (${this.audioFrames} audio frames in)`);
+    this.responding = false;
+    this.interrupted = true;
+    this.pendingCalls.length = 0;
+    this.session?.cancelResponse();
+    this.finalizeTurn();
   }
 
   close(): void {
@@ -265,11 +309,16 @@ class VoiceConnection {
         // Push-to-talk does not auto-answer: with `turn_detection: null` the
         // server commits the audio but waits to be asked. Without this the call
         // goes quiet after the transcript and the button stays held.
-        this.session?.createResponse();
+        this.askForResponse();
         break;
       }
 
       case 'function_call': {
+        if (this.interrupted) {
+          // Emitted by the answer the user stopped. The turn is closed, so running
+          // it would spend a generation nobody asked to keep.
+          break;
+        }
         // Collected, not executed: one response can carry several calls, and
         // acting on the first would send `response.create` before the rest are
         // answered. Dispatch happens on `response.done`.
@@ -285,6 +334,11 @@ class VoiceConnection {
         if (text.length === 0) {
           break;
         }
+        if (this.interrupted) {
+          // The row for that answer is already written; a late segment would
+          // otherwise be filed under the next turn.
+          break;
+        }
         this.assistantText =
           this.assistantText.length > 0 ? `${this.assistantText}\n${text}` : text;
         this.send({ type: 'assistant_text', text });
@@ -292,11 +346,26 @@ class VoiceConnection {
       }
 
       case 'audio': {
+        if (this.interrupted) {
+          // Already on its way from the cancelled answer. The browser is muted too,
+          // but dropping it here is what keeps the bytes off the wire on a 65 KB/s
+          // uplink.
+          break;
+        }
         this.send({ type: 'audio', pcm: event.pcm });
         break;
       }
 
       case 'response_done': {
+        this.responding = false;
+        if (this.interrupted) {
+          // The cancelled response closing. The turn was finalised when the
+          // interrupt arrived; a second `done` would hand the browser a button it
+          // is already holding. Events arrive in order on this one socket, so the
+          // endpoint cannot have started the next response yet.
+          this.interrupted = false;
+          break;
+        }
         if (this.pendingCalls.length > 0) {
           this.work = this.work.then(() => this.dispatchPending());
         } else {
@@ -308,6 +377,7 @@ class VoiceConnection {
       case 'failed': {
         this.failures += 1;
         this.refused = true;
+        this.responding = false;
         // The endpoint's own words. They reach the browser and are then gone, so
         // a call that starts failing leaves no trace on the server at all —
         // which is exactly the incident this line exists to prevent.
@@ -425,7 +495,20 @@ class VoiceConnection {
       this.finalizeTurn();
       return;
     }
-    session.createResponse();
+    this.askForResponse();
+  }
+
+  /**
+   * Asks the endpoint to speak, and records that a response is now in flight.
+   *
+   * Also the reset point for `interrupted`. Events arrive in order on one socket, so
+   * a cancelled response has closed long before this can be reached; if it somehow
+   * never closed, this is where the call stops dropping its own audio.
+   */
+  private askForResponse(): void {
+    this.responding = true;
+    this.interrupted = false;
+    this.session?.createResponse();
   }
 
   private finalizeTurn(): void {

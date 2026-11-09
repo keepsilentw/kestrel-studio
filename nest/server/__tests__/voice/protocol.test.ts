@@ -6,9 +6,11 @@ import { parseClientFrame } from '@/voice/protocol';
  * than a throw: one bad frame should not take the call down.
  */
 describe('parseClientFrame', () => {
-  it('识别三个无载荷的控制帧', () => {
+  it('识别四个无载荷的控制帧', () => {
     expect(parseClientFrame('{"type":"start"}')).toEqual({ type: 'start' });
     expect(parseClientFrame('{"type":"commit"}')).toEqual({ type: 'commit' });
+    // 打断：与 `rust/server/src/voice/protocol.rs` 的同名断言一对。
+    expect(parseClientFrame('{"type":"cancel"}')).toEqual({ type: 'cancel' });
     expect(parseClientFrame('{"type":"stop"}')).toEqual({ type: 'stop' });
   });
 
@@ -26,7 +28,7 @@ describe('parseClientFrame', () => {
   });
 
   it('不认识 type 时返回 null', () => {
-    expect(parseClientFrame('{"type":"cancel"}')).toBeNull();
+    expect(parseClientFrame('{"type":"resume"}')).toBeNull();
     expect(parseClientFrame('{"pcm":"AA=="}')).toBeNull();
   });
 

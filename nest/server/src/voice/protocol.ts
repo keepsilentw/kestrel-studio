@@ -19,6 +19,13 @@ export type VoiceClientFrame =
   | { type: 'audio'; pcm: string }
   /** The button was released: the utterance is complete. */
   | { type: 'commit' }
+  /**
+   * The button went down while the assistant was still answering: stop this turn.
+   * The page has already muted itself; this asks the server to stop the upstream
+   * from talking, so the next utterance is not stacked on a half-finished answer
+   * (docs/architecture.md §11.6).
+   */
+  | { type: 'cancel' }
   | { type: 'stop' };
 
 /** Server → browser. */
@@ -60,6 +67,8 @@ export function parseClientFrame(raw: string): VoiceClientFrame | null {
       return { type: 'start' };
     case 'commit':
       return { type: 'commit' };
+    case 'cancel':
+      return { type: 'cancel' };
     case 'stop':
       return { type: 'stop' };
     case 'audio': {

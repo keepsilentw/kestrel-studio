@@ -29,6 +29,11 @@ pub enum ClientFrame {
     Audio { pcm: String },
     /// The button was released: the utterance is complete.
     Commit,
+    /// The button went down while the assistant was still answering: stop this
+    /// turn. The page has already muted itself; this frame asks the server to
+    /// stop the upstream from speaking, so the next utterance is not stacked on
+    /// top of a half-finished answer (docs/architecture.md §11.6).
+    Cancel,
     Stop,
 }
 
@@ -77,6 +82,7 @@ pub fn parse_client_frame(raw: &str) -> Option<ClientFrame> {
     match parsed.get("type").and_then(Value::as_str)? {
         "start" => Some(ClientFrame::Start),
         "commit" => Some(ClientFrame::Commit),
+        "cancel" => Some(ClientFrame::Cancel),
         "stop" => Some(ClientFrame::Stop),
         "audio" => parsed
             .get("pcm")

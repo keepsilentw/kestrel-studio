@@ -132,6 +132,17 @@ export class RealtimeSession {
   }
 
   /**
+   * Stops the response that is generating. The endpoint writes whatever it had
+   * already produced into the item chain and answers with a `response.done` whose
+   * status is `cancelled`, so the turn still closes. With nothing in flight it
+   * returns an error instead — which is why the caller only sends this while it
+   * believes a response is running.
+   */
+  cancelResponse(): void {
+    this.send({ type: 'response.cancel' });
+  }
+
+  /**
    * Hands a tool's result back and waits for the server to acknowledge it.
    *
    * The wait is load-bearing, not politeness: sending `response.create` in the

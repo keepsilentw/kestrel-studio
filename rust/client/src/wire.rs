@@ -75,6 +75,7 @@ fn tag(frame: &ClientFrame) -> &'static str {
         ClientFrame::Start => "start",
         ClientFrame::Audio { .. } => "audio",
         ClientFrame::Commit => "commit",
+        ClientFrame::Cancel => "cancel",
         ClientFrame::Stop => "stop",
     }
 }

@@ -197,6 +197,7 @@ fn apply(shared: &Handle, effects: Vec<Effect>) {
             }
             Effect::ConversationStream(id) => conversation_stream(shared, id),
             Effect::PlayAudio { pcm: encoded } => play_audio(shared, &encoded),
+            Effect::StopPlayback => shared.audio.borrow_mut().stop_playback(),
         }
     }
 }

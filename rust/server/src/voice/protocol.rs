@@ -22,9 +22,10 @@ mod tests {
     use serde_json::Value;
 
     #[test]
-    fn the_four_client_frames_parse_and_nothing_else_does() {
+    fn the_five_client_frames_parse_and_nothing_else_does() {
         assert_eq!(parse_client_frame(r#"{"type":"start"}"#), Some(ClientFrame::Start));
         assert_eq!(parse_client_frame(r#"{"type":"commit"}"#), Some(ClientFrame::Commit));
+        assert_eq!(parse_client_frame(r#"{"type":"cancel"}"#), Some(ClientFrame::Cancel));
         assert_eq!(parse_client_frame(r#"{"type":"stop"}"#), Some(ClientFrame::Stop));
         assert_eq!(
             parse_client_frame(r#"{"type":"audio","pcm":"AAA="}"#),
