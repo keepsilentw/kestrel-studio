@@ -300,8 +300,10 @@ impl VoiceCall {
             RealtimeEvent::Audio(pcm) => {
                 if self.interrupted {
                     // Already on its way from the cancelled answer. The browser is
-                    // muted too, but dropping it here is what keeps the bytes off
-                    // the wire on a 65 KB/s uplink.
+                    // muted too, but dropping it here is what keeps a turn the user
+                    // discarded out of the per-call outbound queue - that queue is
+                    // 64 frames deep and the next answer needs all 64
+                    // (docs/verification.md §45).
                     return;
                 }
                 self.send(ServerFrame::Audio { pcm }).await

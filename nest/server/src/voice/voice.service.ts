@@ -348,8 +348,9 @@ class VoiceConnection {
       case 'audio': {
         if (this.interrupted) {
           // Already on its way from the cancelled answer. The browser is muted too,
-          // but dropping it here is what keeps the bytes off the wire on a 65 KB/s
-          // uplink.
+          // but dropping it here is what keeps a turn the user discarded out of the
+          // per-call outbound queue - that queue is 64 frames deep and the next
+          // answer needs all 64 (docs/verification.md §45).
           break;
         }
         this.send({ type: 'audio', pcm: event.pcm });
