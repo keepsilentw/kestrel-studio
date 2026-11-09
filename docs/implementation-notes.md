@@ -988,4 +988,7 @@ self.busy = false;
 - **Nest 那侧只改代码没加断言**：`nest/server/__tests__/voice/` 那个文件的既有边界是「中继层用假对象会失真，
   归脚本实测」（§4 那批），`VoiceConnection` 连导出都不是。测到的那侧是 Rust，两套同形由代码对照保证。
 - **这是纯服务端修复**：两套客户端一行未动，`kestrel_client_bg.wasm` 的 md5 不变，
-  下一次部署只需要换二进制、不需要重建 wasm 包。
+  所以下一次部署**在效果上**只需要换二进制。但别据此跳过构建：`make deploy` 的依赖是
+  `build-linux build-wasm`，它照旧重打了包——15:02 那次跑完，主机上的包 md5 仍是
+  `cf246955e7aa…`（与 §43.5 那份逐字节相同），这才把「客户端没动」从推断变成读数
+  （`docs/verification.md` §44.4）。

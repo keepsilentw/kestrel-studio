@@ -2757,7 +2757,7 @@ assetImages=11  videos=0  lazy=11  missingDims=0  layoutShifts=0
 
 **上线不等于走过**：以上全是「新包被真实下载、编译、初始化」的证据，不是「按下会静下来」的证据。
 后者要真人对喇叭说话（roadmap.md §3）；那一按一旦做过，就同时把 §35/§37 那条守卫的浏览器路径收掉。
-## 44. 收尾必须落一帧 `done`：红灯与门读数（2026-11-09 14:55，未部署）
+## 44. 收尾必须落一帧 `done`：红灯、门读数与上线（2026-11-09 14:55 修好，15:04 上线）
 
 因由、因果链与那条「新路径把旧洞升格」的教训在 [implementation-notes.md](./implementation-notes.md) §33。
 这里只放读数。一句话：**那一轮如果没有占位行可写，中继连 `done` 都不发**，
@@ -2796,6 +2796,22 @@ assetImages=11  videos=0  lazy=11  missingDims=0  layoutShifts=0
    真坏一次（改库或断盘），本次没做。
 2. **Nest 那侧没有新断言**：`nest/server/__tests__/voice/` 的既有边界是「中继层用假对象会失真、
    归脚本实测」（§4 那批口径），而 `VoiceConnection` 不是导出类。同形靠代码对照与 §33 那段谓词一致保证。
-3. **未部署**：线上那份是 14:45 的（§43.5），**不带这个修复**。它现在暴露在同一条件下——
-   只有当那一轮没有占位行时才会犯，而那种情况本来也会让按钮卡死，所以不是新出现的窗口。
+3. **14:45 到 15:04 之间线上不带这个修复**（那 19 分钟的窗口里，同一条件仍会犯）。
+   窗口内没有语音会话发生（`voice session opened` 0 条），所以没有实际暴露。上线读数见 §44.4。
 4. 仍未有人按下过麦克风：延后 commit 那条真机路径依旧只有单元读数（§43.4 第 1 条）。
+
+### 44.4 上线（2026-11-09 15:01 快照、15:02 `make deploy`、15:04 重拨 `wasm`）
+
+| 步骤 | 读数 |
+|---|---|
+| 快照 | `data/backup-20261109-pre-turnclose.db`（第 13 份）。`pragma integrity_check` = ok；表级对账 live 与快照逐个相同：users 2 / conversations 16 / messages 76 / assets 23 / conversation_events 6,827 / generation_tasks 4；`cmp -l` 差 **6 个字节**，与 §43.5 记的那三个头字段（变更计数 / schema format / version-valid-for）完全一致——**这条判据第二次独立复现，可以当常规用** |
+| `make deploy` | 新镜像 `sha256:2b8c33bd…`，容器 Recreated/Started，健康探测通过，起来的档位是默认的 `nest` |
+| 重拨 | `CLIENT_BUNDLE=wasm docker compose up -d` → `client="wasm"`，`/login` 200 |
+| 日志 | `docker logs --since 3m` 里 ERROR+WARN **0 条** |
+| **包未变** | 主机 `public/wasm/kestrel_client_bg.wasm` 的 md5 仍是 `cf246955e7aa…`——与 §43.5 那一份逐字节相同。这是 §44.2 那句「纯服务端修复」的机器证明：`make deploy` 照样重跑了 `build-wasm`，产出同一个包 |
+| 库侧 | 上线后再数：`16/76/23/6,827/4`，与快照逐个相同——部署与页面走查没写进任何一行 |
+| 浏览器 | 新开标签页 `/voice`（部署后的档位仍是 wasm）：**控制台 0 条**；用完已关 |
+
+**仍要说清**：这次上线换的是服务端那一帧 `done` 的产生条件，链路上**没有可观测的新事件**——
+线上没有占位行写入失败，所以这条修复在线上还没被需要过。它的价值要等下一次真出问题时兑现，
+而那种情况本来也无法预先制造（§44.3 第 1 条）。真人一按仍未发生（§43.4 第 1 条）。
