@@ -2757,3 +2757,45 @@ assetImages=11  videos=0  lazy=11  missingDims=0  layoutShifts=0
 
 **上线不等于走过**：以上全是「新包被真实下载、编译、初始化」的证据，不是「按下会静下来」的证据。
 后者要真人对喇叭说话（roadmap.md §3）；那一按一旦做过，就同时把 §35/§37 那条守卫的浏览器路径收掉。
+## 44. 收尾必须落一帧 `done`：红灯与门读数（2026-11-09 14:55，未部署）
+
+因由、因果链与那条「新路径把旧洞升格」的教训在 [implementation-notes.md](./implementation-notes.md) §33。
+这里只放读数。一句话：**那一轮如果没有占位行可写，中继连 `done` 都不发**，
+而 §43 那条打断路径的 commit 正是等这一帧落地的。
+
+### 44.1 红灯先落一次（三条新断言）
+
+| 断言 | 改动前的读数 |
+|---|---|
+| `a_turn_with_no_row_to_write_still_closes_on_the_wire` | `left: []  right: ["{\"type\":\"done\"}"]` —— 页面上什么都没有 |
+| `an_interrupt_still_closes_when_the_turn_has_no_row` | 同一处 `assert!` 失败：`otherwise the browser stays muted and its deferred commit never lands` |
+| `a_tool_round_with_no_row_to_file_still_closes_the_turn`——**邻支**：`dispatch_pending` 带着待派发的工具调用却没有行可归档 | `the turn still closes on the wire`（`session.rs:936`）。顺序要说清：这一条是**先修后测**，所以红灯是把那行 `finalize_turn().await` 临时撤掉再跑出来的，跑完立刻装回去重跑 |
+
+第一版把它改成**无条件**发 `done`，于是第三条既有断言当场红了：
+`a run of failures is one problem`（上游连回两次错误 → 多发了一帧 `done`）。
+判据因此收成一条谓词：`closing = busy`——只有确实有一轮在跑才有权宣布它结束。
+顺带改掉那条既有断言：它原句说的是**错误行**不许刷屏，却被写成「整条链路不许有帧」，
+把该发的那帧一起钉成了不许发。改后为「错误帧 0 条 + 刚提交那一轮留下一帧 `done`」。
+
+### 44.2 绿了之后
+
+| 门 | 读数 |
+|---|---|
+| `cargo test`（rust/server）`voice::` | **51 条全过**（本次 +2 条） |
+| `cargo test`（rust/server）全量 | **189 条全过 / 0 失败 / 2 ignored**（沙箱外复跑那两条 storage 假红） |
+| 加上邻支那一条之后 | `voice::` **52 条全过**、全量 **190 条全过 / 0 失败 / 2 ignored**（沙箱外复跑）。上面两行是补邻支前的读数，留着是因为它们记的是「无条件发」那一版的门 |
+| `cargo check --all-targets` | 零 warning |
+| `tsc --noEmit`（nest/server ×2） | 全过 |
+| `pnpm vitest`（nest/server） | **32 文件 / 493 条全过**（沙箱外） |
+| 客户端 | **一行未动**：`rust/client` 与 `nest/client` 都不在本次改动里，`kestrel_client_bg.wasm` 的 md5 仍是 `cf246955e7aa…`（§43.5 那份），所以下一次部署只需换二进制 |
+
+### 44.3 这一节没证的
+
+1. **没有在活库上人为制造过一次占位行写入失败**，所以「按钮整通电话卡住 / 打断后静音永不解除」
+   这两个现象只有代码路径与单元断言，没有一次真实复现。要复现得让 `create_assistant_placeholder`
+   真坏一次（改库或断盘），本次没做。
+2. **Nest 那侧没有新断言**：`nest/server/__tests__/voice/` 的既有边界是「中继层用假对象会失真、
+   归脚本实测」（§4 那批口径），而 `VoiceConnection` 不是导出类。同形靠代码对照与 §33 那段谓词一致保证。
+3. **未部署**：线上那份是 14:45 的（§43.5），**不带这个修复**。它现在暴露在同一条件下——
+   只有当那一轮没有占位行时才会犯，而那种情况本来也会让按钮卡死，所以不是新出现的窗口。
+4. 仍未有人按下过麦克风：延后 commit 那条真机路径依旧只有单元读数（§43.4 第 1 条）。

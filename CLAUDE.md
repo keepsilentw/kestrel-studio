@@ -377,6 +377,12 @@ provider 工厂在此之前就已经直接调 `loadConfig()` 了。`nest/server/
   `docs/verification.md` §5.2。写管理页那类表单时照 `views/admin-user.hbs` 抄。
 - **`reasoning` 事件依赖模型行为**：当前模型在 Responses API 上以 `response.reasoning_text.delta` 吐思考内容（正文走 `response.output_text.delta`）。换模型要重新确认；若不吐，按 `docs/architecture.md` §4.4 的降级方案把思考区退化为工具调用时间线，前端事件模型不变。
 - **`reasoningEffort` 默认 `high` 是有实测依据的**：供应商默认档下出图请求只产生约 3 个 reasoning delta（模型直奔工具调用），`high` 档同请求 >1300 个；思考面板只在高档位才值得展示。
+- **语音那一轮一定以一帧 `done` 结束，哪怕没有行可写。** 中继收尾（`voice/session.rs` 的
+  `finalize_turn` / `voice.service.ts` 的 `finalizeTurn`）里「没有占位行就早退」那条分支，原先把
+  `done` 连同写库一起省掉了：后果不是「少一行历史」，而是页面的按钮整通电话禁着、且打断延后的
+  那句 commit 永不落地。判据是一条谓词 `closing = busy`——**只有确实有一轮在跑，才有权宣布它结束**
+  （与「一轮的连续失败只发一行错误」同形）。一般的那一条：加任何「等一个链路信号」的新路径时，
+  回头把那个信号的产生条件读一遍。全过程见 `docs/implementation-notes.md` §33、读数 §44。
 
 ## 部署
 

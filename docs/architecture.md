@@ -552,6 +552,11 @@ WebSocket 的 upgrade 不经过 Express，所以 `AuthenticatedGuard` 对它无�
 它已生成但还没派发的 `function_call` **丢掉不跑**——用户要的是停，一次在打断之后落地的生成会盖在
 他正要说的回答上。逐条断言见 [verification.md](./verification.md) §43。
 
+**它依赖一条链路不变量**：只要有一轮在跑，这一轮**一定**以一帧 `done` 结束——哪怕那一轮
+没有占位行可写。这条不是天然成立的：早退分支原先把 `done` 与写库一起省掉了，
+于是延后的 commit 永不落地、页面静音窗口永不解除。修复与判据（`closing = busy`）见
+[implementation-notes.md](./implementation-notes.md) §33、[verification.md](./verification.md) §44。
+
 **这一节没有证明的事**：上游收到 `cancel` 之后，是否还会把「盖在回答上的那句」完整转写出来
 （那要真人对着喇叭说话才知道）；以及页面那个静音窗口里丢掉的字节，会不会正好是用户想听的下一句。
 两条都挂在 [roadmap.md](roadmap.md) §3 语音那一项上。
