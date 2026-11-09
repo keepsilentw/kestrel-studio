@@ -649,6 +649,11 @@ WebSocket 的 upgrade 不经过 Express，所以 `AuthenticatedGuard` 对它无�
 - **四处没有进程所有权的写**（2026-11-07 新增这一节：上面每条讲的都是「切换」，§4.5 之后
   「同时在线」成了目标，于是并行这件事必须单独写清楚）。**结论：两套现在不能同时接同一个活库。**
 
+  **2026-11-09 状态：下面 1、2、3 三处的代码改造两侧都已到位**（单元层读数见 verification.md §31，
+  改法与过程中咬人的形状见 implementation-notes.md §24）。这条结论**仍然成立**，但挡路的已经不是
+  代码：两套从没同时对着同一个文件跑过，那次实测（§28 只做了一半）排在 `make nest-up` 之前。
+  第 4 条按决策不改代码，由入口固定来挡。
+
   1. **启动收尾会抓走对方在飞的轮次**——Critical，已在库副本上实测。两侧谓词完全同形，都不带
      owner、也不带时间下界：`UPDATE messages SET content='本轮处理失败：服务在轮次完成前中断。'
      WHERE role='assistant' AND content=''`（`rust/server/src/conversation/repo.rs:341`；
@@ -657,11 +662,27 @@ WebSocket 的 upgrade 不经过 Express，所以 `AuthenticatedGuard` 对它无�
      另一套正在 streaming 的那一轮判死**，还替它往 journal 补一帧 `turn_error`
      （`rust/server/src/main.rs:113-122` / `nest/server/src/agent/turn-runner.service.ts:52-56`）。
      实验与读数见 verification.md §28.2。
+     **2026-11-09 已修**：`messages` 加 `owner` 列，三条插入路径都写上本套身份
+     （`common/writer.rs` = `rust`、`common/writer.ts` = `nest`；**每套后端**一个值而不是每进程——
+     新进程正是该收拾上一个自己留下的轮次的那个人，随机 boot id 会把这条改造要保的东西毁掉）。
+     收尾谓词变成三条规则：自己的行无条件收尾、对方的行永不收尾、**无主行等 5 分钟**——
+     `owner IS NULL` 既可能是这张表自己的过去，也可能是对面还没跑迁移的版本正在 streaming 的一轮，
+     两者在行里无法区分，所以那个 5 分钟是两侧的协议（`UNOWNED_STALE_AFTER_MS`）。
+     位置：`rust/server/src/conversation/repo.rs::abandon_stale_placeholders`、
+     `nest/server/src/conversation/conversation.service.ts::abandonStalePlaceholders`。
   2. **任务 worker 不 claim**——Critical。`active()` 两侧都是纯 SELECT 非终态行
      （`nest/server/src/task/task.service.ts:79-87`、`rust/server/src/task/service.rs:126-138`），
      写回是无前置条件的 `UPDATE … WHERE id = ?`，没有 owner 也没有 attempts 递增。两套各自的
      8s tick 会扫到同一行 → 双份 provider 查询（重复计费）、双份镜像下载、双份 `assets` 行与
      双份「视频生成完成」消息。非终态窗口是整段渲染（分钟级），所以重复近乎必然。
+     **2026-11-09 已修**：`generation_tasks` 加 `claimed_by` / `claimed_at`，worker 在**任何 provider
+     调用之前**用一条条件 UPDATE 认领这一行，`changes()` 不是 1 就跳过这一轮。可认领的三种情形：
+     没人持有、本套持有（下一 tick 续自己的租约，崩溃后重启的同一套因此能接住上一进程正在 poll 的
+     任务）、外来租约过期。`CLAIM_LEASE_MS` 两侧同为 5 分钟，远在 worker 已有的 20 分钟超时之内，
+     所以一个再没人推进的渲染仍以终态收尾而不是变孤儿。**没有**新增 `status='claimed'`，也**没有**在
+     claim 里递增 `attempts`（理由在 implementation-notes.md §24）。位置：
+     `rust/server/src/task/service.rs::claim` + `task/worker.rs::sweep`、
+     `nest/server/src/task/task.service.ts::claim` + `task.worker.ts::sweep`。
   3. **`seq` 分配没有单一写入者**——High。Nest 是 `SELECT MAX(seq)` 再 `INSERT`，两条
      autocommit 语句（`conversation-events.service.ts:101-118`）；Rust 把它包在 `pool.begin()`
      里（`conversation/events.rs:57-99`），而 sqlx 发的是**裸 BEGIN（deferred）**——
@@ -670,6 +691,17 @@ WebSocket 的 upgrade 不经过 Express，所以 `AuthenticatedGuard` 对它无�
      **没有 UNIQUE 拦它**，重复静默落库；直播与重放都按 `seq >` 过滤，于是同 seq 的兄弟行永远看不见。
      Rust 侧则是 deferred 事务升级撞 `SQLITE_BUSY_SNAPSHOT`、整个 publish 回滚，**那一帧根本没落库**
      （失败只落一条 WARN：`rust/server/src/agent/service.rs:271-273`）。
+     **2026-11-09 已修**，两件事。**(a)** 下一步的值算在写语句自己身上：
+     `INSERT INTO conversation_events … SELECT ?1, COALESCE(MAX(seq),0)+1 … FROM conversation_events
+     WHERE conversation_id = ?1 RETURNING seq`。单条写语句先取写锁再执行，第二个写者是**等**（busy
+     timeout）而不是猜，两侧同形、不需要事务。**(b)** `idx_events_conversation` 真的变成 UNIQUE，由启动
+     迁移 `enforce_unique_event_seq`（Rust）/ `ensureUniqueEventSeq`（Nest）负责：先修重复——每对里
+     rowid 大的挪到该会话编号的末尾，因为这些行本来就被 `seq >` 挡着、对任何读者都不存在——再
+     drop/create；修完打一条 `ERROR`，创建失败也打 `ERROR` 但**不拒绝启动**。DDL 里刻意留普通索引，
+     否则带重复的旧库会启动即失败。publish 另带 3 次冲突重试（`SEQ_RETRY_LIMIT`），覆盖「对面还在跑
+     旧版本」那个发布窗口。位置：`rust/server/src/conversation/events.rs::append` 与 `rust/server/src/db.rs`、
+     `nest/server/src/conversation/conversation-events.service.ts::append` 与
+     `nest/server/src/database/database.module.ts`。
   4. **「每会话只一轮」的锁只在本进程内存**——High。`rust/server/src/state.rs:28,79-90` 的
      `claim_turn` 与 Nest 侧的 running Map（`turn-runner.service.ts:29,96-98` + `chat.controller.ts:110-114`
      的 409）互相看不见，同会话并发两轮就是两次真实扣费——这正是两侧注释里写过的

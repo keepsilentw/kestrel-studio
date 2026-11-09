@@ -156,11 +156,15 @@ cwd 拼接），且它的 `assets` **不能写 `outDir`**（写了就按 cwd 拼
 **改服务端行为要两侧同步改**，否则线上与契约源会静默分叉——移植期的对照关系与差异记在
 `docs/architecture.md` §13。
 
-**但两套现在不能同时接同一个活库。** `nest/` 那套的镜像与 compose service 已就位
+**两套共用同一个 SQLite 文件与同一个 `storage/`。** `nest/` 那套的镜像与 compose service 已就位
 （`make deploy-nest` 建镜像、`make nest-up` 启动，service 挂在 profile 上，寻常 `make deploy`
-不会拉起它）。动手起第二后端之前先读 `docs/architecture.md` §13.2「四处没有进程所有权的写」：
-启动收尾、任务 worker、journal 的 `seq` 这三处都没有 owner 概念，其中「一套重启把另一套在飞的轮次
-判死」已在库副本上实测复现（`docs/verification.md` §28.2）。
+不会拉起它）。`docs/architecture.md` §13.2 那「四处没有进程所有权的写」里，启动收尾、任务 worker、
+journal 的 `seq` 这三处**已于 2026-11-09 两侧同改到位**：`messages.owner` 标写入者（`rust` / `nest`，
+每套后端一个值）、`generation_tasks.claimed_by` / `claimed_at` 是 worker 的租约、`seq` 算在写语句
+自己身上且游标索引改 UNIQUE。**这批改动天生是双端的**——一张表、一套协议，只改一侧等于没改，所以
+「新功能不许往 `nest/` 搬」那条旧规则对**共享数据的写协议**不适用，别拿它当先例拒绝同步。
+起第二后端之前仍有一道闸：两套从没同时对着同一个文件跑过，那次并行实测（§28 只做了一半）要先补，
+用 `.backup` 的库副本，别挂 `./data`（顺序与判据见 `docs/deployment.md` §1.1）。
 
 **一条已经闭合的例外**：可观测性件曾刻意不同步——Rust 侧的 DEBUG 访问日志（`tower_http::trace`）没有
 往 `nest/server/` 搬，理由是「那棵树是回滚底牌、不是演进目标」。§4.5 撤销退役后这个理由不再成立，

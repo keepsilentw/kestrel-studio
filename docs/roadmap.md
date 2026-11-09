@@ -208,18 +208,25 @@ openai 面须置 compat 位 `stream_include_usage = true`，否则全程 `usage:
 - **第二后端现在不能接活库**（这是 §4.5 落地过程中查出来的，逐条证据在
   [architecture.md](./architecture.md) §13.2「四处没有进程所有权的写」）。要做的是给这三件事加上
   所有权，之后才谈得上 `make nest-up`：
-  1. **启动收尾**要认 owner——现在两套任何一套重启都会把另一套在飞的轮次判死，
-     2026-11-07 在库副本上实测复现（verification.md §28.2）。最小改法是 `messages` 加一个写入者列，
-     收尾谓词只碰自己 owner 且 `created_at` 早于 N 分钟前的行。
-  2. **任务 worker** 要 claim——`UPDATE … SET status='claimed', attempts=attempts+1 WHERE id=?
-     AND status IN ('queued','running')` 之后再动作；否则两套各 8s 的 tick 会把同一个视频任务
-     查两遍、镜像下两遍、`assets` 与消息写两遍。
-  3. **journal 要单一写入者**：`seq` 现在两侧各自算，且 `idx_events_conversation` 是普通索引，
-     没有 UNIQUE 拦重复；Rust 侧那个"事务"其实是 deferred BEGIN（`db.rs:121-123` 的注释与 sqlx
-     实际发的语句不符），并行时会 `SQLITE_BUSY_SNAPSHOT` 回滚**丢帧**。加 UNIQUE 是最后一步——
-     前两条没修好之前加它，等于把库变成启动即报错。
+  1. ~~**启动收尾**要认 owner~~ **已修（2026-11-09）**：`messages.owner`，三条插入路径写本套身份
+     （`rust` / `nest`，每套后端一个值），收尾谓词「自己的无条件、对方的不碰、无主的等 5 分钟」。
+     原方案那句「且 `created_at` 早于 N 分钟前」收窄到了无主行上——对自己的行加时间下界会毁掉
+     verification.md §26 那条已上线实测的恢复（提交一轮 → 中途重启 → 页面自己解锁）。
+  2. ~~**任务 worker** 要 claim~~ **已修（2026-11-09）**：`claimed_by` / `claimed_at` 租约，worker 在任何
+     provider 调用之前用一条条件 UPDATE 认领，`changes()` 不为 1 就跳过。**没采纳**原写法的两处：
+     不加 `status='claimed'`（要牵动 `active()`、线类型 `TaskStatus`、页面标签表，且崩溃时正持有的行会
+     掉出队列），不在 claim 里递增 `attempts`（它计供应商失败、驱动 `MAX_MIRROR_ATTEMPTS`，而租约每 8s
+     续一次）。理由见 implementation-notes.md §24。
+  3. ~~**journal 要单一写入者**~~ **已修（2026-11-09）**：`seq` 算在写语句自己身上
+     （`INSERT … SELECT COALESCE(MAX(seq),0)+1 … RETURNING seq`，单条写语句先取写锁再执行），
+     `idx_events_conversation` 由启动迁移改成 UNIQUE，迁移先把重复行挪到该会话编号末尾（那些行本来
+     就被 `seq >` 挡着、对任何读者都不存在）再 drop/create，失败打 `ERROR` 但不拒绝启动；DDL 里刻意
+     留普通索引。publish 带 3 次冲突重试覆盖发布窗口。
   - 第四处（每会话单轮的锁只在进程内存）由**入口按子域固定**这条决策来挡，不需要改代码；但它是
     固定入口真正的理由，不是偏好。
+  - **三处改造只是把「已知会坏数据」变成「待实测」**。两侧仍从没同时对着同一个文件跑过：下一步是
+    在宿主机拿 `.backup` 的库副本把两套并行起来验（§28 那次只做了一半），过了才谈得上 `make nest-up`
+    接活库。质量门读数在 verification.md §31。
 - openresty 那个新 server 块与第二个子域的 DNS 记录仍是待做的运维动作（deployment.md §1.1 那两件
   配置项）。子域名叫什么、走 `*.try.*` 还是新记一条 A 记录，要你定。
 - 红隼 logo 目前是占位 SVG（`nest/client/public/logo.svg`），待替换为正式图片。
@@ -516,6 +523,10 @@ P1 的判据一条不减（仍是真实麦克风采集 1 条），但它的**后
 2. **新功能不许往 `nest/` 搬**（CLAUDE.md 的同名规则）也是同一个理由推出来的。现在两套都长期
    对外，同一个能力要不要两端同改，是一个新的排期决定——不同步的代价从「延长退役成本」变成
    「两套在线实现的行为漂移」。
+   **2026-11-09 定了第一例**：§13.2 那三处并行安全的改动**必须**双端同改——一张表、一套写协议，
+   只改一侧等于没改（Nest 不认识 Rust 写的 `owner`，两套各自的 `MAX(seq)` 照样撞）。所以这条排期
+   决定按对象的性质分两类：**共享数据面的写协议双端同改，产品功能仍按排期单独决定**。CLAUDE.md 的
+   同名规则已按这个口径改写。
 3. **markdown 两套口径**（`kestrel-md` 与 `marked`，§4.1.1 末段）从过渡态变成常驻态。
    原先「等 P4 删掉 `nest/` 就归一」这条归一路径没了，两侧渲染不一致要长期按缺陷对待。
 

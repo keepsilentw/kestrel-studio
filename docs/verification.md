@@ -1881,3 +1881,65 @@ implementation-notes.md §23，首屏三条选择规则现在写在 architecture
   （`Enter` / ` 发送，` / `Shift` / ` + ` / `Enter` / ` 换行`）。这与既有的 `.logout-form`
   用的是同一套显隐写法（architecture.md §8），要它常驻可读就得换成不剪 a11y 树的另一种显隐。
 - 控制台零条。
+
+## 31. 三处写加上所有权：质量门读数（2026-11-09，**单元层**，两套没并行跑过）
+
+architecture.md §13.2 那三条 Critical/High 的代码改造（`messages.owner`、任务租约、`seq` 单写者 +
+UNIQUE 游标索引）两侧同改。改法与理由在那节和 implementation-notes.md §24，这一节只有读数。
+
+**这一节不是「双后端可以上线了」的证据**，正如 §28.4 那条边界：两侧从没同时对着同一个文件跑过，
+本节的每一条都发生在**一个进程 + 一个内存库**里。并行是下一条，见本节末。
+
+### 31.1 落地面
+
+| 侧 | 改动 |
+|---|---|
+| Rust | `common/writer.rs`（新，`WRITER_ID="rust"`）、`db.rs`（3 个 `ADDED_COLUMNS` + `enforce_unique_event_seq` + 改掉那句与实现不符的 `BEGIN IMMEDIATE` 注释）、`conversation/repo.rs`（插入写 owner、收尾谓词三规则）、`conversation/events.rs`（`append`：单语句 INSERT…SELECT…RETURNING + 3 次重试 + `is_seq_conflict`）、`task/service.rs`（`claim` / `claim_as_writer`、投影两列）、`task/mod.rs`（`CLAIM_LEASE_MS`）、`task/worker.rs`（advance 之前认领） |
+| Nest | `common/writer.ts`（新，`WRITER_ID='nest'`）、`database/database.module.ts`（同样 3 列 + `ensureUniqueEventSeq`）、`database/schema.ts`（3 列进 drizzle）、`conversation/conversation.service.ts`（三条插入写 owner、`abandonStalePlaceholders` 三规则）、`conversation/conversation-events.service.ts`（`append` 同形）、`task/task.service.ts`（`claim` / `claimAsWriter` + `CLAIM_LEASE_MS`）、`task/task.worker.ts`（advance 之前认领） |
+| 客户端 | 一行没动。没有新 `TaskStatus`、没有新事件类型、模板与 `public/` 产物不变 |
+
+### 31.2 质量门
+
+| 门 | 读数 |
+|---|---|
+| `cargo test`（rust server，沙箱内） | **173 passed**、2 failed、2 ignored。那 2 条是 §20 记过的 storage 目录 `PermissionDenied` 假红 |
+| 同 2 条，沙箱外复跑 | **2 passed** — 合起来 rust 侧 **175 条全过** |
+| `cargo check --all-targets` | 干净，零 warning |
+| `vitest run`（nest server 全量，沙箱内） | **342 passed**、141 skipped in 6 files（§21 那 6 个 `app.listen(0)` 假红文件） |
+| 那 6 个文件，沙箱外复跑 | **141 passed** — 合起来 nest 侧 **483 条全过** |
+| `tsc --noEmit`（`tsconfig.json` 与 `tsconfig.test.json` 各一份） | 都通过 |
+
+新增/改写的用例 10 条：Rust 5 条（`the_journal_cursor_index_is_unique`、
+`duplicate_cursor_sequences_are_renumbered_before_the_index_is_unique`、
+`boot_recovery_only_ends_the_rows_this_stack_wrote`、`a_render_is_claimed_by_one_backend_at_a_time`、
+`schema_is_idempotent_and_adds_later_columns` 补三列）；Nest 5 条（新文件
+`__tests__/database/schema.test.ts` 3 条：补列且二次执行不重复补、UNIQUE 拦重复 seq、旧库重复挪到末尾后
+才立 UNIQUE；`task.service.test.ts` claim 矩阵 2 条；`conversation.service.test.ts` owner 矩阵 1 条）。
+两侧断言同形，因为两段 DDL 是手抄同步的。
+
+### 31.3 单元层钉住的判据
+
+- **收尾三规则**：本套的空占位无条件收尾；`owner='对方'` 的行内容仍是 `''`、且那条会话的 journal
+  `latest_seq` 仍是 0（不认领就不该补终态帧）；`owner IS NULL` 且 `created_at` 在 5 分钟内不动，
+  超过 6 分钟的收尾。
+- **认领互斥**：无人持有→可 claim；同套再 claim→可（续租）；外来且 `claimed_at` 新鲜→不可；外来且
+  过期 5 分钟零 1 秒→可；`succeeded` 的行→两侧都不可。`attempts` 在认领后仍是 0。
+- **游标单写者**：`seq` 仍按会话从 1 连续（既有的 `seq_is_dense_per_conversation_and_starts_at_one`
+  未改即过）；UNIQUE 索引存在；对 `(conversation_id, seq)` 重复的库，迁移后 `[(1,a),(2,c),(3,b),(4,d)]`
+  ——原值的 keeper 是最小 rowid 那条，两个不可见的兄弟被补到末尾，之后 `COUNT(*) GROUP BY … HAVING >1`
+  为 0。
+- 迁移是幂等的：`apply_schema` / `applySchema` 连跑两次不报错、不重复补列、不重复改索引。
+
+### 31.4 没验的，别当已验
+
+1. **两个进程同时跑**——本节所有断言都是单进程 + 内存库。真实并行要看的三件事：两套的启动迁移在
+   同一个文件上抢不抢、8s tick 交错时一个视频任务是否只 poll/镜像/落库一次、一帧 `seq` 在并发写之下
+   是否真连续。**这是 §28 那次没做完的那一半**，仍在 `make nest-up` 前面。
+2. **活库上的 UNIQUE 迁移**。线上那份库的 `conversation_events` 有两千多行，重复对数**未知**（旧时代
+   单进程写，理论上不该有，但没人查过）。第一次启动要么打一条 `ERROR`（有重复，已修）要么静默；
+   查法：`SELECT conversation_id, seq, COUNT(*) FROM conversation_events GROUP BY 1,2 HAVING COUNT(*)>1`。
+   `docker-compose.yml` 挂的是同一个 `./data`，所以这一步在 `make deploy` 那一刻就发生，不需要第二后端。
+3. **发布窗口的形状**：一侧新代码 + 另一侧旧代码同时在写。`SEQ_RETRY_LIMIT=3` 与 UNIQUE 是为这个
+   窗口准备的，但窗口本身没实测过；旧代码那侧的 `MAX+INSERT` 仍可能落重复对，直到它也升级。
+4. **provider 层的重复计费**是否真被止住——这只在并行实测里有意义，单元层只证了认领互斥。
+5. wasm 客户端与 `CLIENT_BUNDLE` 档位不受影响，未重拨、未部署、未走浏览器。

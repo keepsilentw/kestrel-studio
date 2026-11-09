@@ -87,11 +87,17 @@ make nest-logs
    就是让外部服务去敲另一个端口的门；两套的 `SESSION_SECRET` 相同（同一份 `.env`），所以签名能不能
    被另一套验通**没有实测过**，别把「凑巧能用」当成设计。
 
-**`make nest-up` 前面有一道闸**：动手之前读 architecture.md §13.2 那「四处没有进程所有权的写」。
-两套共用同一个 SQLite 文件与同一个 `storage/`，其中两处判为 Critical——启动收尾会替对方把在飞的轮次
-判死（2026-11-07 在库副本上实测复现，verification.md §28.2），任务 worker 不 claim 会把一个视频任务
-跑两遍。**在加上 owner 之前，对着活库起第二后端是已知会坏数据的操作。**要做隔离验证就用
-`deploy-nest.sh` 末尾那段 `docker run`：拿 `.backup` 出来的库副本挂进去，别挂 `./data`。
+**`make nest-up` 前面仍有一道闸，但它已经不是代码了**：architecture.md §13.2 那三处没有所有权的写
+（启动收尾抓走对方的轮次、任务 worker 不 claim、`seq` 没有单一写入者）**已于 2026-11-09 两侧同改到位**，
+单元层读数在 verification.md §31。闸的内容因此变成：**两套从没同时对着同一个文件跑过**，那半次实测
+（§28 只做了单容器那一半）必须补在接活库之前。做法不变，用 `deploy-nest.sh` 末尾那段 `docker run`，
+拿 `.backup` 出来的库副本挂进去，**别挂 `./data`**：两套并起来，看启动迁移抢不抢、一个视频任务是不是
+只 poll 与镜像一次、并发写之下 `seq` 是否仍连续。
+
+**顺序有讲究**：那三列与那个 UNIQUE 索引是在**进程启动时**建的，所以先 `make deploy`（Rust 那侧跑迁移，
+它同时是主交付链），再 `make nest-up`。反过来的话，先起来的 Nest 会建好同样的列——两侧 DDL 同形，不会
+坏，但 Nest 会在 Rust 还带着旧代码（`MAX`+`INSERT` 两步、无 owner）时就并行，那个窗口的形状只写在
+verification.md §31.4，没实测过。
 
 **Nest 重新接管流量时，会再登出一次所有人**：Nest 只认 `sess.passport.user`，读不懂 Rust 写在顶层 `user` 的行
 （反向是通的，Rust 两个位置都认）。所以凡是在 Rust 上登录过的会话，退回 Nest 后都要重新登录。

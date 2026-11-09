@@ -527,3 +527,59 @@ just left」（`resetToNewConversation` / `reset_to_new_conversation`）。清�
 `14`；那次 `fetch('/?new=1')` 在线上旧包里仍返回会话 14，正是"标记还没上线"的证据）。**修复后的那一屏
 已于同日 17:58 部署后复跑关闭**：刷新停在 `/?new=1` 空舞台，空舞台发一句话又把地址栏换成 `/?c=15`
 并回放（读数在 verification.md §29.2 末）。
+
+## 24. 给三处写加所有权：deferred BEGIN、同名索引、两段 DDL 的注释语法（2026-11-09）
+
+§13.2 那三处（启动收尾、任务 worker、journal 的 `seq`）改完之后，值得记的是改的过程中咬人的
+几件事。为什么这么改在 architecture.md §13.2，质量门读数在 verification.md §31。
+
+**`pool.begin()` 不是 `BEGIN IMMEDIATE`。** Rust 侧那段「一个事务，因为 `seq` 是按会话算的、
+不能两个写者同时算」的注释描述的是一个没有发生的保护：sqlx 发的是裸 `BEGIN`，SQLite 的 deferred
+事务在**第一次写**之前不取写锁，读到的是别人的快照，升级时才去看快照变没变——变了就
+`SQLITE_BUSY_SNAPSHOT`，整个 publish 回滚。于是「读 MAX 再 INSERT」这两步从来不在同一个临界区里，
+跨进程要么落下重复 `seq`，要么丢一帧。
+**判据：不要看代码里有没有 `begin()`，要看这条语句什么时候拿写锁。**
+最小正确形状也不是「换个更硬的事务」，而是**把下一步的值算在写语句自己身上**：
+
+```sql
+INSERT INTO conversation_events (conversation_id, seq, …)
+SELECT ?1, COALESCE(MAX(seq), 0) + 1, … FROM conversation_events WHERE conversation_id = ?1
+RETURNING seq
+```
+
+单条写语句是先取得写锁再执行的，第二个写者**等**（busy timeout）而不是猜，两侧同形，也不需要任何
+事务管道。`db.rs` 里那句与实现不符的注释一并改了，别留第二次。
+
+**`CREATE UNIQUE INDEX IF NOT EXISTS` 撞同名是静默空操作。** 那个索引早就以普通形态存在，而
+`IF NOT EXISTS` 按**名字**判断，于是这条语句什么都不做——既不报错也不升级，「加了 UNIQUE」这件事在
+老库上根本没发生。要升级只能 `DROP` 再 `CREATE`，而 `DROP` 之前必须先处理重复行，否则 `CREATE`
+直接失败。所以顺序是：**查重复 → 把每对重复里 rowid 较大的那些挪到该会话编号的尾巴 → 再
+drop/create**。
+留尾这个选择有理由：`seq` 重复的行本来就**永远不可见**（直播与重放都按 `seq >` 过滤），保留最小
+rowid 待在原值上——那是所有游标已经消费过的值——把看不见的行补到末尾，是「这段历史从来没有合法
+顺序」这件事破坏最小的读法。修完打一条 `ERROR`（不是 WARN）：那些行刚从不存在变成进了正文。
+另一条约束是 **UNIQUE 不写进 DDL 字符串**：写进去就等于给一个已经带重复的库判死刑——建索引失败 →
+`apply_schema` 报错 → 服务不起。DDL 里留普通索引，UNIQUE 由迁移函数负责，失败时响但不致命。
+
+**两段同构的 DDL 字符串，注释的语法约束正好互斥。** 这是本次真踩到的坑：
+`nest/server/src/database/database.module.ts` 的 DDL 是 **JS 模板字符串**，注释里出现反引号会直接
+终止字符串，报一串 `TS1005: ',' expected` 加 `TS1443: Module declaration names may only use ' or "
+quoted strings`——错在这条语句，看着却像别处的类型问题。`rust/server/src/db.rs` 的 DDL 是 raw
+string，反引号无所谓，但它是 `DDL.split(';')` 逐条执行的，注释里一个分号就把一条语句劈成两条，
+第二条以「一句英文注释」开头，启动即失败。
+**判据：改这两处 DDL 的注释时，Rust 侧不要分号，Nest 侧不要反引号。** Nest 那边的注释里已写死这条
+提醒，免得下次再靠编译器发现。
+
+**写入者身份必须是「每套后端」而不是「每个进程」。** 第一反应是给进程一个随机 boot id，而那正好
+毁掉这条改造要保的东西：新进程就是**该**收拾上一个自己没来得及收尾的轮次的那个人。所以用
+`rust` / `nest` 两个常量（`common/writer.rs` 与 `common/writer.ts`），前提是每套对同一个库只跑一个
+进程——那条前提由「入口按子域固定」守（§13.2 第 4 条），不是偏好。
+无主行（`owner IS NULL`）既不能当成「我的」也不能当成「别人的」：它可能来自这张表自己的过去，
+也可能来自对面那套还没跑迁移的版本**正在 streaming** 的一轮。所以给它一个宽限期，两端同为 5 分钟
+（这个数字是协议不是细节），过期的收尾、没过的不动。
+
+**`attempts` 不进 claim 语句。** roadmap §3 原先写的形状是 `SET status='claimed', attempts=attempts+1`，
+真做时两条都没采纳：`status` 不加新值——加了就要 `active()` 的非终态判断、`TaskStatus` 的线类型和
+页面标签表一起改，还会让「崩溃时正持有」的任务掉出队列，而租约过期后没人再认领它；`attempts`
+更不碰——它计的是供应商失败次数、驱动 `MAX_MIRROR_ATTEMPTS`，而租约每 8 秒续一次，把它放进 claim
+等于在任何东西失败之前先跑光那个计数。claim 只需要「一条语句 + 一个条件 + 看 changes()」。
