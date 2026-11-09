@@ -16,6 +16,14 @@ union all select '任务列表 - [ ]（不支持）',    sum(content like '%- [ 
 union all select '波浪线围栏 ~~~（只认 ```）',  sum(content like '%~~~%')  from messages where role='assistant'
 union all select '脚注 [^（不支持）',          sum(content like '%[^%')   from messages where role='assistant'
 union all select 'setext 标题（只认 ATX）',     sum(content like '%'||char(10)||'===%') from messages where role='assistant'
+-- 下面五类是 2026-11-09 补的：它们既是kestrel-md 不认的构造，又正好是两套渲染器
+-- 实测分歧的地方（docs/verification.md §35），而上面那些行**一条都没数到它们**。
+-- 也就是说原来的哨兵只看「子集外会不会出现」，看不到「子集外已经出现了却没人报警」。
+union all select '引用块 >（不支持）',           sum(content like '%'||char(10)||'> %' or content like '> %') from messages where role='assistant'
+union all select '分隔线 ---（不支持）',         sum(content like '%'||char(10)||'---%' and content not like '%|---%') from messages where role='assistant'
+union all select '嵌套列表（缩进被吃掉）',       sum(content like '%'||char(10)||'  - %' or content like '%'||char(10)||'  * %') from messages where role='assistant'
+union all select '有序列表 1.-9.（支持）',       sum(content like '%'||char(10)||'1. %' or content like '%'||char(10)||'2. %' or content like '%'||char(10)||'3. %' or content like '%'||char(10)||'4. %' or content like '%'||char(10)||'5. %' or content like '%'||char(10)||'6. %' or content like '%'||char(10)||'7. %' or content like '%'||char(10)||'8. %' or content like '%'||char(10)||'9. %') from messages where role='assistant'
+union all select 'ATX 标题 #（支持）',           sum(content like '%'||char(10)||'#%' or content like '#%') from messages where role='assistant'
 union all select 'GFM 表格（已支持）',          sum(content like '%|---%' or content like '%---|%') from messages where role='assistant'
 union all select '删除线（已支持）',            sum(content like '%~~%' and content not like '%~~~%') from messages where role='assistant'
 union all select '行首列表',                   sum(content like '%'||char(10)||'- %' or content like '%'||char(10)||'* %') from messages where role='assistant'
