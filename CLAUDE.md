@@ -389,7 +389,7 @@ provider 工厂在此之前就已经直接调 `loadConfig()` 了。`nest/server/
 目标是 `lavo-test`（CentOS 7 + Docker），域名 `try.kestrel.justwork.link`，远端目录 `/opt/kestrel-studio`。
 完整操作手册与排障流程见 `.claude/skills/deploy/SKILL.md`，服务器侧细节见 `docs/deployment.md`。最容易误改的几条约束：
 
-- 服务器出站带宽约 65 KB/s、入站约 5 MB/s，**相差 77 倍**。因此服务器侧**不下载任何东西**：服务端二进制在开发机交叉编译成 `x86_64-unknown-linux-musl` 静态 ELF（`make build-linux`），前端资源在开发机构建成 `public/`，运行时基础镜像用 `scratch`（Docker 从不拉取它，所以机上没有任何要缓存的镜像），TLS 根证书靠编进二进制的 `webpki-roots`。**不要「简化」回在服务器上装依赖 / 拉公共基础镜像**——那条路在 65 KB/s 下走不通（旧 Node 管线曾在服务器上重编 better-sqlite3、上传约 300 MB 的 `node_modules`，2026-10-30 已废）。
+- **服务器侧不下载任何东西**（决策不变），但 2026-11-09 更正了它的**理由**：原先那句「出站约 65 KB/s、入站约 5 MB/s，相差 77 倍」里，65 KB/s 实测的是**服务器自己去公网下载**（数据流入服务器），方向标反了。今天分路径复测：服务器→浏览器（服务出网）冷连接单流 **1.9 MB/s**、浏览器 h2 四路并行**聚合 ~5.9 MB/s**；服务器自己拉公网 **0.21-0.62 MB/s**（Cloudflare 与阿里云 CentOS 镜像两个源）；浏览器→服务器（麦克风那条）今天没重测，旧读数是 §4.1 的 48 KB/s 实时推流、`bufferedAmount` 峰值 1305 字节。逐条测法见 `docs/verification.md` §45。于是这条决策的依据只剩一句：**这个形态根本不需要下载**（`scratch` + 上传静态二进制 + `webpki-roots` 编进二进制），**不是外部条件不允许**——同机另外四个容器（`justwork-authcenter/home/admin/recommend-api`）跑的就是 `golang:1.22` 公共镜像，这台机拉过公共镜像。**不要「简化」回在服务器上装依赖**：CentOS 7（glibc 2.17）上装编译工具链本身就是坑，旧 Node 管线曾在服务器上重编 better-sqlite3、上传约 300 MB 的 `node_modules`，2026-10-30 已废。服务端二进制仍在开发机交叉编译成 `x86_64-unknown-linux-musl` 静态 ELF（`make build-linux`），前端资源仍在开发机构建成 `public/`，运行时基础镜像仍是 `scratch`（Docker 从不拉取它）。
 - 切流有代价：**Rust 与 Nest 的 cookie 签名口径不同**（同一种 HMAC-SHA256，被签的字符串一个含 `s:` 前缀一个不含），任何一侧接管流量都会让已登录会话全部失效，必须提前告知使用者（2026-11-02 实际发生过一次）。
 - Node 装不了在宿主机上（glibc 2.17 vs 需要 2.28+），所以 pm2 方案不可行，Docker 是唯一运行时。
 - `.env` 只存在于服务器，`deploy.sh` **永不覆盖已存在的**（重生成 `SESSION_SECRET` 会把所有人登出，且服务器上没有 cc-switch 库可回退取 key）；轮换 key 直接改服务器文件再 `make deploy-restart`。

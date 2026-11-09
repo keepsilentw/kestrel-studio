@@ -46,10 +46,18 @@ the app never answers.
 
 ## Constraints that shape this setup — do not "simplify" them away
 
-**The host's outbound bandwidth is ~65 KB/s** (measured: an 8.7MB apt index did
-not finish in 60s) while uploads to it run at ~5 MB/s — a 77x asymmetry. Every
-decision below follows from that: download nothing on the host, ship everything
-from the dev machine over the upload path.
+**The host downloads from the public internet at ~225-652 KB/s** (measured
+2026-10-30: an 8.7 MB apt index did not finish in 60s; re-measured 2026-11-09:
+Cloudflare 20 MB = 652 KB/s, Aliyun CentOS mirror 10 MB = 225 KB/s). This is
+**not** a statement about the host's serving throughput - that direction was
+mislabeled "outbound bandwidth, 77x asymmetry" here and in `docs/deployment.md`
+§1 until 2026-11-09. What the host *serves* to a browser measures 1.9 MB/s on a
+cold single stream and 5.7 MB/s aggregate over h2 (docs/verification.md §45).
+The rule stands unchanged - download nothing on the host, ship everything from
+the dev machine - but its reason is now: a base image at 225-652 KB/s takes 5-15
+minutes and depends on the peer's throttling, the host is CentOS 7 (glibc 2.17)
+so installing a toolchain is its own trap, and the `scratch` shape needs no
+download at all.
 
 **The build runs on the host but downloads nothing.** `FROM scratch` is an empty
 base that Docker never pulls, so the host needs **no image at all** — there is
@@ -61,8 +69,9 @@ zig) and the client assets (`make build` / `make build-wasm` → `public/`).
 2.17); a dynamically linked binary would die with `GLIBC_2.27 not found`. The
 musl ELF needs no libc at all, which is what makes `scratch` usable. Do not
 "simplify" this back into a pulled base image or a host-side install: at 65 KB/s
-of outbound bandwidth, either one reintroduces exactly the downloads this shape
-exists to avoid (the old Node pipeline cached `golang:1.24` +
+of download bandwidth - 225-652 KB/s on the 2026-11-09 re-measure - either one
+reintroduces exactly the downloads this shape exists to avoid (the old Node
+pipeline cached `golang:1.24` +
 `node:24-bookworm-slim` and recompiled better-sqlite3 on the host).
 
 **TLS trust is compiled in.** `scratch` has no `/etc/ssl/certs`, so the binary

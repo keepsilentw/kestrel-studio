@@ -422,7 +422,20 @@ openai 面须置 compat 位 `stream_include_usage = true`，否则全程 `usage:
     要你定。理由与逐条定位在 [implementation-notes.md](./implementation-notes.md) §32。
   - **空闲保活未做**：上游 180 秒无响应即关闭会话（close code `1007`），现由客户端提示
     "再按一次继续"并重新取票重连——重连后上游上下文重置。
-  - **并发通话数未评估**：每个通话占一条到浏览器的 WS + 一条到上游。
+  - **并发通话数已评估（2026-11-09，读数在 [verification.md](./verification.md) §45）：第一个约束不是带宽**。
+    每通话双向各 ~64 KB/s（base64 后的 PCM16 单声道 24 kHz；§4.1 线上实拨 48 KB/s 推流
+    `bufferedAmount` 峰值仅 1305 字节，无积压），而宿主机**服务出网**今天实测冷连接单流
+    **1.9 MB/s**、浏览器 h2 四路并行**聚合 ~5.9 MB/s**——按这两个数除，先撞的不是链路。
+    剩下三个候选，只有第三个是我们能改的：
+    1. **上游那个账号的 realtime 并发配额**——未知，不压测就不知道（这也是这条待办真正没关掉的部分）；
+    2. 宿主 **2 vCPU / 3.6 GB**，同机还跑着另外四个生产容器与 1Panel，而 `docker-compose.yml`
+       **没给容器设 `cpus` / `mem_limit`**（今天空闲：load 0.00、容器 RSS 2.7 MiB）；
+    3. **中继里有一条无界队列**：到浏览器的出站队列只有 64 帧，满了之后 `send().await` 卡住会话任务，
+       而上游事件通道是 `unbounded_channel`（`upstream.rs`）——于是一个卡住或极慢的浏览器会把
+       **每通话的内存往上顶**（按 64 KB/s 约 3.8 MB/分钟，一轮回答多长就顶多长）。
+       要不要收窄、封顶多少帧、溢出时是丢音频还是收掉通话，是设计决定，**等你定**。
+    评估过程顺带纠正了一条被引用错方向的老读数（原「出站 65 KB/s」实为「服务器自己去公网下载」），
+    教训与那两条相差 10 倍的同文件读数都记在 [implementation-notes.md](./implementation-notes.md) §34。
 - **多账号与超管**：代码完成、本地实测、**线上已上线**（[verification.md](verification.md) §5、
   [deployment.md](deployment.md) §8）。`role` 补列与超管账号的创建都发生在**进程启动时**，
   所以本机那个常驻的 pm2 实例要等重启才会出现 `/admin` 与超管账号。
