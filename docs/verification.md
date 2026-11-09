@@ -2544,6 +2544,11 @@ GIF / WebP VP8X·VP8L·VP8）与 `nest/server/src/media/image-dims.ts`。在 `st
 3. wasm 客户端的 DOM 组装（`chat_page.rs::append_asset`）**没有宿主层断言**——`chat_page.rs`
    里没有 `#[test]`。这一侧的证据是核心层（`Paint::Asset` 带上两字段）+ 服务端模板 +
    Nest 客户端 jsdom 那条。真实浏览器里 `img` 的盒子效果要等上线后看。
+   **同日已补**：成对规则本身挪进 `chat_core::image_box`（那条规则有边界，而 `chat_page.rs`
+   是够不到 `cargo test` 的那一半，按本仓库既有的 core/page 分层它就该住在 core），
+   两条用例覆盖「半对不算盒子」与「0 与负数当未知」，`rust/client` 因此 **44 passed**、
+   `cargo check --target wasm32` 干净。`chat_page.rs` 现在只写属性，不判规则。
+   这条待办在四个落点（Rust 服务端模板、hbs 模板、两个客户端）现在都有断言了。
 4. 探针在真实字节上的正确性是靠**离线拿那 19 张生产图**验的（Rust 实现逐张读出的尺寸与 python
    独立实现完全一致，19/19），不是只靠手造 fixture。
 
@@ -2641,11 +2646,35 @@ img[1]  complete=false  natural=0x0        attrs=1024x1024  used=758x758
 整页（含两张图加载完成之后）布局偏移计数 **0**。
 
 所以这条 *issue* 现在**不能再当作这个缺陷的判据**，判据换成 `layout-shift` 的实测。
-为什么属性都在了它还要报：样式表里 `.asset-image { width: 100%; height: auto; }`（`main.css:338`）
-把元素的实际宽度交给 CSS，属性只用来算宽高比——**Chromium 这条启发式是否因此不给分，我没能证实**
-（本环境的搜索取不到结果，源码没读到），这是一个与观测一致的假设，不是结论。
-真要消掉那行计数，方向是给 `.asset-image` 补一条 `aspect-ratio`，但那是为了让 lint 闭嘴而不是为了让页面不跳——
-页面不跳已经量出来了，所以没做。
+**上一轮写在这里的那个解释，同日已被实验推翻。** 当时我猜是样式表
+`.asset-image { width: 100%; height: auto }`（`main.css:338`）把宽度交给 CSS、属性只算宽高比，
+所以启发式不给分。判生死的实验是：在 `/admin/conversations/3` 上用 initScript 注入一条
+**更高特异性**的规则 `img.asset-image{width:auto;height:auto}` 撤掉那个覆盖，让属性真正决定尺寸
+（实测 `computedWidth` 从 `758px` 变成 `1024px`，注入生效）。结果：**issue 仍然报 count=11。**
+
+所以那个假设不成立。现在只能说出口的是两条观测，不是一条解释：
+
+| 观测 | 数 |
+|---|---|
+| issue 计数 == 该页懒加载图片数，**与属性有无、CSS 是否覆盖都无关** | 产品页 2 张 → count=2；管理回放页 11 张 → count=11（有属性）→ 撤掉 CSS 覆盖后仍 11 |
+| 真实症状（布局偏移） | 两种 CSS 下都 **0**（撤覆盖那次出现的 1 次偏移是探针本身把盒子从 758 撑到 1024 造成的，不是站点行为） |
+
+**为什么仍然不修**：查不到 Chromium 这条启发式的确切条件（本环境的搜索两次都取回空结果，源码没读到），
+所以任何"这样改就能消掉"的做法都是瞎试；而它代理的症状已经量到是 0。
+**这条记录的价值在于：一个未经实验的合理解释，被写进文档之后看起来就像结论**——上一轮它就是这么被写的。
+判据：**解释要么标成假设并配一个能推翻它的实验，要么别写进决策记录。**
+
+### 42.5 管理回放页那一屏（§42.4 第 2 条已补）
+
+`/admin/conversations/3`——§23.5 当年量到 count=11、资产最多的那一屏：
+
+```
+assetImages=11  videos=0  lazy=11  missingDims=0  layoutShifts=0
+样本：1024x1024 used=758x758 ／ 1000x1000 used=758x758 ／ 1000x1000 used=758x758
+```
+
+**11 张懒加载图全部带尺寸，滚动到底之后布局偏移 0。** 回填在只读回放这条路径上同样生效
+（它与产品页共用同一个 `turn()` 模板），这条待办原本描述的现象在这一屏已经消失。
 
 ### 42.4 这一节没证的
 
@@ -2654,3 +2683,62 @@ img[1]  complete=false  natural=0x0        attrs=1024x1024  used=758x758
    预期同样 0 位移，但没测。
 3. 新产生的图片（下一次真实出图）没走线上——`store()` 里那条读头部的路径这次只被单元断言与
    离线 19 张图证过。
+
+## 43. 打断（barge-in）：那条 `cancel` 帧两侧的断言与门读数（2026-11-09，未部署）
+
+设计、三方职责与上游出处在 [architecture.md](./architecture.md) §11.6；这里只放读数。
+判据是**帧序**——「有没有真的静下来」要人耳，而「按下之后线上跑了哪几帧、服务端转发了哪几条
+上游消息、那一轮落库存的是什么」全部可以在宿主与单元层钉住。
+
+### 43.1 门
+
+| 门 | 读数 |
+|---|---|
+| `cargo test`（rust/server） | **187 条全过**（沙箱外复跑；沙箱内 185 + 那 2 条 storage 假红）；`voice::` 子集 **49 条** |
+| `cargo test`（rust/client） | **50 条全过**（`voice_core` 17 → 23 条，新增 6 条都是打断） |
+| `cargo check --target wasm32-unknown-unknown` | 干净、零 warning |
+| `cargo test`（`crates/proto`） | 编译通过、0 条自有测试——帧名的断言在 `voice::protocol` 那侧 |
+| `pnpm vitest`（nest/server） | **32 文件 / 493 条全过**（沙箱外：6 个文件要 `app.listen(0)`） |
+| `tsc --noEmit`（nest/server ×2、nest/client ×1） | 三个配置全过 |
+| `pnpm vitest`（nest/client） | **3 文件 / 62 条全过**（`voice.test.ts` 14 → 19 条） |
+
+### 43.2 中继侧钉住了什么
+
+| 断言 | 读数 |
+|---|---|
+| `cancel` 在**有 response 在飞**时才转发 | 上游命令队列收到 `Command::CancelResponse` 一条 |
+| 收尾与 `cancel` 同一趟 | `busy` 当场为假；页面上落下一帧 `{"type":"done"}`；`messages` 里那一行的内容是**它已说出的那半句**（`我先画一只红隼`）而不是「（本轮没有语音输出）」 |
+| 已生成未派发的工具调用丢掉 | `pending_calls` 清空；后续 `FunctionCall` 事件也不再收；断言「没有 `ToolOutput` 漏回上游」 |
+| 静音窗口 | 同一轮的迟到 `Audio` / `AssistantText` 帧**一条都不发**给页面 |
+| 咽下那一帧 `response.done` | 吞掉后 `interrupted` 归真为假，且**不再发第二次 `done`**——否则按钮会在用户还按着时被「还」给他 |
+| 无 response 可取消时不转发 | 两种局面（完全空闲、轮次在跑但工具在跑）都断言了「命令队列里没有 CancelResponse」，因为上游对空取消回的是**错误帧**，页面会把它读成「你刚才那句被拒了」 |
+
+### 43.3 页面侧钉住了什么
+
+| 断言 | 读数 |
+|---|---|
+| 判据是「已经出声」 | 正在回答时按下 → `[StopPlayback, SetButtonActive(true), SetStatus(正在听…)]` 且 `Cancel` 上线；正在思考（只有 transcript 到了）时按下 → **零效果、零新帧** |
+| 打断那一按是一等按住 | `is_holding()` 为真，且 25 秒上限照常武装在 `now+25000` |
+| 静音到本轮结束 | `cancel` 之后到达的 `audio` 帧不产生 `PlayAudio`；本轮 `done` 之后下一句照常播 |
+| **commit 必须等本轮关闭** | 打断期间松手时线上只有 `[start, audio, commit, cancel, audio]`——**没有第二个 commit**；`done` 一到就补发，顺序是先音频后 commit |
+| 单段上限同样走这条路 | 到点时也只是把 commit 存起来，不越过那道闸 |
+| 空的一按仍不提交 | 打断后一个帧都没采到 → 走 §35 那条「这一按没有采到声音」，不发 commit |
+| 正常轮次不受影响 | 本轮结束后再按，帧序回到 `[start, audio, commit]`，没有 `cancel` |
+| Nest 那套同形 | jsdom + 假 socket 下同一批断言全过；`scheduled` 那条音频源在按下瞬间被 `disconnect` |
+
+### 43.4 这一节没证的
+
+1. **浏览器里一次都没走过**。它需要真人一按（`roadmap.md` §3 那条唯一未收口的 P1 判据），
+   而合成 `pointerdown` 会在权限已授的前提下把环境声送进外部 ASR——那不该由 Agent 代做。
+2. **上游对 `response.cancel` 的真实行为没有一次实测**。§11.6 那三条引文来自官方文档，
+   本仓库至今没有任何一条 `status=cancelled` 的实测读数；「咽下那一帧 done」的整套正确性
+   建立在「它一定会回、且在下一次 `response.create` 之前回」这条**文档承诺**上。
+3. **打断期那几句话会不会被完整转写出来**，取决于一个只在运行时才知道的事实：
+   上游在 response 进行中收到 `input_audio_buffer.append` 时是否照收。
+   代码看是这样（松手之后麦克风本来就没关，见 `roadmap.md` §3 那条），但没人听过它。
+4. **两套后端同时挂活库时这条通路仍是一次都没跑过**；`nest/` 那套的这次改动不对外，
+   只由同一批单元断言保证它与 Rust 那套同形。
+5. 页面静音窗口里 `disconnect()` 掉的音频源，规范上说「已结束的源是空操作」——
+   我们吞掉了它的错误，但没在浏览器里验过那条错误确实不存在。
+6. 没做**压测**：打断引入的额外一条 `cancel` 帧与「提前收尾」不改变并发通话数那笔账
+   （§3 里仍未评估的那条）。

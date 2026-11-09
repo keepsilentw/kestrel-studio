@@ -12,6 +12,11 @@ Web 生成式媒体 Agent：用户在网页给一句话，LLM 流式思考、调
 `kestrel/`（Rust）是 Agent harness 内核；本项目是它面向生成式媒体的 Web 化实现，沿用「Agent 循环 + 工具注册表」的分层思路，语言先换成 NestJS，
 2026-10-27 起同一服务端又移植了一份 Rust 实现（`rust/server/`），**2026-11-02 起线上跑的就是这一份**。
 
+**内核没有被引入，也不打算引入**：`docs/roadmap.md` §2.2 那七条阻塞依据（「均经源码核实」，2026-09-22）
+已在 2026-11-09 逐条回到 `../kestrel` 的当前源码重验，**全部仍然成立**；重估、三条新增成本、
+四条可复核的触发条件与两条反向信号都写在 §2.2.1。别把「沿用分层思路」读成「待迁移」——那是第五期
+已经关闭的选项，除非 §2.2.1 表里的触发条件出现。
+
 设计文档在 `docs/`，**动手前先按需读**：`architecture.md`（系统是什么，少变）、`roadmap.md`（将变成什么，常改）、`implementation-notes.md`（实现期踩坑台账，只增不减）、`deployment.md`（服务器侧）、`verification.md`（带日期的实测证据，引用前先看日期）。文档索引与维护约定见 `docs/README.md`。
 
 ## 目录（monorepo，2026-11-02 起）
@@ -252,7 +257,7 @@ Vite 只做打包，产物固定为 `public/assets/main.js` / `main.css`（由 `
 - `admin/` — 超管管理面：`admin.guard.ts`（未登录 → `/login`；非超管 GET → `/`、POST → 403）、`admin.service.ts`（账号 CRUD + 级联删库外文件）、`admin.controller.ts`（纯表单 + 302 + `?notice=`）。它自己不写任何可见性查询，只用 `ConversationService`。
 - `view/view.controller.ts` — hbs 页面：`GET /login`、`GET /`（`?c=` 指定会话）、`GET /voice`；共用的模板预处理（markdown、轮次锚点、时间格式化）在 `view/render.ts`，管理页也用它。
 
-### 语音：第二条传输通路（中继 `rust/server/src/voice/`，契约源 `nest/server/src/voice/`；客户端 `nest/client/scripts/voice.ts`）
+### 语音：第二条传输通路（中继 `rust/server/src/voice/`，契约源 `nest/server/src/voice/`；客户端 `rust/client/src/voice_core.rs` + `voice_page.rs` 与 `nest/client/scripts/voice.ts`）
 
 `/voice` 是一条**独立于轮次/SSE 的通路**，不是第五个模式（设计与理由见 `docs/architecture.md` §11）。链路：
 
@@ -282,6 +287,17 @@ Vite 只做打包，产物固定为 `public/assets/main.js` / `main.css`（由 `
   自带上下文，落库只为历史与 UI。
 - 工具分发与文本路径**共用** `ToolRegistry.execute()` / `describeOutcome()` / `assetUrl()`，
   不要在这条路径上另抄一份。
+- **`cancel` 是第五条客户端帧**（打断：上一句还在播时再按住）。三条不许想当然的口径：
+  ①页面判据是**已经听到声音**（`spoke`），不是「本轮在跑」——正在思考时按下仍按原样拒绝；
+  ②中继只在**自己认为有 response 在生成**时才转成上游的 `response.cancel`，因为上游对
+  「无推理可取消」回的是一条**错误帧**，长得像「你刚才那句被拒了」；
+  ③打断那一按的 `commit` **必须等那一轮的 `done`**——`Commit` 在轮次进行中被丢弃且不留痕迹。
+  当场收尾的那一轮存的是它已说出的那半句，它已生成未派发的 `function_call` 丢掉不跑。
+  设计、出处与没验到的部分见 `docs/architecture.md` §11.6、`docs/verification.md` §43。
+  客户端帧现在五条：`start` / `audio` / `commit` / `cancel` / `stop`，类型在 `crates/proto`，
+  加新帧要同步四处：两套 `protocol`（`parseClientFrame`）、两套服务端中继、两套客户端。
+  加 `ClientFrame` 变体时留意：`wire.rs::tag()` 与两套 `parseClientFrame` 都会因此要求你
+  补臂，这是有意的——漏一臂的后果是页面静默发一个服务端不认的标签。
 
 ### 资产的两种取法
 
