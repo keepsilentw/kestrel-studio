@@ -93,6 +93,10 @@ pub struct Session<S: Transport> {
     conversation_id: Option<i64>,
     /// When the current hold must be committed. `None` means nothing is armed.
     hold_deadline: Option<u64>,
+    /// How many PCM chunks this hold has produced. The guard against committing an
+    /// empty buffer reads this, and `press` resets it — the count is per hold, not
+    /// per session, because the failure is per press.
+    frames_this_hold: u32,
 }
 
 impl<S: Transport> Session<S> {
@@ -107,6 +111,7 @@ impl<S: Transport> Session<S> {
             pending_commit: false,
             conversation_id: None,
             hold_deadline: None,
+            frames_this_hold: 0,
         }
     }
 
@@ -135,6 +140,7 @@ impl<S: Transport> Session<S> {
         }
         self.holding = true;
         self.blocked = false;
+        self.frames_this_hold = 0;
         let mut effects = vec![
             Effect::StartCapture,
             Effect::SetButtonActive(true),
@@ -172,6 +178,9 @@ impl<S: Transport> Session<S> {
             effects.push(Effect::SetStatus(STATUS_IDLE));
             return effects;
         }
+        if self.frames_this_hold == 0 {
+            return self.end_hold_without_audio(effects);
+        }
         self.busy = true;
         match self.phase {
             Phase::Ready => {
@@ -193,6 +202,10 @@ impl<S: Transport> Session<S> {
         if self.blocked {
             return Vec::new();
         }
+        // Counted for every chunk the machine accepts, whether it goes out at once
+        // or lands in `queued` — the guard asks "did this press produce audio", not
+        // "did it reach the socket yet".
+        self.frames_this_hold += 1;
         match self.phase {
             Phase::Ready => {
                 self.transport.send(&ClientFrame::Audio { pcm });
@@ -299,6 +312,13 @@ impl<S: Transport> Session<S> {
         if !due || !self.holding || self.blocked {
             return Vec::new();
         }
+        if self.frames_this_hold == 0 {
+            // A full 25 s of holding with not one frame out of the microphone is the
+            // same empty-buffer commit the release path refuses. The cap must not be
+            // the hole through which it comes back.
+            self.holding = false;
+            return self.end_hold_without_audio(vec![Effect::SetButtonActive(false)]);
+        }
         // Hand over what has been said and stop feeding. The user is told,
         // because the alternative is the audio after this point going nowhere.
         self.blocked = true;
@@ -363,6 +383,35 @@ impl<S: Transport> Session<S> {
 
     fn arm(&mut self, now_ms: u64) {
         self.hold_deadline = Some(now_ms.saturating_add(MAX_HOLD_MS));
+    }
+
+    /// Ends a hold that produced **no audio at all**, without handing anything over.
+    ///
+    /// Not the `abort` path: there, the page knows capture failed — it asked for the
+    /// microphone and was refused. Here capture was asked for, nothing reported an
+    /// error, and no frame ever arrived. That is what a hold landing on the browser's
+    /// permission prompt looks like from inside the page (`getUserMedia` yields nothing
+    /// until the prompt is answered). Measured on the first real voice dial on the new
+    /// chain: two presses, `frames=0` both times, and the endpoint answered
+    /// `buffer too small, or have no audio` (docs/verification.md §25.1).
+    ///
+    /// Committing an empty buffer spends a turn — one upstream session, one refusal
+    /// printed on the page — for a failure that is the page's, not the speaker's. So
+    /// the hold is closed instead: `blocked` stops late frames from this press leaking
+    /// into the *next* commit, `queued` is dropped for the same reason, and the button
+    /// is handed back. `press` clears `blocked`, so the next press is unaffected.
+    fn end_hold_without_audio(&mut self, mut effects: Vec<Effect>) -> Vec<Effect> {
+        self.blocked = true;
+        self.pending_commit = false;
+        self.queued.clear();
+        self.hold_deadline = None;
+        effects.push(Effect::AppendEntry {
+            kind: "note",
+            text: "这一按没有采到声音，没有提交；再按住说一次就行".to_string(),
+        });
+        effects.push(Effect::SetButtonEnabled(true));
+        effects.push(Effect::SetStatus(STATUS_IDLE));
+        effects
     }
 }
 
@@ -502,18 +551,30 @@ mod tests {
         session.press(0);
         session.on_socket_open();
         session.on_server_frame(READY, 0);
+        // There has to be an utterance to hand over. A 25 s hold that produced no
+        // audio at all takes the empty-hold path instead (see
+        // `a_hold_that_never_captured_is_not_committed_at_the_cap`).
+        session.audio_chunk("AAA=".to_string());
 
         let effects = session.tick(MAX_HOLD_MS);
         assert_eq!(effects.last(), Some(&Effect::SetStatus(STATUS_THINKING)));
         assert_eq!(
             frames(&session),
-            vec![ClientFrame::Start, ClientFrame::Commit]
+            vec![
+                ClientFrame::Start,
+                ClientFrame::Audio { pcm: "AAA=".to_string() },
+                ClientFrame::Commit,
+            ]
         );
 
         session.audio_chunk("CCC=".to_string());
         assert_eq!(
             frames(&session),
-            vec![ClientFrame::Start, ClientFrame::Commit],
+            vec![
+                ClientFrame::Start,
+                ClientFrame::Audio { pcm: "AAA=".to_string() },
+                ClientFrame::Commit
+            ],
             "past the cap the endpoint holds 30 s of buffer; more would be refused"
         );
 
@@ -521,7 +582,11 @@ mod tests {
         session.release();
         assert_eq!(
             frames(&session),
-            vec![ClientFrame::Start, ClientFrame::Commit]
+            vec![
+                ClientFrame::Start,
+                ClientFrame::Audio { pcm: "AAA=".to_string() },
+                ClientFrame::Commit
+            ]
         );
     }
 
@@ -568,6 +633,9 @@ mod tests {
         session.press(0);
         session.on_socket_open();
         session.on_server_frame(READY, 0);
+        // A turn only runs if something was handed over; an empty hold is refused
+        // instead (see `a_hold_that_produced_no_audio_is_never_committed`).
+        session.audio_chunk("AAA=".to_string());
         session.release();
         assert!(
             session.press(MAX_HOLD_MS).is_empty(),
@@ -614,6 +682,97 @@ mod tests {
 
     /// A permission denial is the page's failure, not an empty utterance: the
     /// Nest client committed anyway and the endpoint answered "没有听清，请再说一次".
+    #[test]
+    fn a_hold_that_produced_no_audio_is_never_committed() {
+        // The first real voice dial on the new chain: two presses, `frames=0` both
+        // times, each answered upstream with "buffer too small, or have no audio"
+        // (docs/verification.md §25.1). A press landing on the browser's permission
+        // prompt produces nothing, and nothing inside the page distinguishes that from
+        // a capture that is working — so the machine refuses the commit.
+        let mut session = session();
+        session.press(0);
+        session.on_socket_open();
+        session.on_server_frame(READY, 0);
+
+        let effects = session.release();
+        assert_eq!(
+            frames(&session),
+            vec![ClientFrame::Start],
+            "no Commit: there is no utterance to hand over"
+        );
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::AppendEntry { .. })),
+            "the page has to say so — a silent no-op reads as a dead button"
+        );
+        assert!(effects.contains(&Effect::SetButtonEnabled(true)));
+        assert!(effects.contains(&Effect::SetStatus(STATUS_IDLE)));
+        assert!(!session.is_holding(), "the hold is closed");
+
+        // The next press works: `press` clears the block this path sets, so one
+        // refusal does not cost the rest of the call.
+        session.press(5_000);
+        session.audio_chunk("AAA=".to_string());
+        session.release();
+        assert_eq!(
+            frames(&session),
+            vec![
+                ClientFrame::Start,
+                ClientFrame::Audio { pcm: "AAA=".to_string() },
+                ClientFrame::Commit,
+            ],
+            "a hold that did capture audio still commits"
+        );
+    }
+
+    #[test]
+    fn a_hold_that_never_captured_is_not_committed_at_the_cap() {
+        // The 25 s cap hands over a long sentence. It must not become the hole through
+        // which the empty commit comes back: no frames, no utterance, no Commit.
+        let mut session = session();
+        session.press(0);
+        session.on_socket_open();
+        session.on_server_frame(READY, 0);
+
+        let effects = session.tick(MAX_HOLD_MS);
+        assert_eq!(
+            frames(&session),
+            vec![ClientFrame::Start],
+            "the cap does not commit an empty hold"
+        );
+        assert!(
+            !effects.contains(&Effect::SetStatus(STATUS_THINKING)),
+            "nothing is in flight, so the status must not claim otherwise"
+        );
+        assert!(effects.contains(&Effect::SetStatus(STATUS_IDLE)));
+        assert!(!session.is_holding());
+        assert_eq!(
+            session.hold_deadline(),
+            None,
+            "a closed hold leaves no armed deadline behind"
+        );
+    }
+
+    #[test]
+    fn frames_arriving_after_an_empty_hold_do_not_reach_the_next_commit() {
+        // The worklet can hand a chunk over just after the button came up. Left in
+        // `queued` it would be flushed into the user's *next* sentence, so the block
+        // this path sets drops it instead.
+        let mut session = session();
+        session.press(0);
+        session.on_socket_open();
+        session.release();
+        assert_eq!(frames(&session), vec![ClientFrame::Start]);
+
+        session.audio_chunk("LATE=".to_string());
+        assert_eq!(
+            frames(&session),
+            vec![ClientFrame::Start],
+            "a late frame from a refused hold is dropped, not queued"
+        );
+    }
+
     #[test]
     fn an_uncapturable_press_is_abandoned_without_committing() {
         let mut session = session();

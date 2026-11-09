@@ -22,6 +22,13 @@ const SAMPLES_PER_MESSAGE = 1024;
 const NOTE_RECONNECT = '会话已结束，再按一次继续';
 const NOTE_NO_MIC = '拿不到麦克风权限，无法说话';
 const NOTE_HOLD_LIMIT = '已到单段上限，这段先提交了；还有话要说请松开再按一次';
+/**
+ * One press that captured nothing. The same sentence `rust/client/src/voice_core.rs`
+ * writes: both clients stay online (docs/roadmap.md §4.5), and this note is the only
+ * thing the user sees in that case, so the two pages must not disagree about what
+ * happened.
+ */
+const NOTE_EMPTY_HOLD = '这一按没有采到声音，没有提交；再按住说一次就行';
 
 /**
  * The endpoint rejects anything past 30s of *uncommitted* audio:
@@ -257,6 +264,12 @@ let events: EventSource | null = null;
 /** This utterance was already committed, or the endpoint refused it. */
 let blocked = false;
 let holdTimer: number | null = null;
+/**
+ * How many PCM chunks the current hold has produced. The guard against committing an
+ * empty buffer reads this. Per hold, not per call: the failure is per press. Mirrors
+ * `voice_core.rs`'s `frames_this_hold`.
+ */
+let framesThisHold = 0;
 
 async function ensureSocket(): Promise<WebSocket> {
   if (socket !== null) {
@@ -469,11 +482,44 @@ function endHoldAtLimit(): void {
   if (!holding || blocked) {
     return;
   }
+  if (framesThisHold === 0) {
+    // A full 25 s with not one frame out of the microphone is the same empty-buffer
+    // commit `release` refuses. The limit must not be the hole it comes back through.
+    holding = false;
+    endHoldWithoutAudio();
+    return;
+  }
   blocked = true;
   busy = true;
   send({ type: 'commit' });
   appendEntry('note', NOTE_HOLD_LIMIT);
   setStatus('正在思考…');
+}
+
+/**
+ * Ends a hold that captured **nothing**, without handing anything over.
+ *
+ * Not the `NOTE_NO_MIC` path: there the page knows capture failed — it asked for the
+ * microphone and was refused. Here capture was asked for, nothing reported an error,
+ * and no frame ever arrived, which is what a press landing on the browser's permission
+ * prompt looks like from inside the page (`getUserMedia` yields nothing until the
+ * prompt is answered). Measured on the first real voice dial on the new chain: two
+ * presses, `frames=0` both times, each answered upstream with "buffer too small, or
+ * have no audio" (docs/verification.md §25.1).
+ *
+ * Committing an empty buffer spends a turn — one upstream session, one refusal printed
+ * on the page — for a failure that is the page's, not the speaker's. `blocked` also
+ * stops a late frame from this press being flushed into the user's *next* sentence,
+ * and `press` clears it, so the next press is unaffected.
+ */
+function endHoldWithoutAudio(): void {
+  blocked = true;
+  pendingCommit = false;
+  pending = [];
+  clearHoldTimer();
+  appendEntry('note', NOTE_EMPTY_HOLD);
+  button.disabled = false;
+  setStatus('按住按钮开始说话');
 }
 
 async function press(): Promise<void> {
@@ -482,6 +528,7 @@ async function press(): Promise<void> {
   }
   holding = true;
   blocked = false;
+  framesThisHold = 0;
   button.classList.add('voice-button-active');
   setStatus('正在听…');
 
@@ -493,6 +540,10 @@ async function press(): Promise<void> {
         if (blocked) {
           return;
         }
+        // Counted for every chunk accepted, whether it goes out now or lands in
+        // `pending`: the question is "did this press capture audio", not "did it
+        // reach the socket yet".
+        framesThisHold += 1;
         const pcm = bytesToBase64(new Uint8Array(event.data));
         if (ready) {
           send({ type: 'audio', pcm });
@@ -534,6 +585,10 @@ function release(): void {
     // The endpoint refused this utterance; committing again would submit an
     // empty buffer on top of it.
     setStatus('按住按钮开始说话');
+    return;
+  }
+  if (framesThisHold === 0) {
+    endHoldWithoutAudio();
     return;
   }
   busy = true;

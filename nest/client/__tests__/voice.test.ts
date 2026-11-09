@@ -283,13 +283,16 @@ describe('会话就绪前后', () => {
     const socket = await socketAfterPress();
     socket.open();
 
+    // There has to be an utterance to defer a commit for. A hold that produced no
+    // audio at all is refused instead — see 「一按没有采到音频时不提交空缓冲」.
+    emitMicChunk();
     release();
-    // Handshake done, session not up: only `start` has gone out.
+    // Handshake done, session not up: only `start` has gone out, the chunk is queued.
     expect(socket.frames().map((frame) => frame.type)).toEqual(['start']);
 
     socket.emit({ type: 'ready', conversationId: 7 });
 
-    expect(socket.frames().map((frame) => frame.type)).toEqual(['start', 'commit']);
+    expect(socket.frames().map((frame) => frame.type)).toEqual(['start', 'audio', 'commit']);
   });
 
   it('ready 之后松开按钮立刻发 commit', async () => {
@@ -299,9 +302,10 @@ describe('会话就绪前后', () => {
     socket.open();
     socket.emit({ type: 'ready', conversationId: 7 });
 
+    emitMicChunk();
     release();
 
-    expect(socket.frames().map((frame) => frame.type)).toEqual(['start', 'commit']);
+    expect(socket.frames().map((frame) => frame.type)).toEqual(['start', 'audio', 'commit']);
     expect(statusText()).toBe('正在思考…');
   });
 });
@@ -361,6 +365,50 @@ describe('单段时长上限', () => {
     expect(framesOf(socket)).toEqual(['start', 'audio', 'commit']);
   });
 
+  /**
+   * 第一次真拨号的形状（docs/verification.md §25.1）：两次按下都 `frames=0`，上游回
+   * "buffer too small, or have no audio"。按住正好撞上浏览器的权限框时，页面里没有任何
+   * 东西报错，也没有一帧音频 —— 所以由机器自己拒交这个空缓冲。
+   * 同形断言在 `rust/client/src/voice_core.rs` 的 a_hold_that_produced_no_audio_is_never_committed。
+   */
+  it('一按没有采到音频时不提交空缓冲，只给用户一句说明', async () => {
+    stubTicket();
+    await boot();
+    const socket = await socketAfterPress();
+    socket.open();
+    socket.emit({ type: 'ready', conversationId: 7 });
+
+    release();
+
+    expect(framesOf(socket)).toEqual(['start']);
+    expect(element('.voice-entry-note').textContent).toContain('没有采到声音');
+    expect(statusText()).toBe('按住按钮开始说话');
+    expect(button().disabled).toBe(false);
+
+    // 松开之后才到的那一帧，不能混进用户下一句里
+    emitMicChunk();
+    expect(framesOf(socket)).toEqual(['start']);
+
+    // 下一按照常工作：一次拒绝不该赔掉整通电话
+    press();
+    emitMicChunk();
+    release();
+    expect(framesOf(socket)).toEqual(['start', 'audio', 'commit']);
+  });
+
+  // 上限那条路也不能成为空提交钻回来的洞
+  it('整段按住都没有音频时，到上限也不提交空缓冲', async () => {
+    stubTicket();
+    await boot();
+    const socket = await readyPress();
+
+    vi.advanceTimersByTime(25_000);
+    vi.useRealTimers();
+
+    expect(framesOf(socket)).toEqual(['start']);
+    expect(statusText()).toBe('按住按钮开始说话');
+  });
+
   it('收到 error 后本次按住不再送音频，松开也不提交空缓冲', async () => {
     stubTicket();
     await boot();
@@ -382,6 +430,8 @@ describe('单段时长上限', () => {
     await boot();
     const socket = await readyPress();
 
+    // The cap hands over what was said, so this hold has to have said something.
+    emitMicChunk();
     vi.advanceTimersByTime(25_000);
     vi.useRealTimers();
     emitMicChunk();
@@ -396,6 +446,6 @@ describe('单段时长上限', () => {
     });
     emitMicChunk();
 
-    expect(framesOf(socket)).toEqual(['start', 'commit', 'audio']);
+    expect(framesOf(socket)).toEqual(['start', 'audio', 'commit', 'audio']);
   });
 });
