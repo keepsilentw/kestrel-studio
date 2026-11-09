@@ -1,4 +1,4 @@
-import { marked } from 'marked';
+import { renderMarkdown } from './markdown';
 import '../styles/main.css';
 
 function requireElement<T extends Element>(selector: string): T {
@@ -256,7 +256,7 @@ function renderStoredMessage(message: StoredMessage): HTMLElement {
   if (message.content.length > 0) {
     const content = document.createElement('div');
     content.className = 'content';
-    content.innerHTML = marked.parse(message.content, { async: false });
+    content.innerHTML = renderMarkdown(message.content);
     article.append(content);
   }
 
@@ -642,7 +642,7 @@ function openConversationStream(conversationId: string, from: string | null): vo
     const turn = data === null ? null : turnOf(data);
     if (data !== null && turn !== null) {
       turn.answer += readString(data, 'delta');
-      turn.content.innerHTML = marked.parse(turn.answer, { async: false });
+      turn.content.innerHTML = renderMarkdown(turn.answer);
     }
   });
 

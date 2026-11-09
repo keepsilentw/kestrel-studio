@@ -1,4 +1,4 @@
-import { marked } from 'marked';
+import { renderMarkdown } from '@/common/markdown';
 import { MODE_LABEL } from '@/agent/mode';
 import type { MessageView } from '@/conversation/conversation.service';
 
@@ -37,7 +37,7 @@ export function renderMessages(views: MessageView[]): RenderedMessage[] {
     ...view,
     contentHtml:
       view.role === 'assistant' && view.content.length > 0
-        ? marked.parse(view.content, { async: false })
+        ? renderMarkdown(view.content)
         : '',
     modeLabel: view.mode === null ? null : (MODE_LABEL[view.mode] ?? null),
   }));
