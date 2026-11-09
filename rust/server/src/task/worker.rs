@@ -61,6 +61,21 @@ impl TaskWorker {
             }
         };
         for task in pending {
+            // Claim before anything else, and before any provider call: the list
+            // above is a candidate list, and the other backend sweeps the same table
+            // on its own timer (docs/architecture.md §13.2). A row that does not turn
+            // ours here is not ours to advance this tick — not its poll, not its
+            // mirror download, not its result message.
+            match self.state.tasks.claim_as_writer(task.id).await {
+                Ok(true) => {}
+                Ok(false) => continue,
+                Err(error) => {
+                    // A row that cannot be claimed is left exactly as it is, so the
+                    // next tick tries again rather than dropping the render.
+                    tracing::warn!(task = task.id, %error, "task could not be claimed");
+                    continue;
+                }
+            }
             if let Err(error) = self.advance(&task).await {
                 // Per task, not per sweep. Provider errors are handled inside
                 // advance(), so anything arriving here is an unexpected write or

@@ -51,6 +51,16 @@ export const messages = sqliteTable('messages', {
    * so history can render each turn without pairing rows.
    */
   mode: text('mode'),
+  /**
+   * Which backend wrote the row: `nest` | `rust` (src/common/writer.ts).
+   *
+   * The two stacks share this file, and the boot recovery of abandoned turns cannot
+   * see another process's live turn, so the discriminator has to live in the row.
+   * Nullable because a row written before the column existed — or by a stack that has
+   * not migrated yet — simply has no owner, which the recovery treats with a grace
+   * period rather than as its own. docs/architecture.md §13.2.
+   */
+  owner: text('owner'),
   createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
 });
 
@@ -118,6 +128,16 @@ export const generationTasks = sqliteTable('generation_tasks', {
   params: text('params'),
   status: text('status').notNull(),
   attempts: integer('attempts').notNull().default(0),
+  /**
+   * Lease: which backend is advancing this render right now, and since when
+   * (epoch ms). The worker claims a row with one conditional UPDATE before it touches
+   * the provider, so two stacks cannot poll it twice, mirror the video twice and
+   * journal the result twice. `attempts` stays what it was — a failed provider call —
+   * because a lease renewed every eight seconds would run that counter away.
+   * docs/architecture.md §13.2.
+   */
+  claimedBy: text('claimed_by'),
+  claimedAt: integer('claimed_at', { mode: 'timestamp_ms' }),
   error: text('error'),
   assetId: integer('asset_id'),
   /** Assistant message appended when the task finished. */

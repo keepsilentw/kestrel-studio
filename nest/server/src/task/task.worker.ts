@@ -68,6 +68,15 @@ export class TaskWorker implements OnModuleInit, OnModuleDestroy {
     try {
       const pending = this.tasks.active();
       for (const task of pending) {
+        // Claim before anything else, and before any provider call: the list above is
+        // a candidate list, and the other backend sweeps the same table on its own
+        // timer (docs/architecture.md §13.2). A row that does not turn ours here is not
+        // ours to advance this tick — not its poll, not its mirror download, not its
+        // result message. A throw is left to the outer catch: the row stays as it is
+        // and the next tick tries again rather than dropping the render.
+        if (!this.tasks.claimAsWriter(task.id)) {
+          continue;
+        }
         try {
           await this.advance(task);
         } catch (error) {

@@ -7,7 +7,7 @@ import { applySchema, DRIZZLE_INSTANCE } from '@/database/database.module';
 import * as schema from '@/database/schema';
 import type { GenerationTask } from '@/database/schema';
 import { ConversationEventsService, type ConversationEvent } from '@/conversation/conversation-events.service';
-import { TaskService, type NewTask } from '@/task/task.service';
+import { CLAIM_LEASE_MS, TaskService, type NewTask } from '@/task/task.service';
 
 /**
  * Real in-memory SQLite with the production DDL, as in the conversation tests.
@@ -193,6 +193,42 @@ describe('TaskService — 活跃与终态的分界', () => {
 });
 
 describe('TaskService — 状态写入', () => {
+  /**
+   * The claim is the only thing standing between two backends and one render polled,
+   * mirrored and journalled twice (docs/architecture.md §13.2). Same matrix as
+   * `rust/server`'s `a_render_is_claimed_by_one_backend_at_a_time`.
+   */
+  it('claim 一次只给一套：自租约可续，外租约未过期不可抢', () => {
+    const conversationId = harness.seedConversation();
+    const id = harness.tasks.create(newTask(conversationId));
+
+    expect(harness.tasks.claim(id, 'rust')).toBe(true);
+    expect(harness.tasks.claim(id, 'rust')).toBe(true);
+    expect(harness.tasks.claim(id, 'nest')).toBe(false);
+
+    const row = taskRow(id);
+    expect(row.claimedBy).toBe('rust');
+    expect(row.claimedAt).toBeInstanceOf(Date);
+    // A claim is not an attempt: attempts drives MAX_MIRROR_ATTEMPTS, and a lease
+    // renewed every eight seconds would run that counter away before anything failed.
+    expect(row.attempts).toBe(0);
+  });
+
+  it('claim 过了租约窗口才可接管，终态行不再可推进', () => {
+    const conversationId = harness.seedConversation();
+    const id = harness.tasks.create(newTask(conversationId));
+    expect(harness.tasks.claim(id, 'rust')).toBe(true);
+
+    harness.raw
+      .prepare('UPDATE generation_tasks SET claimed_at = ? WHERE id = ?')
+      .run(Date.now() - CLAIM_LEASE_MS - 1, id);
+    expect(harness.tasks.claim(id, 'nest')).toBe(true);
+
+    harness.tasks.finish(id, { status: 'succeeded' });
+    expect(harness.tasks.claim(id, 'nest')).toBe(false);
+    expect(harness.tasks.claim(id, 'rust')).toBe(false);
+  });
+
   it('markProgress 更新状态与尝试次数', () => {
     const conversationId = harness.seedConversation();
     const id = harness.tasks.create(newTask(conversationId));

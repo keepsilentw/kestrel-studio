@@ -18,6 +18,25 @@ pub use kestrel_proto::event::ConversationEvent;
 /// long-stale cursors fall back to `resync`.
 const RETAINED_EVENTS: i64 = 2000;
 
+/// How often one event may be re-inserted after losing the cursor race. Two is
+/// already one more than the design expects; the limit exists so a pathological
+/// writer cannot pin a delta loop in retry.
+const SEQ_RETRY_LIMIT: u32 = 3;
+
+/// Whether a failed insert is the UNIQUE cursor index firing, i.e. another writer
+/// took the `seq` this statement computed.
+///
+/// Matched on the message rather than an error class because sqlx-sqlite does not
+/// break `SQLITE_CONSTRAINT` down by kind, and the alternative — retrying any error —
+/// would hide a missing column or a broken foreign key behind three pointless
+/// attempts. The index name is part of SQLite's message, so this only ever matches
+/// the one constraint we created on purpose.
+fn is_seq_conflict(error: &sqlx::Error) -> bool {
+    error
+        .as_database_error()
+        .is_some_and(|db| db.message().contains("UNIQUE constraint failed: idx_events_conversation"))
+}
+
 /// An event together with the journal id that becomes its SSE `id:` field.
 #[derive(Debug, Clone)]
 pub struct PublishedEvent {
@@ -59,32 +78,10 @@ impl EventLog {
         conversation_id: i64,
         event: ConversationEvent,
     ) -> Result<PublishedEvent, AppError> {
-        // One transaction because `seq` is per conversation and must not be
-        // computed by two writers at once.
-        let mut tx = self.pool.begin().await?;
-        let row = sqlx::query(
-            "SELECT COALESCE(MAX(seq), 0) + 1 AS next FROM conversation_events WHERE conversation_id = ?1",
-        )
-        .bind(conversation_id)
-        .fetch_one(&mut *tx)
-        .await?;
-        let seq: i64 = row.try_get("next")?;
-
         let payload = serde_json::to_string(&event).map_err(|error| {
             AppError::internal(anyhow::anyhow!("encoding a journal payload: {error}"))
         })?;
-        sqlx::query(
-            "INSERT INTO conversation_events (conversation_id, seq, message_id, type, payload, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        )
-        .bind(conversation_id)
-        .bind(seq)
-        .bind(event.message_id_of())
-        .bind(event.type_name())
-        .bind(&payload)
-        .bind(chrono::Utc::now().timestamp_millis())
-        .execute(&mut *tx)
-        .await?;
-        tx.commit().await?;
+        let seq = self.append(conversation_id, &event, &payload).await?;
 
         let published = PublishedEvent {
             seq,
@@ -97,6 +94,63 @@ impl EventLog {
             let _ = sender.send(published.clone());
         }
         Ok(published)
+    }
+
+    /// Writes one journal row and returns its `seq`.
+    ///
+    /// The next cursor value is computed **inside** the insert, in one statement,
+    /// because that is what makes it a single writer. A transaction was the previous
+    /// shape and did not buy the guarantee its comment claimed: sqlx issues a bare
+    /// deferred `BEGIN`, which reads the other connection's snapshot and only
+    /// upgrades when it writes, so across processes the `MAX(seq)` read and the
+    /// insert were never in one critical section (docs/architecture.md §13.2). Two
+    /// backends share this file now, so the race is real and both bad outcomes were
+    /// on the table: the same `seq` landing twice — invisible to every reader,
+    /// because live delivery and replay both filter `seq >` — or the upgrade hitting
+    /// `SQLITE_BUSY_SNAPSHOT` and rolling the whole publish back, losing a frame.
+    ///
+    /// A write statement takes the write lock before it runs, so the read and the
+    /// insert are in the same critical section without any transaction plumbing, and
+    /// a second writer waits (5s busy timeout) instead of guessing. The UNIQUE
+    /// cursor index makes a duplicate `seq` an error rather than silence, which is
+    /// what makes this safe to run next to a build that predates it — during that
+    /// rollout window a conflict is possible, and it is retried here.
+    async fn append(
+        &self,
+        conversation_id: i64,
+        event: &ConversationEvent,
+        payload: &str,
+    ) -> Result<i64, AppError> {
+        for attempt in 1..=SEQ_RETRY_LIMIT {
+            let result = sqlx::query(
+                "INSERT INTO conversation_events (conversation_id, seq, message_id, type, payload, created_at) \
+                 SELECT ?1, COALESCE(MAX(seq), 0) + 1, ?2, ?3, ?4, ?5 FROM conversation_events WHERE conversation_id = ?1 \
+                 RETURNING seq",
+            )
+            .bind(conversation_id)
+            .bind(event.message_id_of())
+            .bind(event.type_name())
+            .bind(payload)
+            .bind(chrono::Utc::now().timestamp_millis())
+            .fetch_one(&self.pool)
+            .await;
+            match result {
+                Ok(row) => return Ok(row.try_get("seq")?),
+                Err(error) if is_seq_conflict(&error) && attempt < SEQ_RETRY_LIMIT => {
+                    tracing::warn!(
+                        %error,
+                        conversation_id,
+                        attempt,
+                        "journal seq collided with another writer, retrying"
+                    );
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        // Unreachable: the loop returns or raises on its last attempt.
+        Err(AppError::internal(anyhow::anyhow!(
+            "journal seq allocation exhausted {SEQ_RETRY_LIMIT} attempts"
+        )))
     }
 
     /// Live tail only; replay is the reader's job (see `replay_after`).

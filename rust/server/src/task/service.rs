@@ -3,7 +3,7 @@ use std::sync::Arc;
 use serde_json::Value;
 use sqlx::{Row, SqlitePool};
 
-use super::{TaskKind, TaskStatus, ACTIVE_STATUSES};
+use super::{TaskKind, TaskStatus, ACTIVE_STATUSES, CLAIM_LEASE_MS};
 use crate::conversation::{ConversationEvent, EventLog};
 use crate::error::AppError;
 
@@ -34,6 +34,10 @@ pub struct GenerationTask {
     pub params: Option<String>,
     pub status: TaskStatus,
     pub attempts: i64,
+    /// Which backend holds the lease on this render right now (see `claim`).
+    pub claimed_by: Option<String>,
+    /// When that lease was taken, epoch milliseconds. Only stale by the other side.
+    pub claimed_at: Option<i64>,
     pub error: Option<String>,
     pub asset_id: Option<i64>,
     pub result_message_id: Option<i64>,
@@ -42,7 +46,7 @@ pub struct GenerationTask {
     pub finished_at: Option<i64>,
 }
 
-const COLUMNS: &str = "id, conversation_id, message_id, kind, provider_task_id, model, prompt, params, status, attempts, error, asset_id, result_message_id, created_at, updated_at, finished_at";
+const COLUMNS: &str = "id, conversation_id, message_id, kind, provider_task_id, model, prompt, params, status, attempts, claimed_by, claimed_at, error, asset_id, result_message_id, created_at, updated_at, finished_at";
 
 fn to_task(row: &sqlx::sqlite::SqliteRow) -> GenerationTask {
     let get = |name: &str| -> String { row.try_get(name).unwrap_or_default() };
@@ -60,6 +64,8 @@ fn to_task(row: &sqlx::sqlite::SqliteRow) -> GenerationTask {
         params: row.try_get("params").ok().flatten(),
         status: TaskStatus::parse(&get("status")),
         attempts: row.try_get("attempts").unwrap_or(0),
+        claimed_by: row.try_get("claimed_by").ok().flatten(),
+        claimed_at: row.try_get("claimed_at").ok().flatten(),
         error: row.try_get("error").ok().flatten(),
         asset_id: row.try_get("asset_id").ok().flatten(),
         result_message_id: row.try_get("result_message_id").ok().flatten(),
@@ -166,6 +172,47 @@ impl TaskService {
         Ok(rows.iter().map(to_task).collect())
     }
 
+    /// Takes the lease on one non-terminal task and reports whether it is ours now.
+    ///
+    /// This single statement is the whole guard. A worker that reads the queue and
+    /// then acts — what both backends did until 2026-11-09 — polls the provider
+    /// twice, mirrors the same video twice and journals the result twice, because the
+    /// non-terminal window of a render runs in minutes (docs/architecture.md §13.2).
+    /// SQLite serializes writers, so exactly one stack sees a changed row count.
+    ///
+    /// A row is claimable three ways: nobody holds it, this stack holds it (the next
+    /// tick renews its own lease, and so does the process that booted after a crash,
+    /// which must resume the renders its predecessor was polling), or a foreign lease
+    /// is older than `CLAIM_LEASE_MS`.
+    ///
+    /// `attempts` is deliberately not touched here: it counts provider failures and
+    /// drives `MAX_MIRROR_ATTEMPTS`, so a lease renewed every eight seconds would run
+    /// that counter away long before anything had failed.
+    pub async fn claim(&self, id: i64, writer: &str) -> Result<bool, AppError> {
+        let now = chrono::Utc::now().timestamp_millis();
+        let marks = marks_from(ACTIVE_STATUSES.len(), 5);
+        let sql = format!(
+            "UPDATE generation_tasks SET claimed_by = ?1, claimed_at = ?2, updated_at = ?2 \
+             WHERE id = ?3 AND status IN ({marks}) \
+               AND (claimed_by IS NULL OR claimed_by = ?1 OR claimed_at IS NULL OR claimed_at < ?4)"
+        );
+        let mut query = sqlx::query(&sql)
+            .bind(writer)
+            .bind(now)
+            .bind(id)
+            .bind(now - CLAIM_LEASE_MS);
+        for status in ACTIVE_STATUSES {
+            query = query.bind(status.as_str());
+        }
+        let result = query.execute(&self.pool).await?;
+        Ok(result.rows_affected() == 1)
+    }
+
+    /// The claim under this stack's own identity, which is what a worker wants.
+    pub async fn claim_as_writer(&self, id: i64) -> Result<bool, AppError> {
+        self.claim(id, crate::common::writer::WRITER_ID).await
+    }
+
     pub async fn mark_progress(
         &self,
         id: i64,
@@ -224,8 +271,14 @@ impl TaskService {
 }
 
 fn status_marks(count: usize) -> String {
+    marks_from(count, 1)
+}
+
+/// The same list for a statement whose first placeholders are taken by something
+/// other than the statuses — `claim` binds writer, time, id and the lease cutoff.
+fn marks_from(count: usize, first: usize) -> String {
     (0..count)
-        .map(|index| format!("?{}", index + 1))
+        .map(|index| format!("?{}", first + index))
         .collect::<Vec<_>>()
         .join(", ")
 }
@@ -311,6 +364,40 @@ mod tests {
         assert_eq!(finished.error, None);
         assert!(finished.finished_at.is_some(), "terminal rows carry their end time");
         assert_eq!(tasks.active(20).await.expect("active").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_render_is_claimed_by_one_backend_at_a_time() {
+        // The claim is the only thing standing between two backends and one render
+        // polled, mirrored and journalled twice (docs/architecture.md §13.2).
+        let (tasks, _events, pool) = services().await;
+        let id = tasks.create(&new_task(1)).await.expect("create");
+
+        assert!(tasks.claim(id, "rust").await.expect("first"), "unclaimed is claimable");
+        // The same stack renews its own lease on every tick, which is also how the
+        // process that booted after a crash resumes what its predecessor was polling.
+        assert!(tasks.claim(id, "rust").await.expect("renew"), "own lease renews");
+        assert!(!tasks.claim(id, "nest").await.expect("foreign"), "a fresh foreign lease holds");
+
+        let row = tasks.find_by_id(id).await.expect("find").expect("row");
+        assert_eq!(row.claimed_by.as_deref(), Some("rust"), "the winner is stamped");
+        assert!(row.claimed_at.is_some(), "and when it took the lease");
+        assert_eq!(row.attempts, 0, "a claim is not an attempt");
+
+        // Past the lease window the render is fair game for the other side.
+        let stale = chrono::Utc::now().timestamp_millis() - CLAIM_LEASE_MS - 1;
+        sqlx::query("UPDATE generation_tasks SET claimed_at = ?1 WHERE id = ?2")
+            .bind(stale)
+            .bind(id)
+            .execute(&pool)
+            .await
+            .expect("age the lease");
+        assert!(tasks.claim(id, "nest").await.expect("take over"), "an expired lease is no lease");
+
+        // A terminal row is nobody's to advance, so the claim must not touch it: this
+        // is the same guard `active()` applies by status, in the write that matters.
+        tasks.finish(id, TaskStatus::Succeeded, Some(3), None, None).await.expect("finish");
+        assert!(!tasks.claim(id, "nest").await.expect("terminal"), "a finished row stays finished");
     }
 
     #[tokio::test]

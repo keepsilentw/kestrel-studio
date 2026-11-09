@@ -1,8 +1,9 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { and, asc, desc, eq, inArray, isNull, or, type SQL } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNull, lt, or, type SQL } from 'drizzle-orm';
 import type { ResponsesInputItem } from '@/bailian/responses-client';
 import type { Mode } from '@/agent/mode';
 import { isSuperAdmin, type Viewer } from '@/auth/roles';
+import { WRITER_ID } from '@/common/writer';
 import { DRIZZLE_INSTANCE, type DrizzleDb } from '@/database/database.module';
 import { assets, conversations, conversationEvents, generationTasks, messages, users } from '@/database/schema';
 import { removeAssetFiles, resolveAssetPath, storedAssetName } from '@/media/asset-path';
@@ -93,6 +94,16 @@ function toAdminSummary(row: {
 }
 
 const MAX_TITLE_LENGTH = 30;
+
+/**
+ * How old an assistant placeholder with no `owner` has to be before this stack's boot
+ * recovery may end it. Rows written by a build that predates the column are
+ * indistinguishable from rows the *other* stack is writing right now, and a turn — one
+ * image or video submit plus one streamed reply — is well under a minute, so five is a
+ * wide margin. `rust/server/src/conversation/repo.rs` uses the same number: the two
+ * stacks share one table, so the grace period is a protocol, not a detail.
+ */
+const UNOWNED_STALE_AFTER_MS = 5 * 60 * 1000;
 
 /**
  * Where the browser fetches an asset from. Single source of the format: it is
@@ -281,6 +292,7 @@ export class ConversationService {
         reasoning: null,
         toolCalls: null,
         mode,
+        owner: WRITER_ID,
         createdAt: new Date(),
       })
       .run();
@@ -302,6 +314,7 @@ export class ConversationService {
         reasoning: null,
         toolCalls: null,
         mode,
+        owner: WRITER_ID,
         createdAt: new Date(),
       })
       .run();
@@ -323,6 +336,10 @@ export class ConversationService {
         reasoning: null,
         toolCalls: null,
         mode,
+        // Every row this stack writes carries its identity, not just the placeholder:
+        // the column means "who wrote this row", so the recovery predicate never has to
+        // guess which rows a turn is still behind.
+        owner: WRITER_ID,
         createdAt: new Date(),
       })
       .run();
@@ -378,6 +395,14 @@ export class ConversationService {
    * graceful stop finalizes through AgentService's `finally`; this covers
    * everything that path never got to run.
    *
+   * It only ends rows **this stack wrote**, because the two backends share this
+   * database file and neither can see the other's live turns (docs/architecture.md
+   * §13.2, measured 2026-11-07 on a copy of the live database). The rule per owner:
+   * own rows always — a new process of the same stack is exactly who is meant to clean
+   * up after the old one — foreign rows never, and a row with no owner at all only once
+   * it is older than `UNOWNED_STALE_AFTER_MS`, so a fresh one belonging to the other
+   * side is not grabbed mid-flight.
+   *
    * Returns one `{ conversationId, messageId }` per row it closed, because the
    * page that was watching the turn has no way to learn it ended — its composer
    * stays locked on "正在生成…" until someone reloads (docs/verification.md §24.4).
@@ -386,19 +411,30 @@ export class ConversationService {
    * `abandon_stale_placeholders`.
    */
   abandonStalePlaceholders(): Array<{ conversationId: number; messageId: number }> {
+    const mine = or(
+      eq(messages.owner, WRITER_ID),
+      // An unowned row is either this table's own past or the other stack running a
+      // build that predates the column, and the two are indistinguishable from the
+      // row alone — hence the grace period rather than an unconditional grab.
+      and(
+        isNull(messages.owner),
+        lt(messages.createdAt, new Date(Date.now() - UNOWNED_STALE_AFTER_MS)),
+      ),
+    );
+    const unfinished = and(
+      eq(messages.role, 'assistant'),
+      eq(messages.content, ''),
+      mine,
+    );
     const stale = this.db
       .select({ conversationId: messages.conversationId, id: messages.id })
       .from(messages)
-      .where(and(eq(messages.role, 'assistant'), eq(messages.content, '')))
+      .where(unfinished)
       .all();
     if (stale.length === 0) {
       return [];
     }
-    this.db
-      .update(messages)
-      .set({ content: '本轮处理失败：服务在轮次完成前中断。' })
-      .where(and(eq(messages.role, 'assistant'), eq(messages.content, '')))
-      .run();
+    this.db.update(messages).set({ content: '本轮处理失败：服务在轮次完成前中断。' }).where(unfinished).run();
     return stale.map((row) => ({ conversationId: row.conversationId, messageId: row.id }));
   }
 

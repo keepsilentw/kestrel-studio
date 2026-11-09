@@ -16,6 +16,14 @@ use crate::task::TaskKind;
 
 const MAX_TITLE_LENGTH: usize = 30;
 
+/// How old an assistant placeholder with no `owner` has to be before this stack's
+/// boot recovery may end it. Rows written by a build that predates the column are
+/// indistinguishable from rows the *other* stack is writing right now, and a turn
+/// (image or video submit, one streamed reply) is well under a minute, so five is a
+/// wide margin. `nest/server/src/conversation/conversation.service.ts` uses the same
+/// number: the two stacks share one table, so the grace period is a protocol.
+const UNOWNED_STALE_AFTER_MS: i64 = 5 * 60 * 1000;
+
 // The view structs are the conversation stream's payload, so they live in
 // `kestrel-proto` with the events that carry them: the page parses the same types
 // the server publishes, instead of restating their field names as `voice.ts` and
@@ -271,13 +279,18 @@ impl ConversationService {
         mode: Option<Mode>,
     ) -> Result<i64, AppError> {
         let row = sqlx::query(
-            "INSERT INTO messages (conversation_id, role, content, reasoning, tool_calls, mode, created_at) VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6) RETURNING id",
+            "INSERT INTO messages (conversation_id, role, content, reasoning, tool_calls, mode, owner, created_at) VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, ?7) RETURNING id",
         )
         .bind(conversation_id)
         .bind(role)
         .bind(content)
         .bind(reasoning)
         .bind(mode.map(|mode| mode.as_str()))
+        // Every row this process writes is tagged with the stack that wrote it, so
+        // the boot recovery of a *different* stack can leave it alone. Written on all
+        // three insert paths, not just the placeholder, so the column means "who
+        // wrote this row" and not "who might still be writing it".
+        .bind(crate::common::writer::WRITER_ID)
         .bind(now_ms())
         .fetch_one(&self.pool)
         .await?;
@@ -331,6 +344,15 @@ impl ConversationService {
     /// once duplicated a paid video submission). A graceful stop finalizes through
     /// the turn loop's own cleanup; this covers everything that path never got to run.
     ///
+    /// It only ends rows **this stack wrote**, because the two backends share this
+    /// database file and neither can see the other's live turns (docs/architecture.md
+    /// §13.2, measured 2026-11-07 on a copy of the live database). The rule per owner:
+    /// own rows always (a new process of the same stack is exactly who is meant to
+    /// clean up after the old one), foreign rows never, and a row with no owner at all
+    /// — written before this column existed, or by a stack still running the previous
+    /// build — only once it is older than `UNOWNED_STALE_AFTER_MS`, so a fresh one
+    /// belonging to the other side is not grabbed mid-flight.
+    ///
     /// Returns `(conversation_id, message_id)` for each row it closed, because the
     /// page watching that turn has no way to learn it ended: the process that owned
     /// it is gone, so its composer stays locked on "正在生成…" until someone reloads.
@@ -338,8 +360,13 @@ impl ConversationService {
     /// which is what a reconnecting client releases on — docs/verification.md §24.4.
     pub async fn abandon_stale_placeholders(&self) -> Result<Vec<(i64, i64)>, AppError> {
         let rows = sqlx::query(
-            "UPDATE messages SET content = '本轮处理失败：服务在轮次完成前中断。' WHERE role = 'assistant' AND content = '' RETURNING conversation_id, id",
+            "UPDATE messages SET content = '本轮处理失败：服务在轮次完成前中断。' \
+             WHERE role = 'assistant' AND content = '' \
+               AND (owner = ?1 OR (owner IS NULL AND created_at < ?2)) \
+             RETURNING conversation_id, id",
         )
+        .bind(crate::common::writer::WRITER_ID)
+        .bind(now_ms() - UNOWNED_STALE_AFTER_MS)
         .fetch_all(&self.pool)
         .await?;
         Ok(rows
@@ -912,6 +939,67 @@ mod tests {
             "the abandoned turn ends in the journal, not only in `messages`"
         );
         assert_eq!(last.get::<Option<i64>, _>("message_id"), Some(second_placeholder));
+    }
+
+    #[tokio::test]
+    async fn boot_recovery_only_ends_the_rows_this_stack_wrote() {
+        // Two backends share this database file, and neither can see the other's
+        // live turns. Until the owner tag existed, a restart of one ended the other's
+        // turn mid-flight — measured on a copy of the live database on 2026-11-07
+        // (docs/architecture.md §13.2, docs/verification.md §28.2).
+        let (service, pool) = seeded().await;
+        let mine = service
+            .create_assistant_placeholder(10, Some(Mode::Image))
+            .await
+            .expect("placeholder");
+        let foreign = insert_raw_placeholder(&pool, 11, Some("nest"), now_ms()).await;
+        let unowned_fresh = insert_raw_placeholder(&pool, 11, None, now_ms()).await;
+        let unowned_old =
+            insert_raw_placeholder(&pool, 11, None, now_ms() - 6 * 60 * 1000).await;
+
+        let abandoned = service.abandon_stale_placeholders().await.expect("abandon");
+        let ended: Vec<i64> = abandoned.iter().map(|(_, message_id)| *message_id).collect();
+        assert_eq!(
+            ended,
+            vec![mine, unowned_old],
+            "own rows always, unowned rows only past the grace period"
+        );
+
+        for id in [foreign, unowned_fresh] {
+            let content: String = sqlx::query("SELECT content FROM messages WHERE id = ?1")
+                .bind(id)
+                .fetch_one(&pool)
+                .await
+                .expect("row")
+                .try_get("content")
+                .expect("content");
+            assert_eq!(content, "", "{id} is still a turn somebody is streaming");
+        }
+        // And no terminal event was owed for them: the journal of conversation 11 is
+        // empty, because publishing one would unlock a page that is working fine.
+        let events = crate::conversation::EventLog::new(pool.clone());
+        assert_eq!(events.latest_seq(11).await.expect("journal"), 0);
+    }
+
+    /// A placeholder as the *other* side, or an untagged build, would have written it.
+    async fn insert_raw_placeholder(
+        pool: &SqlitePool,
+        conversation_id: i64,
+        owner: Option<&str>,
+        created_at: i64,
+    ) -> i64 {
+        sqlx::query(
+            "INSERT INTO messages (conversation_id, role, content, reasoning, tool_calls, mode, owner, created_at) \
+             VALUES (?1, 'assistant', '', NULL, NULL, NULL, ?2, ?3) RETURNING id",
+        )
+        .bind(conversation_id)
+        .bind(owner)
+        .bind(created_at)
+        .fetch_one(pool)
+        .await
+        .expect("raw placeholder")
+        .try_get("id")
+        .expect("id")
     }
 
     #[tokio::test]

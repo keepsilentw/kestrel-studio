@@ -585,6 +585,28 @@ describe('ConversationService 未完轮次探针', () => {
     return { conversationId, messageId };
   }
 
+  /** A placeholder as the other side, or an untagged build, would have written it. */
+  function insertRawPlaceholder(
+    conversationId: number,
+    owner: string | null,
+    createdAt: number,
+  ): number {
+    const result = harness.raw
+      .prepare(
+        `INSERT INTO messages (conversation_id, role, content, reasoning, tool_calls, mode, owner, created_at)
+         VALUES (?, 'assistant', '', NULL, NULL, NULL, ?, ?)`,
+      )
+      .run(conversationId, owner, createdAt);
+    return Number(result.lastInsertRowid);
+  }
+
+  function contentOf(messageId: number): string {
+    const row = harness.raw
+      .prepare('SELECT content FROM messages WHERE id = ?')
+      .get(messageId) as { content: string };
+    return row.content;
+  }
+
   it('unfinishedAssistant 认出新起的占位行，完成或用户行都不算', () => {
     const { conversationId, messageId } = seededTurn();
     expect(harness.service.unfinishedAssistant(conversationId)).toBe(messageId);
@@ -624,6 +646,33 @@ describe('ConversationService 未完轮次探针', () => {
     expect(harness.service.messageView(done)?.content).toBe('好的');
     // Idempotent: a second boot finds nothing left to end.
     expect(harness.service.abandonStalePlaceholders()).toEqual([]);
+  });
+
+  /**
+   * Two backends share this database file, and neither can see the other's live
+   * turns. Until the owner tag existed, a restart of one ended the other's turn
+   * mid-flight — measured on a copy of the live database on 2026-11-07
+   * (docs/verification.md §28.2). Same matrix as `rust/server`'s
+   * `boot_recovery_only_ends_the_rows_this_stack_wrote`.
+   */
+  it('abandonStalePlaceholders 只收尾本栈写的行，无主的行要过宽限期', () => {
+    const { conversationId, messageId } = seededTurn();
+    const other = harness.seedUser('u2');
+    const theirs = harness.service.create(other, 'q2');
+    const foreign = insertRawPlaceholder(theirs, 'rust', Date.now());
+    const unownedFresh = insertRawPlaceholder(theirs, null, Date.now());
+    const unownedOld = insertRawPlaceholder(theirs, null, Date.now() - 6 * 60 * 1000);
+
+    // Own rows always — a new process of the same stack is exactly who is meant to
+    // clean up after the old one. Unowned rows only past the grace period, because a
+    // row from a build that predates the column is indistinguishable from one the
+    // other stack is streaming right now.
+    expect(harness.service.abandonStalePlaceholders()).toEqual([
+      { conversationId, messageId },
+      { conversationId: theirs, messageId: unownedOld },
+    ]);
+    expect(contentOf(foreign)).toBe('');
+    expect(contentOf(unownedFresh)).toBe('');
   });
 });
 

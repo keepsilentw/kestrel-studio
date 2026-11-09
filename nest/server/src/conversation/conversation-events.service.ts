@@ -1,5 +1,5 @@
-import { Inject, Injectable } from '@nestjs/common';
-import { and, asc, desc, eq, gt, lt, max, min } from 'drizzle-orm';
+import { Inject, Injectable, Logger } from '@nestjs/common';
+import { and, asc, desc, eq, gt, lt, max, min, sql } from 'drizzle-orm';
 import { Observable, Subject } from 'rxjs';
 import type { Mode } from '@/agent/mode';
 import { DRIZZLE_INSTANCE, type DrizzleDb } from '@/database/database.module';
@@ -60,6 +60,31 @@ export interface PublishedEvent {
  */
 const RETAINED_EVENTS = 2000;
 
+/**
+ * How often one event may be re-inserted after losing the cursor race. Two is already
+ * one more than the design expects; the limit exists so a pathological writer cannot
+ * pin a delta loop in retry.
+ */
+const SEQ_RETRY_LIMIT = 3;
+
+/**
+ * Whether a failed insert is the UNIQUE cursor index firing, i.e. another writer took
+ * the `seq` this statement computed.
+ *
+ * better-sqlite3 labels the error class but not the constraint, so the index name in
+ * the message is what tells this apart from a broken foreign key. Retrying anything
+ * else would hide a missing column behind three pointless attempts.
+ */
+function isSeqConflict(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  // Narrowed rather than asserted: `code` is better-sqlite3's own field, and `Error`
+  // does not declare it.
+  const code = 'code' in error && typeof error.code === 'string' ? error.code : '';
+  return code.startsWith('SQLITE_CONSTRAINT') && error.message.includes('idx_events_conversation');
+}
+
 /** The message a journal row should hang off, for mid-turn catch-up lookups. */
 function messageIdOf(event: ConversationEvent): number | null {
   if (event.type === 'user_message' || event.type === 'message_added') {
@@ -90,6 +115,8 @@ function messageIdOf(event: ConversationEvent): number | null {
 export class ConversationEventsService {
   constructor(@Inject(DRIZZLE_INSTANCE) private readonly db: DrizzleDb) {}
 
+  private readonly logger = new Logger(ConversationEventsService.name);
+
   private readonly streams = new Map<number, Subject<PublishedEvent>>();
 
   /**
@@ -99,26 +126,57 @@ export class ConversationEventsService {
    * Returns the journal id so publishers can stamp frames without re-reading.
    */
   publish(conversationId: number, event: ConversationEvent): PublishedEvent {
-    const last = this.db
-      .select({ top: max(conversationEvents.seq) })
-      .from(conversationEvents)
-      .where(eq(conversationEvents.conversationId, conversationId))
-      .get();
-    const seq = (last?.top ?? 0) + 1;
-    this.db
-      .insert(conversationEvents)
-      .values({
-        conversationId,
-        seq,
-        messageId: messageIdOf(event),
-        type: event.type,
-        payload: JSON.stringify(event),
-        createdAt: new Date(),
-      })
-      .run();
+    const seq = this.append(conversationId, event);
     const published: PublishedEvent = { seq, event };
     this.streams.get(conversationId)?.next(published);
     return published;
+  }
+
+  /**
+   * Writes one journal row and returns its `seq`.
+   *
+   * The next cursor value is computed **inside** the insert, in one statement, because
+   * that is what makes it a single writer. This service used to read `MAX(seq)` and
+   * then insert in a second statement — two autocommit transactions, so anything could
+   * happen between them, and with `nest/server` and `rust/server` sharing one database
+   * file the other stack's row landed in that gap (docs/architecture.md §13.2). Two
+   * backends are online together by decision now, so the race is real: either the same
+   * `seq` lands twice — invisible to every reader, because live delivery and replay
+   * both filter `seq >` — or the writers contend and one frame is lost.
+   *
+   * A write statement takes SQLite's write lock before it runs, so the read and the
+   * insert are in one critical section without any transaction plumbing, and a second
+   * writer waits rather than guessing. The UNIQUE cursor index makes a duplicate `seq`
+   * an error instead of silence, which is what makes this safe to run next to a build
+   * that predates it: during that rollout window a conflict is possible, and it is
+   * retried here. Same shape as `rust/server`'s `EventLog::append`.
+   */
+  private append(conversationId: number, event: ConversationEvent): number {
+    const statement = sql`
+      INSERT INTO conversation_events (conversation_id, seq, message_id, type, payload, created_at)
+      SELECT ${conversationId}, COALESCE(MAX(seq), 0) + 1, ${messageIdOf(event)}, ${event.type},
+             ${JSON.stringify(event)}, ${Date.now()}
+      FROM conversation_events WHERE conversation_id = ${conversationId}
+      RETURNING seq`;
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        const row = this.db.get<{ seq: number }>(statement);
+        // The statement aggregates without a GROUP BY, so it always emits exactly one
+        // row and the insert always happens. Absent would mean SQLite changed the rule.
+        if (row === undefined) {
+          throw new Error('the journal insert took no row');
+        }
+        return Number(row.seq);
+      } catch (error: unknown) {
+        if (isSeqConflict(error) && attempt < SEQ_RETRY_LIMIT) {
+          this.logger.warn(
+            `journal seq collided with another writer (conversation ${conversationId}, attempt ${attempt}), retrying`,
+          );
+          continue;
+        }
+        throw error;
+      }
+    }
   }
 
   /** Live tail only; replay is the reader's job (see `replayAfter`). */
