@@ -609,3 +609,84 @@ sqlite **3.53.4** 以 `file:…?mode=ro` 打开查。判据：**先看 `data/` �
 顺带一条属于 schema 而不是属于工具的事实：**`ALTER TABLE ADD COLUMN` 只能追加在表尾**，所以活库
 `messages` 的列序（`owner` 排在 `created_at` 之后）与新建的内存库（DDL 里写在之前）**不同**。两侧所有
 SQL 都按列名读写，因此仍然同形；但任何人写 `SELECT *` 再按下标取值，就会在两个库上拿到不同的列。
+
+## 26. 并行冒烟环境的四条运维实情（2026-11-09）
+
+§34 那套「两套同时跑一份库副本」的环境搭起来之前，先撞上四件事。都跟代码无关，但都会让人误判。
+
+**`.env` 里的 `SUPER_ADMIN_PASSWORD` 已经不是凭据了。** 用它登录，两套都回 `302`，看着像成功——
+**失败也是 302**，`location: /login?error=1`。所以判据只能读 `Location` 头，不能读状态码：
+
+```bash
+curl -s -D - -o /dev/null -X POST -d "username=…&password=…" http://127.0.0.1:8850/login \
+  | grep -i '^location'          # location: /  才是登录过了
+```
+
+这是既有设计的直接后果：超管口令是 `/admin` 换的，重启不重置（`.claude/skills/deploy/SKILL.md`
+§Secrets 那句「a restart never resets it」）。**副作用是宿主机侧任何脚本都不能再靠 `.env` 拿到登录态**。
+要在副本上做实测就在副本里建一个一次性普通账号（本次是 `smoke-par`，口令只活在那份副本上），
+别去改 `tww316` 的哈希——那是唯一一处会把测试动作溢出到真实账号的地方。
+顺带一条互操作事实：**同一个 bcrypt `$2b$` 哈希两套都验得过**（bcryptjs 写的，Rust 的 bcrypt crate 也认），
+所以「两套共用一张 `users` 表」在口令校验这一层是通的；不通的是 cookie 签名与 `sess` 行（§13.4）。
+
+**`.backup` 能在生产容器正跑的时候取到一致副本**，宿主机的 sqlite3 3.7.17 也支持它：
+
+```bash
+sqlite3 data/kestrel-studio.db ".backup '/tmp/kestrel-parallel/data/kestrel-studio.db'"
+```
+
+出来的副本比主文件大（983 KB vs 872 KB），因为它把 WAL 里的内容一并落了盘——**这不是坏副本**。
+比 `cp -a` 好的地方在于不用为了拿一致快照去停生产容器。
+
+**`docker run` 复刻 compose 的启动面要带三样**：`--env-file .env`、`-e PORT=<容器内端口>`、
+以及 Rust 那侧的 `--tmpfs /tmp`（`scratch` 没有 `/tmp`，SQLite 建临时 b-tree 会失败，而且只在需要
+临时页的那条查询上失败，不是启动时）。Nest 那侧基于 node 镜像不需要 tmpfs。忘了 `PORT` 的表现为
+「容器 Up、端口映射对、但 502/连不上」，因为进程还在听 compose 默认的那个号。
+
+**冒烟环境跑完就删，别在 `/tmp` 过夜**：`docker rm -f par-rust par-nest` 加
+`rm -rf /tmp/kestrel-parallel`。副本里带着真实会话正文与 68 MB 资产，虽然只绑在 127.0.0.1，
+留在宿主机的 /tmp 上没有任何理由。删完务必回查生产面那几个数（`live_convs` / `live_events` /
+`live_assets` / `live_tasks` 与 `storage/` 文件数）——本次是 16 / 6,827 / 23 / 4 / 23，与拆场前
+各次读数逐个相同，这才叫「实测没有溢出到生产」。
+
+**一次真实渲染不必为了测 claim 而烧。** 复用既有 provider 任务号的那次没能形成多 tick 争用（一个 tick
+就进终态）；bogus 任务号也不行（供应商回 UNKNOWN 直接被判定终态 `failed`）。真正能证明认领判定的形状是
+**预置租约**：插一行 `status='queued', claimed_by=<对方>, claimed_at=<now>`，让只有一套在跑——它连续几个
+tick 都不动这一行；再把 `claimed_at` 拨到 6 分钟前，下一 tick 就接管。新鲜/过期两个方向都在真实 worker
+上验到了，一次真实生成都没花。
+
+## 27. 哨兵数的是它想到的东西；一次性双跑不必过 cargo（2026-11-09）
+
+两件事，都跟「怎么拿到证据」有关，不是 bug。
+
+**`make census` 这个哨兵有盲区，而且盲区正好在会出事的地方。** 它列了 14 类 markdown 构造，
+但把两套渲染器逐构造对跑之后发现：**分歧的 9 类里有 5 类（引用块、分隔线、嵌套列表、有序列表、
+ATX 标题）从来没被数过**。原因是那 14 类是按「子集外会不会出现」挑的——一组**担心**的清单，
+而不是一组**测过**的分歧。担心会漏，实测不会。所以加哨兵项的正确顺序是：**先双跑量出分歧面，
+再把分歧面写进哨兵**，而不是反过来。（读数在 verification.md §36.2/§36.3。）
+
+顺带一条同源的教训：结构一致要用**结构签名**比，别比字节。`marked` 与 `kestrel-md` 在空白和生成的
+`id`/`class` 上必然不同，那些不是用户看得见的差异；`href`/`src`/`alt` 要保留，因为那些看得见。
+反过来也成立：**比一致也要防"都渲染成空"被当成一致**——所以每条都打印两侧的 token 数。
+
+**一次性把 `crates/md` 编出来双跑，不用 cargo。** 想拿真实的 `kestrel-md` 跑一份外部输入，
+路子上有三个坑：写个临时 bin 依赖它会牵动 §18 那条「单独对 `crates/*` 跑 cargo 就地留下没人跟踪的
+Cargo.lock」；把渲染逻辑抄进脚本就不是同一个实现了；为了省事跳过对照更是白做。真正干净的做法是
+`rustc` 两步，绕开 cargo：
+
+```bash
+rustc --edition 2021 --crate-type=lib --crate-name kestrel_md crates/md/src/lib.rs -o libkestrel_md.rlib
+rustc --edition 2021 driver.rs --extern kestrel_md=libkestrel_md.rlib -o driver
+```
+
+`crates/md` 本身零依赖（每一个字节都要发给用户，`pulldown-cmark` 实测 +87 KB gz，见
+verification.md §11.5），所以一条 `--extern` 就够，不需要任何 registry 解析，自然也不产生 lock。
+
+两侧用同一个**行协议**喂：`id|HEX(正文)` 进、`id|HEX(html)` 出——十六进制是为了让一条多行消息在管道
+里仍然是**一行**，比 base64 少一次依赖，也比任何分隔符方案都不会和正文打架。marked 那侧同理，
+按绝对路径 `require('.../nest/client/node_modules/marked')`，跑法与生产一致
+（`marked.parse(src, { async: false })`，默认选项）。
+
+**这类脚手架带的是生产正文，用完就删。** 本次的目录（`~/tmp/md-drift/`，装着从活库导出的 40 条
+助手消息）跑完即 `rm -rf`，仓库里只留下能复算的哨兵与读数的记录。判据不是「tmp 目录干净不干净」，
+是**真实内容不该在开发机上过夜**。

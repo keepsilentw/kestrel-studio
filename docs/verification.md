@@ -2115,3 +2115,219 @@ conv|msgs|events|empty_placeholders|conv_total|events_total
 2. 这一节证的是**收尾谓词的归属判断**，不是「跨套解锁」：79/80 两行之所以永远空着，正是因为
    Rust 不再碰它们；真要看到对面那套把它们收尾，得让 Nest 真的在跑（P4 取消后那是排期问题不是代码问题）。
 3. 视频任务的 claim 仍未在线上走过一次真实渲染（§32.6 第 4 条不变）。
+
+## 34. 两套同时跑同一个 SQLite 文件：并行实测（2026-11-09 10:49–11:0x，宿主机冒烟环境）
+
+§13.2 那个「两套现在不能同时接同一个活库」的结论，从 11-07 起一直挡着 `make nest-up`。
+这一节把它做完——**在库副本上**，两套同时跑，四组断言。
+
+### 34.1 环境
+
+- `make deploy-nest` 重建 Nest 镜像（把今天的改动带进去）→ `kestrel-studio-nest:latest
+  db3602893dcb`，534 MB；此前宿主机那个是 11-07 建的，不含本次代码。**只建镜像，没启动**。
+- 副本：`sqlite3 data/kestrel-studio.db ".backup '/tmp/kestrel-parallel/data/kestrel-studio.db'"`
+  （3.7.17 支持 `.backup`，可在生产容器**正在跑**的时候取到一致副本；983 KB，`journal_mode=wal`，
+  游标索引已是 UNIQUE——生产库上午刚迁移过，见 §32.3）。`cp -a storage/.` 一并复制（68 MB）。
+- 两个一次性容器共享这同一份副本与同一份 `.env`（因此 `SESSION_SECRET` 相同）：
+  `par-rust` = `kestrel-studio:latest`，`-e PORT=8848 -e CLIENT_BUNDLE=wasm --tmpfs /tmp`，
+  宿主 `127.0.0.1:8850`；`par-nest` = `kestrel-studio-nest:latest`，`-e PORT=8849 -e ACCESS_LOG=1`，
+  宿主 `127.0.0.1:8851`。**都只绑在 127.0.0.1**，安全组仍只开 80/443，公网进不来。
+  生产容器 `kestrel-studio` 全程 Up 未动。
+
+两条认证上的实情（记在 implementation-notes.md §26）：`.env` 里的 `SUPER_ADMIN_PASSWORD`
+与库里 `tww316` 的哈希**已经不匹配**（口令是 `/admin` 换过的，重启不重置——这是设计，但副作用是
+宿主机侧脚本没法再用 `.env` 登录），所以副本里建了一个一次性普通账号 `smoke-par`（口令只活在这份副本
+里，随副本销毁）；顺带一条互操作事实：**同一个 bcrypt `$2b$` 哈希两套都验得过**（`location: /`，
+两边都不是 `/login?error=1`）。
+
+### 34.2 断言一：第二次启动的迁移不抢
+
+Rust 先起，1.9 秒后 Nest 起，两者都跑 `apply_schema` / `applySchema`：
+
+| 查的 | 读数 |
+|---|---|
+| `PRAGMA table_info(messages)` | `owner` 恰好一列（第 8 位），没被补第二遍 |
+| `PRAGMA table_info(generation_tasks)` | `claimed_by` / `claimed_at` 各一列（第 16、17 位） |
+| `PRAGMA index_list(conversation_events)` | 只有 `idx_events_conversation` 一个，`unique=1` |
+| 两侧日志里 `error\|panic\|schema\|UNIQUE` | Rust 0 条，Nest 0 条 |
+| `/login` | 两套都 200 |
+
+### 34.3 断言二：`seq` 在两个进程同时写之下仍连续
+
+两套**同时**各提一轮「对话」（会话 20 走 Rust、会话 21 走 Nest，两个 POST 同一秒发出）：
+
+```
+conversation_id|rows_|lo|hi|dist
+20             |402  |1 |402|402      ← owner 全是 rust
+21             |616  |1 |616|616      ← owner 全是 nest
+dups=0        busy/error/panic: rust 0, nest 0
+```
+
+副本跑完整套实验之后的全局读数：**`dup_pairs=0`、`non_dense_convs=0`**（9,894 行事件、23 个会话），
+也就是每个会话都满足 `COUNT(*) = MAX(seq)`。两套第一次在同一张 `messages` 表里可区分：
+`owner='nest'` 8 行、`owner='rust'` 5 行，其余是副本自带的无主旧行。
+
+### 34.4 断言三：启动收尾不抓对方——这次是**真实**的在飞轮次
+
+§33 那次的「外来行」是我手写的合成行（代理证据）。这次不用代理：
+
+| 时刻 | 读数 |
+|---|---|
+| Nest 会话 22 的一轮正在流式（`id=89 assistant owner=nest len=0`） | 提交 7 秒后 `docker restart par-rust` |
+| 重启 +4 秒 | `id=89` **仍是 `len=0`**；`content LIKE '%中断%'` 计数 **0** |
+| 一轮跑完 | `id=89 len=1485 owner=nest`，journal 尾 `916|text → 917|turn_done|89` |
+
+**§28.2 那条 Critical 至此在真实条件下关闭**：改动之前，这一枪会替对方把那轮判死并补一帧 `turn_error`。
+
+### 34.5 断言四：claim 的两个方向
+
+先说成本考虑：一次真实视频渲染要几分钟并真实扣费，所以这里**不新起渲染**。用两种方式拿到同样的结论：
+
+1. **自然争用**：插一个复用既有 provider 任务号的 queued 行（task 5）。Nest 的 tick 先抢到并一个
+   tick 内跑完（`succeeded`、`claimed_by='nest'`、`asset_id=24`、`result_message_id=90`），
+   Rust 的 tick 此后 6 次扫到同一张表都没能动它（`by=nest` 不变）。**没形成多 tick 争用**——
+   任务太快进终态，所以这一条只算旁证，不算证明。
+2. **证明**：只让 Nest 一套在跑（`docker stop par-rust`），插一行 `status='queued',
+   claimed_by='rust', claimed_at=now`（= Rust 正持有且租约新鲜，这正是一个真实持有者的行形状）：
+
+   ```
+   foreign-lease tick1..3: queued attempts=0 by=rust      ← Nest 连续 3 个 tick 跳过它
+   把 claimed_at 拨到 6 分钟前 →
+   expired tick1: failed by=nest err=供应商返回状态 UNKNOWN  ← 下一 tick 立刻接管并推进
+   ```
+
+   新鲜外来租约不动、过期租约接管，两个方向都在**真实 worker** 上验过。
+   顺带一条：Rust 自己那条探针任务（task 6）的失败文本是 `供应商返回状态 UNKNOWN`，Nest 接管后写出的
+   文本**一字不差**——两侧这段错误形状是同形的。
+
+副本里 `claimed_by` 的最终分布：`NULL` 4 行（副本自带的历史终态任务）、`nest` 2、`rust` 1。
+
+### 34.6 附测：§13.2 第 4 条真发生时会怎样
+
+「每会话只一轮」的锁按决策**不改代码**、由入口按子域固定来挡。既然环境在手，就把它真的踩一次：
+同一个会话 24，Rust 与 Nest 各提一轮，两个 POST 都回 **202**（两侧的进程内锁互相看不见，与文档一致）。
+结果：
+
+- journal 1,126 行、`seq` 1..1126、distinct 1,126、**两个 `turn_done`**、四条消息行 owner 各自正确
+- 两侧日志里 `collided|busy|unique` **各 0 条**——重试路径一次都没被触发，说明单语句游标分配的原子性
+  在真实并发下成立（不是靠重试兜过去的）
+
+所以这条暴露的**只有钱**（同一会话两轮 = 两次真实请求），数据面在今天的改造之后是安全的。
+这条从「不知道后果」变成「后果有边界且已知」，是把入口固定当护栏的正当理由，而不是偏好。
+
+### 34.7 拆场与生产面
+
+`docker rm -f par-rust par-nest` + `rm -rf /tmp/kestrel-parallel`（副本与副本专用账号一起销毁）。
+拆完回查：`kestrel-studio` Up、`/login` 200、`live_convs=16 / live_events=6827 / live_assets=23 /
+live_tasks=4`、`storage/` 23 个文件——**与 §33.4 结尾逐个相同**，本次实测没有一个字节落在生产库或
+生产 storage 上。宿主机其余容器（四个 justwork API 与 1Panel openresty）全程未动。
+
+### 34.8 这一节没证的
+
+1. **跑的是库副本，不是活库。** 代码路径、共享文件的方式、WAL 与锁行为都相同，但活库上同时挂两套
+   这件事仍然没发生过——它现在缺的不是判据而是入口（下一个待办就是 §4.5 那两个配置项）。
+2. 一次真实渲染在两套同时扫同一行时的行为（本轮用「新鲜/过期租约」证明的是认领判定，不是渲染时长内
+   的持续争用）。
+3. 一侧新代码 + 一侧旧代码的发布窗口（§31.4 第 3 条）仍未测——两套这次都是今天这版。
+4. 反代路由：两个子域各绑一套（deployment.md §1.1/§3）没做，所以真实用户流量仍以单套形态进线。
+
+## 35. 空持按不再提交空缓冲：两端同改，单元层（2026-11-09，**未上线**）
+
+§25.1 那条遗留（两次真拨号都 `frames=0`，上游回 `buffer too small, or have no audio`）里，
+「语音的 WS upgrade 通了但音频一个字节都没到」这一半之外，还有一条相关缺口：
+`voice_core::release()` 不知道**这一按有没有产出过帧**，静默按住也会 commit。本轮补上，两套同改。
+
+形状：核心记一个**每次按住**归零的帧计数（`frames_this_hold` / `framesThisHold`，在 `audio_chunk`
+里对每个被接受的块自增——问的是「这一按采到音了吗」，不是「送到 socket 了吗」，所以排队的块也计）。
+计数为 0 时 `release` 与 25 秒上限两条路都**不提交**，改为闭合这一按：置 `blocked`（松开之后才到的
+帧不能混进用户下一句）、丢 `queued`、还回按钮、并给用户一句
+「这一按没有采到声音，没有提交；再按住说一次就行」——两套**同一句话**，因为两个 bundle 都在线。
+`press` 清 `blocked`，所以下一按照常工作。
+
+这不是 `abort` 那条路：那里页面知道自己被拒了（要麦克风没要到）；这里什么都没报错，只是一帧都没来。
+
+| 门 | 读数 |
+|---|---|
+| `cargo test`（rust client，宿主层） | **42 passed**（原 39 + 新 3 条） |
+| `cargo check --target wasm32-unknown-unknown --tests` | 干净 |
+| `pnpm --dir nest/client test` | **52 passed**（原 50 + 新 2 条） |
+| `tsc --noEmit`（nest/client） | 通过 |
+
+**改两条既有用例的理由**：它们的剧本本身就是「按住、一帧音频都没有、松开/到上限」——
+在旧形状下那正是被提交空缓冲的路径。`rust` 的 `a_long_hold_is_committed_at_the_cap…` 与
+`a_press_is_refused_while_a_turn_is_running`、`nest` 的「ready 之前/之后松开按钮…」与
+「本轮说完之后，下一次按住…」都补了一次 `emitMicChunk()`，让「有话要说」这个前提显式成立；
+上限那两条的期望帧序因此从 `[start, commit]` 变成 `[start, audio, commit]`。
+
+**未做的**：没构建 wasm、没部署、没在浏览器里真按过一次（真实麦克风采集那条仍开着，见 §3 与 §13.5）。
+所以这一节是单元层的，不能替 P1 打勾，也不能当作「frames=0 从此消失」的线上证据。
+
+## 36. 两套 markdown 渲染器的真实分歧面（2026-11-09，普查 + 双跑对照）
+
+§4.5 把「`kestrel-md` 与 `marked` 两套口径」从过渡态改成了常驻态，并写下「两侧渲染不一致要长期按
+缺陷对待」。此前没有读数——只有印象。这次量了，两件事分开。
+
+### 36.1 生产内容上：40/40 结构一致
+
+`make census-prod`（`mode=ro`）的构造分布：分母 40 条助手消息，出现的只有**行首列表 16、粗体 5、
+GFM 表格 1**，最长 2,043 字符；子集外那六类（原始 HTML、图片、任务列表、`~~~` 围栏、脚注、
+setext 标题）**全为 0**。
+
+然后把生产库那 40 条正文导出来（`id|hex(content)`，只读查询）在两套上各渲染一遍，比较**结构签名**
+而不是字节：`marked` 与 `kestrel-md` 在空白与生成的 `id`/`class` 上必然不同，那些不是用户看得见
+的差异；`href`/`src`/`alt` 保留，因为那些看得见。结果：
+
+```
+input=prod.hex messages=40 structurally_identical=40 differ=0
+```
+
+**今天线上没有一条内容让两套渲染得不一样的东西。** 所以「统一两套口径」这件事此刻没有被观测到的
+缺陷撑着——这是对它的降级，不是对它的豁免（见 36.2）。
+
+### 36.2 构造逐条双跑：18 类里 9 类分歧
+
+生产只覆盖三种构造，不足以说明剩下的会怎样。于是给每个构造造一条样本双跑：
+
+| 一致（9） | 分歧（9） |
+|---|---|
+| 粗体、行首列表、GFM 表格、反引号围栏、行内代码、链接、删除线、有序列表、ATX 标题 | 图片、**原始 HTML**、任务列表、`~~~` 围栏、脚注、setext 标题、嵌套列表、引用块、分隔线 |
+
+分歧的形状分两类：
+
+- **`kestrel-md` 当文本、`marked` 当标记**（子集外一律转义 vs 照单渲染）：图片（kestrel 里
+  `![红隼](url)` 塌成一个带 `!` 的链接，marked 出 `<img>`）、任务列表（`<input disabled type=checkbox>`
+  vs 字面 `[ ]`）、`~~~` 围栏（marked 出 `<pre><code>`，kestrel 把 `~~~js` 当**删除线**渲染成
+  `<del>~js console.log(1)`——比不渲染更糟）、setext（`<h1>` vs 字面「标题 ===」）、
+  引用块（`<blockquote>` vs 字面 `> 引用一行`）、分隔线（`<hr>` vs 字面 `---`）、
+  嵌套列表（marked 出嵌套 `<ul>`，kestrel 吃掉缩进拍平）。
+- **一条有安全重量**：原始 HTML。`前 <div class="x">块</div> 后` 在 `marked`（默认选项，
+  v18 已无 `sanitize`）里**原样进 DOM**，在 `kestrel-md` 里被转义成源码。
+  也就是说**两套在线后端的 HTML 注入策略不一样**——助手文本由模型产出，而模型可以被提示注入。
+  这条与「渲染好不好看」不同级，是 §4.5 那句「按缺陷对待」的第一个具体实例，需要的是一个决定
+  （修法见 roadmap.md §3）。
+
+### 36.3 顺带修掉的：哨兵本身有盲区
+
+上面那批分歧构造里，**引用块、分隔线、嵌套列表、有序列表、ATX 标题在 `scripts/markdown-census.sql`
+里一条都没数过**。原来的 SQL 只盯「子集外会不会出现」，所以它看不见「子集外已经出现了却没人报警」——
+哨兵数的是它想到的东西，不是会出事的东西。已补这五类（只用 `LIKE` 与 `char()`，宿主机 sqlite 3.7
+没有 CTE 也没有 `instr()`），补完在生产上重跑并与一份 python 精确复核逐条对撞：
+
+| 构造 | 普查 SQL | python 正则 |
+|---|---|---|
+| 引用块 `>` | 0 | 0 |
+| 分隔线 `---`（排除表格的 `|---|`） | 0 | 0 |
+| 嵌套列表 | 0 | 0 |
+| 有序列表 `1.`–`9.` | 1 | 1 |
+| ATX 标题 `#` | 0 | 0 |
+
+LIKE 的近似没有漏计也没有误计。**当前生产内容仍然一条都不踩 36.2 的那九类**——但下次模型开始写
+引用块时，`make census-prod` 会先看见。
+
+### 36.4 方法与边界
+
+对照用的脚手架（rustc 直接把 `crates/md` 编成 rlib 的双跑驱动、marked 侧的 node 脚本、结构签名比较器）
+建在 `~/tmp/md-drift/` 下，**跑完即删**：里面含生产消息正文，不该在开发机上过夜。因此 36.1/36.2 的
+复现要重跑这套脚手架，仓库里没有留下它——留下的只有 `scripts/markdown-census.sql` 的扩展。
+结构签名有意忽略 `id`/`class` 与空白，所以「一致」的含义是**同一份可见文档**，不是同一段 HTML；
+两边输出都非空、token 数逐条列出，避免「都渲染成空」被误判成一致。
