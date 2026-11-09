@@ -1159,6 +1159,11 @@ roadmap.md §4.1.1。
 安全性质没动：单元格内容照样过 `inline()`，表格里的 `<script>` 仍是
 `&lt;script&gt;`——这条有断言，因为"子集之外一律转义"正是它相对 `marked` 唯一的优势。
 
+**2026-11-09 更正最后那半句**：「相对 `marked` 唯一的优势」已经不成立了——Nest 那侧的 markdown
+出口现在也转义原始 HTML（`nest/server/src/common/markdown.ts`，逐构造复测在 §38.3）。
+`kestrel-md` 剩下的边界是**子集本身**的选择（上面四条 + 图片/任务列表/`~~~`/脚注/setext/嵌套列表/
+引用块/分隔线这八类不支持），不再包含"透传与否"这一项。上面那段原文按本文件惯例留着。
+
 验证：`cargo test`（rust/server）**167 passed / 0 failed / 2 ignored**（新增 1 条测试）；
 `cargo check --manifest-path crates/md/Cargo.toml` 与 `wasm-pack build` 均 0 warning。
 
@@ -2305,6 +2310,9 @@ input=prod.hex messages=40 structurally_identical=40 differ=0
   也就是说**两套在线后端的 HTML 注入策略不一样**——助手文本由模型产出，而模型可以被提示注入。
   这条与「渲染好不好看」不同级，是 §4.5 那句「按缺陷对待」的第一个具体实例，需要的是一个决定
   （修法见 roadmap.md §3）。
+  **两处后续更正（同日）**：这个决定当天就做了并修完，见 §38；而本节当时给的修法
+  （覆盖 `tokenizer.html`）**是错的**——marked 18 里那个钩子返回 `false` 的含义是「回落到默认实现」，
+  实测两次都毫无效果，真正生效的是 `renderer.html`。原文按本文件惯例留着，别再照它施工。
 
 ### 36.3 顺带修掉的：哨兵本身有盲区
 
@@ -2377,3 +2385,63 @@ LIKE 的近似没有漏计也没有误计。**当前生产内容仍然一条都�
 
 边界照旧要说清：端口不参与 cookie 归属这一条是规范层面的判断，**本部署没有在浏览器上实测过**
 （宿主机的 8848/8849 只绑 127.0.0.1，安全组只放行 80/443，浏览器进不来）。
+
+## 38. 关掉 Nest 那侧的原始 HTML 注入面（2026-11-09，单元层 + 逐构造复测）
+
+§36.2 找到的那条有安全重量的分歧——`marked` 默认把助手文本里的原始 HTML 原样放进 DOM，
+`kestrel-md` 一律转义——现在关掉了：Nest 那套的 markdown 出口收进两个同形文件
+（`nest/server/src/common/markdown.ts`、`nest/client/scripts/markdown.ts`），渲染策略与
+`kestrel-md` 一致。三个 `marked.parse` 调用点全部改走它
+（`nest/server/src/view/render.ts:40`、`nest/client/scripts/main.ts` 的 reload 与流式两处）。
+
+### 38.1 §36.2 里那条建议是错的，纠正如下
+
+§36.2 与 §3 当时写的修法是「用一个覆盖 `tokenizer.html` 的 extension」。**实测不成立**：
+marked 18 里 `tokenizer.html` 返回 `false` 的含义是**回落到默认实现**，返回 `undefined` 也一样，
+两次试下来原始 HTML 照旧进 DOM。真正生效的是 **`renderer.html`**——marked 对每个 HTML token
+调它一次，`token.raw` 是那一段字面源码，`token.block` 说它来自行级还是行内。所以做法是
+在 renderer 上转义：块级包一层 `<p>`（保住段落分隔），行内直接转义（不额外造段）。
+
+**这条判断是靠试出来的，不是靠读文档读出来的**，所以留了三条可执行的断言在测试里，其中一条
+专门钉「代码围栏里的标签只转义一次」（`&lt;` 不能变成 `&amp;lt;`）——那是「先转义整段正文再喂
+marked」这种错法的可见症状。
+
+### 38.2 质量门
+
+| 门 | 读数 |
+|---|---|
+| `vitest`（nest server 全量，沙箱内） | **346 passed**（比 §32 那轮多 4 条：新增 `__tests__/common/markdown.test.ts`）+ 141 skipped |
+| 那 6 个 `app.listen(0)` 假红文件，沙箱外复跑 | **141 passed** — 合起来 **487 条全过**，其中含 `view` / `chat` 控制器，即 SSR 渲染面走的是新出口 |
+| `vitest`（nest client） | **56 passed**（52 + 新增 `__tests__/markdown.test.ts` 4 条，含一条 DOM 断言：`onerror` 探针挂不成 `<img>` 元素） |
+| `tsc --noEmit` ×3（nest/server 两份、nest/client 一份） | 都通过 |
+| rust 侧 | 一行没动（`kestrel-md` 本来就是转义的那一侧），无新门 |
+
+两份 marked 配置是**手抄同步的两份**，中间那根同步线是一条逐字断言：`nest/client/__tests__/markdown.test.ts`
+里钉死了同一条输入在浏览器侧的完整输出串（含 marked 结尾那个换行），`nest/server/__tests__/common/markdown.test.ts`
+钉同一条的形状。为什么不合并成一份：**没有共享 JS 包**，新建一个要动 `pnpm-workspace.yaml` 与
+`pnpm-lock.yaml`，那是这个仓库明确不许随手改的东西（依赖按栈归属，见 CLAUDE.md 的三条口径）。
+
+### 38.3 逐构造复测（同样 19 条样本，同一套结构签名法）
+
+| 前（§36.2） | 后 |
+|---|---|
+| 一致 9 / 分歧 9（18 类） | **一致 11 / 分歧 8**（19 类，多测了一条独立成段的 `<img onerror>`） |
+
+关闭的是注入面那一类：`raw_html`（行内 `<div class="x">`）与 `raw_html_block`（独立成段的
+`<img src=x onerror=alert(1)>`）现在都与 `kestrel-md` **同形**——两边都把它当文字显示，
+两边都不产生元素。
+
+剩下的 8 类分歧（图片 `![]()`、任务列表、`~~~` 围栏、脚注、setext 标题、嵌套列表、引用块、
+分隔线）**性质不同**：它们是「`kestrel-md` 的子集不支持 vs `marked` 照完整 CommonMark/GFM 渲染」，
+不是「HTML 能不能进 DOM」。这一类是 §4.1.1 当初定下的子集取舍（图片由工具管线给，不由模型写的
+markdown 给），不是这次要关的东西。真要关，方向是让 marked 也退回文字，那需要逐构造再谈一次口径。
+
+### 38.4 这一节没证的
+
+1. **没部署。** 改动在仓库里，线上仍是 11:37 那版；`nest/client` 那半要随下一次 `make deploy`
+   的 `make build-web` 才进 `public/assets/main.js`。
+2. 今天实际对外的是 Rust 那一套（`client="wasm"`，且第二套不对外，见 §37.3），所以这次修的是
+   **策略一致性**而不是一个正在被利用的洞。这条要在文档里说明白，免得下次读成一个紧急修复。
+3. 浏览器里没有真实助手消息走过新出口（`/admin` 回放页那条 lazy-image *issue* 的 count 也没重量）。
+4. 复测脚手架在 `~/tmp` 里（rustc 直编 `crates/md` + 把 TS 出口 `tsc` 出来 require，用
+   `NODE_PATH` 指到 `nest/server/node_modules`），跑完即删；本次样本全是手造的，**不含生产正文**。

@@ -262,7 +262,13 @@ openai 面须置 compat 位 `stream_include_usage = true`，否则全程 `usage:
   §27.1），所以除了另一个 host 没有隔离手段，而没有它——`make nest-up` 从此只是宿主机内部动作，
   **不接真实用户流量**。§13.2 第 4 条的护栏因此从「路由固定」变成「第二套不对外」，反而更强。
   要复现两套并跑照 verification.md §34（库副本 + 两个 127.0.0.1 端口），不必也不应挂 `./data`。
-- 红隼 logo 目前是占位 SVG（`nest/client/public/logo.svg`），待替换为正式图片。
+- ~~红隼 logo 目前是占位 SVG（`nest/client/public/logo.svg`），待替换为正式图片。~~
+  **已换（2026-11-09，未部署）**：侧影隼头，几何构造（正圆的头 + 楔形喙 + 底色挖空的眼与颊纹），
+  沿用品牌两色，一个 viewBox 服务 favicon / 顶栏 32 / 登录页 56 三处。判据是**把真实文件挂到本地页面
+  在 Chrome 里看**（四档尺寸 × 白 / 深 / 米三种背景），不是看代码——前四轮就是栽在只看代码上。
+  为什么最终选几何构造而不是自由曲线、以及那四轮各长出了什么，记在 implementation-notes.md §29。
+  文件 1118 字节（占位版 294），理由挪进了台账、文件里只留指针。**这是手写标记，不是设计产出**：
+  它满足「认得出红隼、16 px 不糊」，品牌层面的判断仍该由人做。
 - 对话页有 1 条 Chrome *issue*：`Lazy-loaded images should have explicit dimensions`，来自 SSR 回放
   那一段 `loading="lazy"` 的资产 `<img>`——线上出自 `rust/server/src/view/templates.rs:209`
   （`turn()`，由 `view/tests.rs:209` 钉住），`nest/server/src/view/views/partials/turn.hbs:39` 是它的
@@ -286,15 +292,19 @@ openai 面须置 compat 位 `stream_include_usage = true`，否则全程 `usage:
     （两套同一句话）。`abort()` 那条路不变。断言：rust client 42 passed、nest client 52 passed、
     wasm32 check 干净——逐条见 verification.md §35。改它不需要域名也不需要人按键，但**要上线得等
     下一次 `make deploy`**（本轮没构建 wasm、没部署、没在浏览器里真按过）。
-  - **待决定的一条（本轮量出来的，2026-11-09）**：两套渲染器对**原始 HTML** 的策略不同——
+  - **~~待决定的一条~~ 已修（2026-11-09，未部署）**：两套渲染器对**原始 HTML** 的策略不同——
     `marked` 默认把助手文本里的 `<div>` 之类原样放进 DOM，`kestrel-md` 一律转义。助手文本由模型
-    产出，模型可被提示注入，所以这是两套在线后端之间的一处 **HTML 注入面差异**，不是样式差异
-    （逐构造读数在 verification.md §36.2）。生产内容目前一条都没踩到（§36.1），所以它不紧急，
-    但 `nest/` 长期在线就意味着它一直开着。建议的修法：在 Nest 那两处 `marked.parse`
-    （`nest/server/src/view/render.ts:40`、`nest/client/scripts/main.ts:259,645`）上用一个覆盖
-    `tokenizer.html` 的 extension 让原始 HTML 退回纯文本，与 `kestrel-md` 同形；
-    **不要**用"先转义整段正文再喂给 marked"那种做法——代码围栏里的 `<` 会被双重转义成看得见的
-    `&lt;`。要改的是渲染行为，需要你点头。
+    产出，模型可被提示注入，所以那是两套在线后端之间的一处 **HTML 注入面差异**，不是样式差异。
+    现在 Nest 那套的 markdown 出口收进 `nest/server/src/common/markdown.ts` 与
+    `nest/client/scripts/markdown.ts`（两份手抄同步，中间那根线是逐字断言，见 verification.md §38.2），
+    三个 `marked.parse` 调用点全走它。门：nest server 487 条、nest client 56 条、tsc ×3 全过；
+    逐构造复测从「一致 9 / 分歧 9」变成「**一致 11 / 分歧 8**」，关掉的两条正是行内与独立成段的
+    原始 HTML（§38.3）。
+    **当初写的修法（覆盖 `tokenizer.html`）是错的**，实测不成立——marked 18 里返回 `false` 的含义是
+    回落到默认实现；生效的是 `renderer.html`。纠正与理由在 verification.md §38.1 与
+    implementation-notes.md §28。
+    剩下那 8 类是「子集不支持 vs marked 照渲染」的**产品口径**差异（§4.1.1 定的取舍），不是注入面，
+    要关得逐构造再谈一次口径。
   - **打断（barge-in）未做**：上一句还在播时按住说话不会中断它。
   - **空闲保活未做**：上游 180 秒无响应即关闭会话（close code `1007`），现由客户端提示
     "再按一次继续"并重新取票重连——重连后上游上下文重置。

@@ -829,6 +829,13 @@ WebSocket 的 upgrade 不经过 Express，所以 `AuthenticatedGuard` 对它无�
 **子集之外的内容一律转义而非透传**，模型吐 `<script>` 不会被渲染
 （`rust/server/src/view/tests.rs` 钉着这条）。语法面曾收窄（无表格、无删除线），2026-11-03 补齐 GFM 表格（含 `:---` 对齐）与删除线，代价是客户端包 +2.1 KB gz，四条与 `marked` 的刻意差异与实现一起记在 [verification.md](verification.md) §16。
 
+**2026-11-09 起上面那句"marked 没有的性质"要收窄**：Nest 那侧的 markdown 出口
+（`nest/server/src/common/markdown.ts` 与浏览器侧那份手抄副本）现在也在 `renderer.html` 上把
+原始 HTML 转义回文字，所以**两套的 HTML 注入策略已经一致**，模型吐 `<script>` 在哪一侧都不会被渲染。
+`kestrel-md` 剩下的差异因此只是**子集范围**（§16 那四条 + 八类不支持的构造），不再是"透传与否"。
+这一项原本是两套之间的一处安全策略分歧，逐构造读数与那条被推翻的修法都在
+[verification.md](verification.md) §38。
+
 2026-11-02 又把历史下拉的行类型 `ConversationSummary` 从 `rust/server/src/conversation/repo.rs` 搬了过来（server 侧改成再导出），因为 WASM 客户端的 `refresh_history` 现在要解析它——同一条规矩：改字段名在消费方编译失败。注意它是**蛇形**（`updated_at`），因为这个端点从来就这么答，模块里那套 camelCase 只属于日志 payload。
 
 `rust/server/src/voice/protocol.rs` 仍在，内容只剩再导出与**线名测试**——测试钉的是 JSON 上的
