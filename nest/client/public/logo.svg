@@ -1,4 +1,16 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Kestrel Studio">
+  <!--
+    红隼标记：侧影隼头，朝右。几何构造（正圆的头 + 楔形的喙），不用自由曲线——
+    理由与那几轮失败形状记在 docs/implementation-notes.md §29。
+    认出「红隼」而不是「随便一只鸟」靠眼下那道颊纹，所以它用底色挖空。
+    品牌两色：#8c2f27 赤、#f7ead6 米。一个 viewBox 服务三处：favicon、顶栏 32、登录页 56。
+    这个文件随 make build-web 拷进根 public/，两个服务端都从那里发。
+  -->
   <circle cx="32" cy="32" r="30" fill="#8c2f27"/>
-  <path fill="#f7ead6" d="M59.5 29.5 L52 24.5 L46 26.5 L14 11.5 L34 31 L18 34 L9 41.5 L28 37 L46 34 L56.5 32 Z"/>
+  <circle cx="29.5" cy="30" r="15.5" fill="#f7ead6"/>
+  <!-- 喙：上缘直线，下缘内凹出钩 -->
+  <path fill="#f7ead6" d="M42.5 23.5L54.5 29.5q-7.5 1.2-12 4.2z"/>
+  <circle cx="36.5" cy="25.5" r="3.4" fill="#8c2f27"/>
+  <!-- 颊纹（malar stripe）：锥形、与眼留间隙、整条落在头圆内。三条各对应一次返工，见 notes §29 -->
+  <path fill="#8c2f27" d="M37.6 30.4l2.8-.8 2.2 7.6-2.9.8z"/>
 </svg>
