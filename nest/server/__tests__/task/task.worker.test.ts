@@ -53,6 +53,9 @@ const storedVideo: StoredAsset = {
   sourceUrl: 'https://provider.example/expiring.mp4',
   mime: 'video/mp4',
   bytes: 4096,
+  // A video has no pair: the header probe reads image formats only.
+  width: null,
+  height: null,
 };
 
 async function buildHarness(): Promise<Harness> {

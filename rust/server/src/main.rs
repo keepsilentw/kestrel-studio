@@ -125,6 +125,28 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     // Expired logins: cleared at boot and then on a quarter-hour tick, which is
     // what the express-session store did with its own interval.
+    //
+    // Rows written before `assets.width` / `assets.height` existed carry no
+    // dimensions, and without them every existing conversation keeps reflowing its
+    // images — the symptom those columns exist to remove. Bounded per boot and
+    // idempotent (a filled row is never read again), so this converges over restarts
+    // instead of stretching one. It is loud-but-not-fatal on error: a skipped backfill
+    // costs a layout jump, refusing to boot costs the service.
+    match state.conversations.backfill_asset_dimensions().await {
+        Ok((0, 0)) => {}
+        Ok((filled, unreadable)) => tracing::info!(
+            filled,
+            unreadable,
+            remaining = state
+                .conversations
+                .assets_without_dimensions()
+                .await
+                .unwrap_or(-1),
+            "backfilled pixel dimensions onto pre-existing image rows"
+        ),
+        Err(error) => tracing::warn!(%error, "asset dimension backfill did not run"),
+    }
+
     tracing::info!(cleared = auth::session::sweep(&state.pool).await?, "expired sessions");
     let mut expiry = tokio::time::interval(std::time::Duration::from_secs(15 * 60));
     let sweep_state = state.clone();

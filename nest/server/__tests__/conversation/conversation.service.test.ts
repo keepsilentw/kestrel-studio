@@ -300,6 +300,10 @@ describe('ConversationService 资产', () => {
     sourceUrl: 'https://provider.example/expiring.png',
     mime: 'image/png',
     bytes: 2048,
+    // A real pair, so the read-back below proves the columns survive the row and
+    // reach `AssetView` — which is what the template and the stream frame both read.
+    width: 1024,
+    height: 576,
   };
 
   function withImage(): {
@@ -320,7 +324,15 @@ describe('ConversationService 资产', () => {
     const view = harness.service.views(conversationId).find((m) => m.assets.length > 0);
 
     expect(view?.assets).toEqual([
-      { id: assetId, kind: 'image', url: `/api/v1/assets/${assetId}/download`, mime: 'image/png', bytes: 2048 },
+      {
+        id: assetId,
+        kind: 'image',
+        url: `/api/v1/assets/${assetId}/download`,
+        mime: 'image/png',
+        bytes: 2048,
+        width: 1024,
+        height: 576,
+      },
     ]);
   });
 
@@ -348,6 +360,10 @@ describe('ConversationService 资产', () => {
       kind: 'video',
       filePath: '/app/storage/video-1.mp4',
       mime: 'video/mp4',
+      // The probe reads image headers, so a video has no pair to carry — and the
+      // spread above would otherwise smuggle the image's numbers onto it.
+      width: null,
+      height: null,
     });
 
     // Image-to-video takes a first frame, so anything but an image must miss.
@@ -374,6 +390,60 @@ describe('ConversationService 资产', () => {
     const { assetId } = withImage();
     const row = harness.raw.prepare('SELECT file_path AS p FROM assets WHERE id = ?').get(assetId);
     expect(row).toEqual({ p: 'image-1.png' });
+  });
+
+  /**
+   * 尺寸列是后加的，所以既有的图全都留空；不回填，这条修复就只覆盖新图，
+   * 每个旧会话仍然会跳。同形断言在 `rust/server` 的
+   * a_row_written_before_the_columns_is_filled_from_its_own_header。
+   */
+  it('回填：旧行由文件自己的头部补上尺寸，读不出的留空不编', () => {
+    const { conversationId, messageId } = withImage();
+    // 真的 PNG 头：回填读的是字节，所以 fixture 必须是探针认得的格式。
+    // 尺寸故意与 withImage 那条（1024×576）不同，免得断言撞车。
+    const png = Buffer.alloc(24);
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]).copy(png, 0);
+    png.writeUInt32BE(13, 8);
+    png.write('IHDR', 12, 'latin1');
+    png.writeUInt32BE(1536, 16);
+    png.writeUInt32BE(640, 20);
+    writeFileSync(join(filesDir, 'legacy.png'), png);
+
+    // 一行旧写法：不写 width/height，也不写 0。
+    harness.raw
+      .prepare(
+        `INSERT INTO assets (message_id, kind, file_path, source_url, mime, bytes, created_at)
+         VALUES (?, 'image', 'legacy.png', NULL, 'image/png', 1024, 1)`,
+      )
+      .run(messageId);
+    harness.raw
+      .prepare(
+        `INSERT INTO assets (message_id, kind, file_path, source_url, mime, bytes, created_at)
+         VALUES (?, 'image', 'gone.png', NULL, 'image/png', 1, 1)`,
+      )
+      .run(messageId);
+
+    expect(harness.service.assetsWithoutDimensions()).toBe(2);
+    expect(harness.service.backfillAssetDimensions()).toEqual({ filled: 1, unreadable: 1 });
+
+    const filled = harness.raw
+      .prepare('SELECT width, height FROM assets WHERE file_path = ?')
+      .get('legacy.png') as { width: number | null; height: number | null };
+    expect(filled).toEqual({ width: 1536, height: 640 });
+    // 视图（模板与事件帧读的那一层）也带上这对值。
+    const assets = harness.service.views(conversationId).flatMap((m) => m.assets);
+    expect(assets.filter((asset) => asset.width === 1536).length).toBe(1);
+    // 读不出的那行**不编一个数**：错宽高比的盒子比它要修的跳动更糟。
+    const missing = harness.raw
+      .prepare('SELECT width, height FROM assets WHERE file_path = ?')
+      .get('gone.png') as { width: number | null; height: number | null };
+    expect(missing).toEqual({ width: null, height: null });
+    expect(assets.filter((asset) => asset.width === null).length).toBe(1);
+
+    // 幂等：填过的行不再被打开（`filled` 归零），所以启动时这条的稳态成本是一次扫描。
+    // 读不出的那行每趟重试一次——它没有尺寸可编，代价是一个小文件的头。
+    expect(harness.service.backfillAssetDimensions()).toEqual({ filled: 0, unreadable: 1 });
+    expect(harness.service.assetsWithoutDimensions()).toBe(1);
   });
 
   it('搬迁前写下的绝对路径：原处没有该文件时按当前 STORAGE_DIR 解析', () => {
@@ -499,6 +569,8 @@ describe('ConversationService.deleteConversations', () => {
       sourceUrl: 'https://provider.example/a.png',
       mime: 'image/png',
       bytes: 5,
+      width: null,
+      height: null,
     });
     harness.service.appendUserMessage(conversationId, '问', 'chat');
     return { conversationId, filePath };

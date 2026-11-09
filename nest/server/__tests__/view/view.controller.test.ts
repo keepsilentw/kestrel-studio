@@ -306,6 +306,10 @@ describe('GET / — 历史回放', () => {
       sourceUrl: 'https://provider.example/a.png',
       mime: 'image/png',
       bytes: 1,
+      // A known pair, so the rendered page is asserted to carry the box — the same
+      // contract `rust/server/src/view/tests.rs` pins on the other template.
+      width: 1024,
+      height: 576,
     });
     const videoAsset = conversations.addAsset(assistant, {
       kind: 'video',
@@ -313,6 +317,8 @@ describe('GET / — 历史回放', () => {
       sourceUrl: 'https://provider.example/a.mp4',
       mime: 'video/mp4',
       bytes: 2,
+      width: null,
+      height: null,
     });
     conversations.finalizeAssistant(assistant, {
       content: '都做好了',
@@ -323,6 +329,10 @@ describe('GET / — 历史回放', () => {
     const html = await (await get(`/?c=${conversationId}`)).text();
     expect(html).toContain('<img');
     expect(html).toContain('<video');
+    // The dimensions reach the element: this is the replay path, where a lazy image
+    // with no box reflows everything under it as it arrives. Same contract
+    // `rust/server/src/view/tests.rs` pins on the other template.
+    expect(html).toContain('width="1024" height="576"');
     // Renders the download endpoint, never the expiring provider URL.
     expect(html).toContain(`/api/v1/assets/${videoAsset}/download`);
     expect(html).not.toContain('provider.example');

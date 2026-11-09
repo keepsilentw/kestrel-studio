@@ -124,6 +124,8 @@ export class AgentService {
               url: assetUrl(assetId),
               mime: asset.mime,
               bytes: asset.bytes,
+              width: asset.width,
+              height: asset.height,
             });
           }
 

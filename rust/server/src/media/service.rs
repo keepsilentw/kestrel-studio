@@ -287,12 +287,23 @@ impl MediaService {
             ))
         })?;
 
+        // Read off the bytes we just wrote, while they are still in hand — no second
+        // read from disk, and nothing taken from the request's `size`, which the
+        // provider is free to snap (measured 2026-11-09: a `1024*448` request came
+        // back 1536x640). Videos stay NULL: this probe reads image headers only.
+        let dimensions = match kind {
+            TaskKind::Image => crate::media::dims::image_dims(&bytes),
+            TaskKind::Video => None,
+        };
+
         Ok(StoredAsset {
             kind,
             source_url: Some(source_url.to_string()),
             mime: mime_for(extension),
             bytes: bytes.len() as i64,
             file_path: file_path.to_string_lossy().into_owned(),
+            width: dimensions.map(|(width, _)| width as i64),
+            height: dimensions.map(|(_, height)| height as i64),
         })
     }
 

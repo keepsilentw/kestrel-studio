@@ -205,10 +205,24 @@ pub fn turn(message: &RenderedMessage) -> String {
                 "        <video src=\"{url}\" controls preload=\"metadata\" class=\"asset-video\"></video>",
                 url = escape(&asset.url)
             ),
-            TaskKind::Image => format!(
-                "        <img src=\"{url}\" alt=\"生成的图片\" loading=\"lazy\" class=\"asset-image\">",
-                url = escape(&asset.url)
-            ),
+            TaskKind::Image => {
+                // The two attributes are the whole fix for the reflow: a lazy image
+                // with a known aspect ratio reserves its box before it downloads, so
+                // the text under it stops jumping as history loads.
+                // Both or neither — a lone `width` with no `height` lets the browser
+                // keep the default ratio and distorts the box instead of fixing it.
+                let box_attributes = match (asset.width, asset.height) {
+                    (Some(width), Some(height)) if width > 0 && height > 0 => {
+                        format!(" width=\"{width}\" height=\"{height}\"")
+                    }
+                    _ => String::new(),
+                };
+                format!(
+                    "        <img src=\"{url}\"{box_attributes} alt=\"生成的图片\" loading=\"lazy\" class=\"asset-image\">",
+                    url = escape(&asset.url),
+                    box_attributes = box_attributes
+                )
+            }
         };
         out.push_str(&format!(
             "      <figure class=\"asset\">\n{media}\n        <figcaption class=\"asset-actions\">\n          <a href=\"{url}\" download class=\"asset-download\">下载</a>\n        </figcaption>\n      </figure>\n",

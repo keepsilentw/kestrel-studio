@@ -104,6 +104,8 @@ function seedAsset(userId: number, fileName: string, filePath?: string): number 
     sourceUrl: 'https://provider.example/a.png',
     mime: 'image/png',
     bytes: 5,
+    width: null,
+    height: null,
   });
 }
 

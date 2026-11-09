@@ -435,6 +435,10 @@ mod tests {
             url: "/api/v1/assets/7/download".to_string(),
             mime: "image/png".to_string(),
             bytes: 123,
+            // The frame body is compared byte-for-byte with the journalled payload,
+            // so the two new fields belong to this assertion's shape.
+            width: Some(1024),
+            height: None,
         };
         let encoded = serde_json::to_string(&event).expect("encode");
         assert!(encoded.contains("\"type\":\"asset\""));

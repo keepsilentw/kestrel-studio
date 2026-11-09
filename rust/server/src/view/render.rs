@@ -143,6 +143,8 @@ mod tests {
             url: "/api/v1/assets/9/download".to_string(),
             mime: "video/mp4".to_string(),
             bytes: 4,
+            width: None,
+            height: None,
         }];
         let rendered = render_messages(vec![view]);
         assert_eq!(rendered[0].view.assets[0].kind, TaskKind::Video);

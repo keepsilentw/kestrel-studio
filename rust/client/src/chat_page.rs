@@ -748,10 +748,10 @@ fn apply(page: &Handle, paint: Paint) {
                 append_item(&tools, &text, class);
             }
         }
-        Paint::Asset { message_id, kind, url } => {
+        Paint::Asset { message_id, kind, url, width, height } => {
             let container = page.borrow().live.get(&message_id).map(|live| live.assets.clone());
             if let (Some(document), Some(container)) = (dom.stream.owner_document(), container) {
-                append_asset(&document, &container, &kind, &url);
+                append_asset(&document, &container, &kind, &url, width, height);
                 scroll_bottom(&dom.stream);
             }
         }
@@ -883,7 +883,7 @@ fn render_message(document: &Document, message: &MessageView) -> HtmlElement {
     if !message.assets.is_empty() {
         let list = build(document, "div", "assets");
         for asset in &message.assets {
-            append_asset(document, &list, asset.kind.as_str(), &asset.url);
+            append_asset(document, &list, asset.kind.as_str(), &asset.url, asset.width, asset.height);
         }
         article.append_child(&list).ok();
     }
@@ -897,7 +897,18 @@ fn append_item(list: &HtmlElement, text: &str, class: &str) {
     list.append_child(&item).ok();
 }
 
-fn append_asset(document: &Document, container: &HtmlElement, kind: &str, url: &str) {
+/// Appends one asset. `width`/`height` reach the `<img>` only as a **pair** — a lone
+/// dimension lets the browser keep its own default ratio, which distorts the reserved
+/// box instead of fixing it, and a video never gets them from this path (the probe
+/// reads image headers; `<video>` takes its size from `preload="metadata"`).
+fn append_asset(
+    document: &Document,
+    container: &HtmlElement,
+    kind: &str,
+    url: &str,
+    width: Option<i64>,
+    height: Option<i64>,
+) {
     let figure = build(document, "figure", "asset");
     let video = kind == "video";
     let media = build(
@@ -911,6 +922,12 @@ fn append_asset(document: &Document, container: &HtmlElement, kind: &str, url: &
         media.set_attribute("preload", "metadata").ok();
     } else {
         media.set_attribute("alt", "生成的图片").ok();
+        if let (Some(width), Some(height)) = (width, height) {
+            if width > 0 && height > 0 {
+                media.set_attribute("width", &width.to_string()).ok();
+                media.set_attribute("height", &height.to_string()).ok();
+            }
+        }
     }
     let caption = build(document, "figcaption", "asset-actions");
     let link = build(document, "a", "asset-download");

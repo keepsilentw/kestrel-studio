@@ -191,6 +191,10 @@ impl AgentService {
                             url: asset_url(asset_id),
                             mime: asset.mime.clone(),
                             bytes: asset.bytes,
+                            // Carried on the live frame as well as in the row, so the
+                            // box the turn reserved is the box a reload reserves too.
+                            width: asset.width,
+                            height: asset.height,
                         },
                     )
                     .await;

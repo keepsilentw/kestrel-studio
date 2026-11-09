@@ -432,6 +432,8 @@ describe('发送一轮 — POST 只提交，画面由事件流绘制', () => {
       url: '/api/v1/assets/3/download',
       mime: 'image/png',
       bytes: 1,
+      width: 1024,
+      height: 576,
     });
 
     await vi.waitFor(() => {
@@ -439,6 +441,39 @@ describe('发送一轮 — POST 只提交，画面由事件流绘制', () => {
         '/api/v1/assets/3/download',
       );
     });
+    // The live frame must reserve the same box a reload will, or the turn jumps when
+    // the page is revisited.
+    const image = element('[data-message-id="9"] img.asset-image');
+    expect(image.getAttribute('width')).toBe('1024');
+    expect(image.getAttribute('height')).toBe('576');
+  });
+
+  it('尺寸未知的 asset 事件不带 width/height，也不带半个', async () => {
+    // A row written before the columns existed, or an image whose header this probe
+    // cannot read. Omitting the pair is the correct answer; a lone `width` would let
+    // the browser keep its own ratio and distort the reserved box.
+    await boot({ conversationId: '5' });
+    const source = openedStreams[0];
+
+    source.emit('turn_started', { type: 'turn_started', messageId: 9, mode: 'image' });
+    source.emit('asset', {
+      type: 'asset',
+      messageId: 9,
+      id: 5,
+      kind: 'image',
+      url: '/api/v1/assets/5/download',
+      mime: 'image/png',
+      bytes: 1,
+      width: 1024,
+      height: null,
+    });
+
+    await vi.waitFor(() => {
+      expect(document.querySelector('[data-message-id="9"] img.asset-image')).not.toBeNull();
+    });
+    const image = element('[data-message-id="9"] img.asset-image');
+    expect(image.hasAttribute('width')).toBe(false);
+    expect(image.hasAttribute('height')).toBe(false);
   });
 
   it('asset 事件按 kind 渲染成视频', async () => {
@@ -625,7 +660,15 @@ describe('会话事件流', () => {
         mode: 'video',
         createdAt: 1,
         assets: [
-          { id: 9, kind: 'video', url: '/api/assets/9/download', mime: 'video/mp4', bytes: 2 },
+          {
+            id: 9,
+            kind: 'video',
+            url: '/api/assets/9/download',
+            mime: 'video/mp4',
+            bytes: 2,
+            width: null,
+            height: null,
+          },
         ],
       },
     });

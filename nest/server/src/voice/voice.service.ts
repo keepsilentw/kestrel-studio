@@ -463,6 +463,10 @@ class VoiceConnection {
       url: assetUrl(assetId),
       mime: asset.mime,
       bytes: asset.bytes,
+      // The voice page appends the same figure the chat page does, so the frame
+      // carries the same pair (`{ type: 'asset' } & AssetView` requires it).
+      width: asset.width,
+      height: asset.height,
     });
   }
 

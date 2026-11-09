@@ -112,6 +112,8 @@ function seedImageAsset(): number {
     sourceUrl: 'https://provider.example/expiring.png',
     mime: 'image/png',
     bytes: 11,
+    width: null,
+    height: null,
   });
 }
 

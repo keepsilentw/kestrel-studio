@@ -529,6 +529,8 @@ async fn assets_follow_ownership_and_the_signature_is_the_only_authority() {
         source_url: None,
         mime: "image/png".to_string(),
         bytes: 4,
+        width: None,
+        height: None,
     };
     let conversation_id = state.conversations.create(owner, "图").await.expect("create");
     let message_id = state

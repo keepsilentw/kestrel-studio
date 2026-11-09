@@ -42,7 +42,9 @@ pub enum Paint {
     Text { message_id: i64, delta: String },
     ToolCall { message_id: i64, name: String, status: String },
     ToolResult { message_id: i64, name: String, ok: bool, summary: String },
-    Asset { message_id: i64, kind: String, url: String },
+    /// `width`/`height` travel with the frame so the live turn reserves the same box
+    /// a reload will. `None` when the server could not read them from the file.
+    Asset { message_id: i64, kind: String, url: String, width: Option<i64>, height: Option<i64> },
     TurnDone { message_id: i64 },
     TurnError { message_id: i64, message: String },
     TaskUpdated { task_id: i64, kind: String, status: String, error: Option<String> },
@@ -111,11 +113,13 @@ impl Stream {
                     summary: summary.clone(),
                 }]
             }
-            ConversationEvent::Asset { message_id, kind, url, .. } => {
+            ConversationEvent::Asset { message_id, kind, url, width, height, .. } => {
                 vec![Paint::Asset {
                     message_id: *message_id,
                     kind: kind.as_str().to_string(),
                     url: url.clone(),
+                    width: *width,
+                    height: *height,
                 }]
             }
             ConversationEvent::TurnDone { message_id } => {
@@ -352,11 +356,17 @@ mod tests {
                 url: "/api/v1/assets/12/download".to_string(),
                 mime: "video/mp4".to_string(),
                 bytes: 8,
+                // A video carries no dimensions from the probe, and the paint must
+                // still match the frame it was given.
+                width: None,
+                height: None,
             }),
             vec![Paint::Asset {
                 message_id: 3,
                 kind: "video".to_string(),
-                url: "/api/v1/assets/12/download".to_string()
+                url: "/api/v1/assets/12/download".to_string(),
+                width: None,
+                height: None,
             }]
         );
 
@@ -450,6 +460,11 @@ mod tests {
                 url: "/api/v1/assets/9/download".to_string(),
                 mime: "image/png".to_string(),
                 bytes: 4,
+                // Non-null on purpose: this test round-trips the view through the
+                // wire, so it is also the assertion that the two new fields survive
+                // serialisation with the camelCase names the browser reads.
+                width: Some(1024),
+                height: Some(576),
             }],
         };
         let raw = serde_json::to_string(&ConversationEvent::UserMessage {

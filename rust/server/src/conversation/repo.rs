@@ -24,6 +24,17 @@ const MAX_TITLE_LENGTH: usize = 30;
 /// number: the two stacks share one table, so the grace period is a protocol.
 const UNOWNED_STALE_AFTER_MS: i64 = 5 * 60 * 1000;
 
+/// How many image rows one boot will try to fill with dimensions. The backfill below
+/// is bounded so a large legacy library cannot stretch startup — the container is
+/// health-polled for 180 s after `up -d`, and a boot that reads files for minutes
+/// looks like a failed deploy. Whatever is left is picked up by the next boot.
+const DIMENSION_BACKFILL_LIMIT: i64 = 500;
+
+/// Bytes read from the head of each file. PNG, GIF and WebP keep their dimensions
+/// within the first 30 bytes; JPEG can hide its start-of-frame behind an EXIF
+/// thumbnail, which is why this is 256 KB and not 32.
+const DIMENSION_READ_BYTES: u64 = 256 * 1024;
+
 // The view structs are the conversation stream's payload, so they live in
 // `kestrel-proto` with the events that carry them: the page parses the same types
 // the server publishes, instead of restating their field names as `voice.ts` and
@@ -381,7 +392,7 @@ impl ConversationService {
         asset: &crate::media::StoredAsset,
     ) -> Result<i64, AppError> {
         let row = sqlx::query(
-            "INSERT INTO assets (message_id, kind, file_path, source_url, mime, bytes, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) RETURNING id",
+            "INSERT INTO assets (message_id, kind, file_path, source_url, mime, bytes, width, height, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9) RETURNING id",
         )
         .bind(message_id)
         .bind(asset.kind.as_str())
@@ -391,6 +402,10 @@ impl ConversationService {
         .bind(asset.source_url.clone())
         .bind(&asset.mime)
         .bind(asset.bytes)
+        // Whatever the header probe found. NULL is a real answer — it means the
+        // `<img>` gets no dimensions, not that it gets a guessed pair.
+        .bind(asset.width)
+        .bind(asset.height)
         .bind(now_ms())
         .fetch_one(&self.pool)
         .await?;
@@ -404,6 +419,89 @@ impl ConversationService {
             .execute(&self.pool)
             .await?;
         Ok(())
+    }
+
+    /// Fills `assets.width` / `assets.height` for rows written before those columns.
+    ///
+    /// Without this the dimensions fix applies only to new images and every existing
+    /// conversation keeps reflowing — which is the whole symptom. Runs at boot, like
+    /// the other data migrations this file's schema does (`docs/architecture.md` §5:
+    /// the database file survives deploys, so migration lives in the process).
+    ///
+    /// Idempotent and safe to run twice at once: it selects only rows where
+    /// `width IS NULL` and its UPDATE repeats that condition, so two backends racing
+    /// over one file write the same numbers. Once a row is filled it is never read
+    /// again, so the steady-state cost is one scan of the table.
+    ///
+    /// A file that is gone, too small, or in a format the probe cannot read is left
+    /// NULL — no invented pair, and the next boot tries again. That retry is bounded
+    /// by `DIMENSION_BACKFILL_LIMIT`, so a permanently unreadable row costs one small
+    /// read per boot and nothing more.
+    ///
+    /// Returns `(filled, unreadable)`.
+    pub async fn backfill_asset_dimensions(&self) -> Result<(i64, i64), AppError> {
+        let rows = sqlx::query(
+            "SELECT id, file_path FROM assets WHERE kind = 'image' AND width IS NULL ORDER BY id ASC LIMIT ?1",
+        )
+        .bind(DIMENSION_BACKFILL_LIMIT)
+        .fetch_all(&self.pool)
+        .await?;
+        if rows.is_empty() {
+            return Ok((0, 0));
+        }
+
+        let mut filled = 0;
+        let mut unreadable = 0;
+        for row in &rows {
+            let id: i64 = row.try_get("id").expect("id");
+            let stored: String = row.try_get("file_path").expect("file_path");
+            // `resolve_asset_path` is the only way to read these: the same column
+            // holds bare names (post-split rows) and absolute paths (the legacy ones
+            // that predate the storage-directory change).
+            let path = resolve_asset_path(&self.config, &stored);
+            let bytes = match Self::read_head(&path).await {
+                Some(bytes) => bytes,
+                None => {
+                    unreadable += 1;
+                    continue;
+                }
+            };
+            match crate::media::dims::image_dims(&bytes) {
+                Some((width, height)) => {
+                    sqlx::query("UPDATE assets SET width = ?1, height = ?2 WHERE id = ?3 AND width IS NULL")
+                        .bind(width as i64)
+                        .bind(height as i64)
+                        .bind(id)
+                        .execute(&self.pool)
+                        .await?;
+                    filled += 1;
+                }
+                None => unreadable += 1,
+            }
+        }
+        Ok((filled, unreadable))
+    }
+
+    /// How many image rows are still waiting for dimensions, after one bounded pass.
+    pub async fn assets_without_dimensions(&self) -> Result<i64, AppError> {
+        let row = sqlx::query("SELECT COUNT(*) AS n FROM assets WHERE kind = 'image' AND width IS NULL")
+            .fetch_one(&self.pool)
+            .await?;
+        Ok(row.try_get("n")?)
+    }
+
+    /// Reads the first `DIMENSION_READ_BYTES` of a file. None if it cannot be opened —
+    /// a deleted asset is not an error here, just a row that stays without dimensions.
+    async fn read_head(path: &std::path::Path) -> Option<Vec<u8>> {
+        use tokio::io::AsyncReadExt;
+        let file = tokio::fs::File::open(path).await.ok()?;
+        let mut buffer = Vec::with_capacity(64 * 1024);
+        file
+            .take(DIMENSION_READ_BYTES)
+            .read_to_end(&mut buffer)
+            .await
+            .ok()?;
+        (!buffer.is_empty()).then_some(buffer)
     }
 
     /// Deletes conversations with everything under them — assets, tasks, messages —
@@ -535,7 +633,7 @@ impl ConversationService {
     ) -> Result<Option<(AssetView, PathBuf)>, AppError> {
         let (user_id, is_super) = readable_args(viewer);
         let row = sqlx::query(&format!(
-            "SELECT a.id AS id, a.kind AS kind, a.mime AS mime, a.bytes AS bytes, a.file_path AS file_path
+            "SELECT a.id AS id, a.kind AS kind, a.mime AS mime, a.bytes AS bytes, a.width AS width, a.height AS height, a.file_path AS file_path
              FROM assets a
              JOIN messages m ON m.id = a.message_id
              JOIN conversations c ON c.id = m.conversation_id
@@ -559,7 +657,9 @@ impl ConversationService {
     }
 
     pub async fn assets_for_message(&self, message_id: i64) -> Result<Vec<AssetView>, AppError> {
-        let rows = sqlx::query("SELECT id, kind, mime, bytes FROM assets WHERE message_id = ?1 ORDER BY id ASC")
+        let rows = sqlx::query(
+            "SELECT id, kind, mime, bytes, width, height FROM assets WHERE message_id = ?1 ORDER BY id ASC",
+        )
             .bind(message_id)
             .fetch_all(&self.pool)
             .await?;
@@ -571,7 +671,7 @@ impl ConversationService {
         conversation_id: i64,
     ) -> Result<HashMap<i64, Vec<AssetView>>, AppError> {
         let rows = sqlx::query(
-            "SELECT a.id AS id, a.message_id AS message_id, a.kind AS kind, a.mime AS mime, a.bytes AS bytes
+            "SELECT a.id AS id, a.message_id AS message_id, a.kind AS kind, a.mime AS mime, a.bytes AS bytes, a.width AS width, a.height AS height
              FROM assets a JOIN messages m ON m.id = a.message_id
              WHERE m.conversation_id = ?1 ORDER BY a.id ASC",
         )
@@ -611,6 +711,11 @@ fn to_asset_view(row: &sqlx::sqlite::SqliteRow) -> AssetView {
         url: asset_url(id),
         mime: row.try_get("mime").expect("mime"),
         bytes: row.try_get("bytes").expect("bytes"),
+        // `ok().flatten()` on purpose: a database that has not run this migration yet
+        // (the other stack booted first, or a pre-migration copy is mounted) must read
+        // as "no dimensions", not as a failed query.
+        width: row.try_get("width").ok().flatten(),
+        height: row.try_get("height").ok().flatten(),
     }
 }
 
@@ -941,6 +1046,98 @@ mod tests {
         assert_eq!(last.get::<Option<i64>, _>("message_id"), Some(second_placeholder));
     }
 
+    /// A minimal but real PNG header — the backfill reads the file, so the fixture has
+    /// to be bytes a header reader accepts, not a row that merely looks plausible.
+    fn png_bytes(width: u32, height: u32) -> Vec<u8> {
+        let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+        bytes.extend_from_slice(&13u32.to_be_bytes());
+        bytes.extend_from_slice(b"IHDR");
+        bytes.extend_from_slice(&width.to_be_bytes());
+        bytes.extend_from_slice(&height.to_be_bytes());
+        bytes.extend_from_slice(&[0u8; 9]);
+        bytes
+    }
+
+    #[tokio::test]
+    async fn a_row_written_before_the_columns_is_filled_from_its_own_header() {
+        // Without this backfill the dimensions fix only covers new images, and every
+        // existing conversation keeps reflowing — the symptom the columns exist for.
+        let (service, pool) = seeded().await;
+        // `temp_dir()` honours TMPDIR, so this works inside the sandbox too; the fixed
+        // /tmp paths elsewhere in this file are why those tests read as false reds.
+        let directory = std::env::temp_dir().join("kestrel-dims-backfill-test");
+        std::fs::create_dir_all(&directory).expect("storage dir");
+        let file = directory.join("legacy.png");
+        std::fs::write(&file, png_bytes(1024, 576)).expect("write png");
+
+        let message = service
+            .append_assistant_message(10, "旧图", Some(Mode::Image))
+            .await
+            .expect("message");
+        // The way the old code wrote it: a row that says nothing about size.
+        sqlx::query(
+            "INSERT INTO assets (message_id, kind, file_path, source_url, mime, bytes, created_at) \
+             VALUES (?1, 'image', ?2, NULL, 'image/png', ?3, 1)",
+        )
+        .bind(message)
+        .bind(file.to_string_lossy().to_string())
+        .bind(1234)
+        .execute(&pool)
+        .await
+        .expect("asset");
+        assert_eq!(service.assets_without_dimensions().await.expect("count"), 1);
+
+        assert_eq!(
+            service.backfill_asset_dimensions().await.expect("backfill"),
+            (1, 0),
+            "the one readable row is filled"
+        );
+        let assets = service.assets_for_message(message).await.expect("assets");
+        assert_eq!(
+            (assets[0].width, assets[0].height),
+            (Some(1024), Some(576)),
+            "and it reaches the view the template reads"
+        );
+
+        // Idempotent: a filled row is never opened again, so the steady-state cost of
+        // this at boot is one scan and no file reads.
+        assert_eq!(service.backfill_asset_dimensions().await.expect("second"), (0, 0));
+        assert_eq!(service.assets_without_dimensions().await.expect("count"), 0);
+
+        std::fs::remove_file(&file).ok();
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_file_stays_without_dimensions_rather_than_guessing() {
+        // The row points at nothing (a deleted asset, or a file whose bytes are not a
+        // format this probe reads). Writing a made-up pair would reserve a wrong box,
+        // which is worse than the reflow.
+        let (service, pool) = seeded().await;
+        let message = service
+            .append_assistant_message(10, "丢了", Some(Mode::Image))
+            .await
+            .expect("message");
+        sqlx::query(
+            "INSERT INTO assets (message_id, kind, file_path, source_url, mime, bytes, created_at) \
+             VALUES (?1, 'image', ?2, NULL, 'image/png', ?3, 1)",
+        )
+        .bind(message)
+        .bind(std::env::temp_dir().join("kestrel-dims-backfill-test/gone.png").to_string_lossy().to_string())
+        .bind(1)
+        .execute(&pool)
+        .await
+        .expect("asset");
+
+        assert_eq!(
+            service.backfill_asset_dimensions().await.expect("backfill"),
+            (0, 1),
+            "counted as unreadable, not filled"
+        );
+        assert_eq!(service.assets_without_dimensions().await.expect("count"), 1);
+        let assets = service.assets_for_message(message).await.expect("assets");
+        assert_eq!((assets[0].width, assets[0].height), (None, None));
+    }
+
     #[tokio::test]
     async fn boot_recovery_only_ends_the_rows_this_stack_wrote() {
         // Two backends share this database file, and neither can see the other's
@@ -1041,6 +1238,11 @@ mod tests {
                     source_url: Some("https://provider.test/frame.png".to_string()),
                     mime: "image/png".to_string(),
                     bytes: 4,
+                    // A real pair, so the read-back below proves the columns round
+                    // trip through the row and into `AssetView` — which is what the
+                    // replay template reads.
+                    width: Some(1024),
+                    height: Some(576),
                 },
             )
             .await
@@ -1057,6 +1259,10 @@ mod tests {
         assert_eq!(view.url, asset_url(asset_id));
         assert_eq!(view.kind, TaskKind::Image);
         assert_eq!(view.mime, "image/png");
+        // The dimensions survive the row and come back on the view — this is the read
+        // path the replay template and the `asset` frame both use, so a column that
+        // was written but never read would fix nothing.
+        assert_eq!((view.width, view.height), (Some(1024), Some(576)));
         // The row keeps a bare name, resolved against STORAGE_DIR at read time, so
         // it never points back at the directory the writer happened to be in.
         assert!(path.to_string_lossy().ends_with("frame.png"));

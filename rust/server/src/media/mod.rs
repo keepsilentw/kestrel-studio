@@ -1,4 +1,5 @@
 pub mod asset_path;
+pub mod dims;
 pub mod service;
 
 use crate::task::TaskKind;
@@ -16,4 +17,10 @@ pub struct StoredAsset {
     pub source_url: Option<String>,
     pub mime: String,
     pub bytes: i64,
+    /// Pixel dimensions read from the bytes themselves — see `dims`. `None` for a
+    /// video (this reads image headers only) and for an image in a format whose
+    /// header we cannot parse; both leave the `width`/`height` attributes off the
+    /// `<img>` rather than inventing a box.
+    pub width: Option<i64>,
+    pub height: Option<i64>,
 }

@@ -92,6 +92,10 @@ fn stored_message() -> MessageView {
                 url: "/api/v1/assets/7/download".to_string(),
                 mime: "image/png".to_string(),
                 bytes: 4,
+                // Unknown on purpose: this fixture is what pins that a row without
+                // dimensions renders the *same* `<img>` as before the columns existed.
+                width: None,
+                height: None,
             },
             crate::conversation::repo::AssetView {
                 id: 8,
@@ -99,6 +103,8 @@ fn stored_message() -> MessageView {
                 url: "/api/v1/assets/8/download".to_string(),
                 mime: "video/mp4".to_string(),
                 bytes: 8,
+                width: None,
+                height: None,
             },
         ],
     }
@@ -229,6 +235,36 @@ fn a_turn_renders_the_trail_the_live_stream_built() {
     assert!(rendered.contains("<img src=\"/api/v1/assets/7/download\" alt=\"生成的图片\" loading=\"lazy\" class=\"asset-image\">"));
     assert!(rendered.contains("<video src=\"/api/v1/assets/8/download\" controls preload=\"metadata\" class=\"asset-video\"></video>"));
     assert!(rendered.contains("href=\"/api/v1/assets/8/download\" download class=\"asset-download\">"));
+}
+
+#[test]
+fn a_lazy_image_with_known_dimensions_carries_the_box() {
+    // The reflow fix, and the reason the numbers come from the file's header: the
+    // reserved box is only right if the pair is right, and a lone `width` is worse
+    // than nothing because the browser keeps its own default ratio.
+    let mut view = stored_message();
+    view.assets[0].width = Some(1024);
+    view.assets[0].height = Some(576);
+    let rendered = super::templates::turn(&render_messages(vec![view]).remove(0));
+
+    assert!(
+        rendered.contains(
+            "<img src=\"/api/v1/assets/7/download\" width=\"1024\" height=\"576\" alt=\"生成的图片\" loading=\"lazy\" class=\"asset-image\">"
+        ),
+        "{rendered}"
+    );
+    // The video is untouched: this probe reads image headers, and `<video>` gets its
+    // intrinsic size from `preload="metadata"` instead.
+    assert!(rendered.contains("<video src=\"/api/v1/assets/8/download\" controls"));
+
+    // Half a pair is not a box.
+    let mut half = stored_message();
+    half.assets[0].width = Some(1024);
+    let rendered = super::templates::turn(&render_messages(vec![half]).remove(0));
+    assert!(
+        !rendered.contains("width="),
+        "one dimension alone is left off, not guessed at"
+    );
 }
 
 #[test]

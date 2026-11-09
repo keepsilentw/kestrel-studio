@@ -1,5 +1,6 @@
-import { Inject, Injectable } from '@nestjs/common';
-import { and, asc, desc, eq, inArray, isNull, lt, or, type SQL } from 'drizzle-orm';
+import { Inject, Injectable, Logger, type OnApplicationBootstrap } from '@nestjs/common';
+import { and, asc, count, desc, eq, inArray, isNull, lt, or, type SQL } from 'drizzle-orm';
+import { closeSync, openSync, readSync, statSync } from 'node:fs';
 import type { ResponsesInputItem } from '@/bailian/responses-client';
 import type { Mode } from '@/agent/mode';
 import { isSuperAdmin, type Viewer } from '@/auth/roles';
@@ -7,6 +8,7 @@ import { WRITER_ID } from '@/common/writer';
 import { DRIZZLE_INSTANCE, type DrizzleDb } from '@/database/database.module';
 import { assets, conversations, conversationEvents, generationTasks, messages, users } from '@/database/schema';
 import { removeAssetFiles, resolveAssetPath, storedAssetName } from '@/media/asset-path';
+import { imageDims } from '@/media/image-dims';
 import type { StoredAsset } from '@/media/media.service';
 
 export interface ToolCallRecord {
@@ -23,6 +25,14 @@ export interface AssetView {
   url: string;
   mime: string;
   bytes: number;
+  /**
+   * Pixel dimensions when the server read them off the stored bytes. Same three
+   * senses of null as `rust/server`'s `AssetView`: a video, an unreadable header, or a
+   * row predating the columns. Never a guess, and the template leaves the attributes
+   * off unless **both** are present.
+   */
+  width: number | null;
+  height: number | null;
 }
 
 export interface MessageView {
@@ -106,6 +116,40 @@ const MAX_TITLE_LENGTH = 30;
 const UNOWNED_STALE_AFTER_MS = 5 * 60 * 1000;
 
 /**
+ * How many image rows one boot tries to fill with dimensions. Bounded so a large
+ * legacy library cannot stretch startup; the rest is picked up by the next boot.
+ * Same number as `rust/server/src/conversation/repo.rs`'s `DIMENSION_BACKFILL_LIMIT`.
+ */
+const DIMENSION_BACKFILL_LIMIT = 500;
+
+/**
+ * Bytes read from the head of each file. PNG, GIF and WebP keep their dimensions in
+ * the first 30 bytes; JPEG can hide its start-of-frame behind an EXIF thumbnail.
+ */
+const DIMENSION_READ_BYTES = 256 * 1024;
+
+/**
+ * The first `DIMENSION_READ_BYTES` of a file, or null when it cannot be read. A
+ * deleted asset is not an error here — just a row that stays without dimensions.
+ */
+function readHead(path: string): Buffer | null {
+  let fd: number | null = null;
+  try {
+    const size = Math.min(statSync(path).size, DIMENSION_READ_BYTES);
+    const buffer = Buffer.alloc(size);
+    fd = openSync(path, 'r');
+    const read = readSync(fd, buffer, 0, size, 0);
+    return read > 0 ? buffer.subarray(0, read) : null;
+  } catch {
+    return null;
+  } finally {
+    if (fd !== null) {
+      closeSync(fd);
+    }
+  }
+}
+
+/**
  * Where the browser fetches an asset from. Single source of the format: it is
  * also what the turn stream and the voice socket hand to the client.
  */
@@ -113,13 +157,24 @@ export function assetUrl(assetId: number): string {
   return `/api/v1/assets/${assetId}/download`;
 }
 
-function toAssetView(row: { id: number; kind: 'image' | 'video'; mime: string; bytes: number }): AssetView {
+function toAssetView(row: {
+  id: number;
+  kind: 'image' | 'video';
+  mime: string;
+  bytes: number;
+  width?: number | null;
+  height?: number | null;
+}): AssetView {
   return {
     id: row.id,
     kind: row.kind,
     url: assetUrl(row.id),
     mime: row.mime,
     bytes: row.bytes,
+    // Optional on the input: a query that has not selected the columns (the download
+    // path, which renders no image) must still produce a well-formed view.
+    width: row.width ?? null,
+    height: row.height ?? null,
   };
 }
 
@@ -136,8 +191,87 @@ function parseToolCalls(raw: string | null): ToolCallRecord[] | null {
 }
 
 @Injectable()
-export class ConversationService {
+// The interface is not decoration: Nest finds the hook by name at runtime, so without
+// `implements OnApplicationBootstrap` a typo in the method would silently never run.
+export class ConversationService implements OnApplicationBootstrap {
   constructor(@Inject(DRIZZLE_INSTANCE) private readonly db: DrizzleDb) {}
+
+  private readonly logger = new Logger(ConversationService.name);
+
+  /**
+   * Fills `assets.width` / `assets.height` for rows written before those columns.
+   *
+   * Without this the dimensions fix applies only to new images and every existing
+   * conversation keeps reflowing — which is the whole symptom. Mirrors
+   * `rust/server/src/conversation/repo.rs::backfill_asset_dimensions`, including the
+   * reason it runs at boot: the database file survives deploys, so data migrations
+   * live in the process here rather than in a migration tool.
+   */
+  onApplicationBootstrap(): void {
+    try {
+      const { filled, unreadable } = this.backfillAssetDimensions();
+      if (filled === 0 && unreadable === 0) {
+        return;
+      }
+      this.logger.log(
+        `backfilled image dimensions: filled=${filled} unreadable=${unreadable} remaining=${this.assetsWithoutDimensions()}`,
+      );
+    } catch (error: unknown) {
+      // A skipped backfill costs a layout jump. Refusing to boot costs the service.
+      this.logger.warn(
+        `asset dimension backfill did not run: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
+  /**
+   * Idempotent and safe to run twice at once: it selects only rows where the width is
+   * NULL and its UPDATE repeats that condition, so two backends racing over one file
+   * write the same numbers. A missing or unreadable file stays NULL — no invented
+   * pair — and the next boot tries again, bounded by the limit above.
+   */
+  backfillAssetDimensions(limit = DIMENSION_BACKFILL_LIMIT): { filled: number; unreadable: number } {
+    const rows = this.db
+      .select({ id: assets.id, filePath: assets.filePath })
+      .from(assets)
+      .where(and(eq(assets.kind, 'image'), isNull(assets.width)))
+      .orderBy(asc(assets.id))
+      .limit(limit)
+      .all();
+    if (rows.length === 0) {
+      return { filled: 0, unreadable: 0 };
+    }
+
+    let filled = 0;
+    let unreadable = 0;
+    for (const row of rows) {
+      // resolveAssetPath is the only way to read these: the same column holds bare
+      // names and the absolute paths written before the storage-directory change.
+      const bytes = readHead(resolveAssetPath(row.filePath));
+      const dimensions = bytes === null ? null : imageDims(bytes);
+      if (dimensions === null) {
+        unreadable += 1;
+        continue;
+      }
+      this.db
+        .update(assets)
+        .set({ width: dimensions[0], height: dimensions[1] })
+        .where(and(eq(assets.id, row.id), isNull(assets.width)))
+        .run();
+      filled += 1;
+    }
+    return { filled, unreadable };
+  }
+
+  /** How many image rows are still waiting for dimensions, after one bounded pass. */
+  assetsWithoutDimensions(): number {
+    const row = this.db
+      .select({ n: count() })
+      .from(assets)
+      .where(and(eq(assets.kind, 'image'), isNull(assets.width)))
+      .get();
+    return row?.n ?? 0;
+  }
 
   create(userId: number, firstPrompt: string): number {
     const now = new Date();
@@ -450,6 +584,9 @@ export class ConversationService {
         sourceUrl: asset.sourceUrl,
         mime: asset.mime,
         bytes: asset.bytes,
+        // Whatever the header probe found. Null is a real answer, not a missing one.
+        width: asset.width,
+        height: asset.height,
         createdAt: new Date(),
       })
       .run();
@@ -636,6 +773,8 @@ export class ConversationService {
         kind: assets.kind,
         mime: assets.mime,
         bytes: assets.bytes,
+        width: assets.width,
+        height: assets.height,
       })
       .from(assets)
       .where(eq(assets.messageId, messageId))
@@ -652,6 +791,8 @@ export class ConversationService {
         kind: assets.kind,
         mime: assets.mime,
         bytes: assets.bytes,
+        width: assets.width,
+        height: assets.height,
       })
       .from(assets)
       .innerJoin(messages, eq(assets.messageId, messages.id))

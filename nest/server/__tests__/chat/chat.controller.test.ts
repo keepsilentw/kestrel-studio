@@ -261,6 +261,8 @@ function ownedAsset(userId: number): {
     sourceUrl: 'https://provider.example/expiring.png',
     mime: 'image/png',
     bytes: 14,
+    width: null,
+    height: null,
   });
   return { conversationId, assetId, filePath };
 }

@@ -101,6 +101,24 @@ pub struct AssetView {
     pub url: String,
     pub mime: String,
     pub bytes: i64,
+    /// Pixel dimensions, when the server knows them.
+    ///
+    /// They exist for one reason: a replayed conversation paints its images with
+    /// `loading="lazy"`, and a lazy `<img>` with no intrinsic size reserves no box, so
+    /// every image that arrives reflows the page below it (docs/roadmap.md §3, the one
+    /// Chrome *issue* the product page carries). `width`/`height` on the element fixes
+    /// the box without downloading anything.
+    ///
+    /// Nullable and never guessed. The value comes from the stored bytes' own header
+    /// (`media::dims`), **not** from the size the request asked for: measured on the
+    /// production library on 2026-11-09, one of 19 images asked for `1024*448` and the
+    /// provider returned `1536x640` — it snaps to the sizes it supports. Writing the
+    /// requested number would have set a wrong aspect ratio, which is worse than the
+    /// reflow it was meant to fix. Rows stored before this column exists are NULL and
+    /// the templates leave the attributes off, so old conversations behave exactly as
+    /// they do today.
+    pub width: Option<i64>,
+    pub height: Option<i64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -184,6 +202,11 @@ pub enum ConversationEvent {
         url: String,
         mime: String,
         bytes: i64,
+        // Same two fields as `AssetView`, same rule: NULL when unknown, never guessed.
+        // The live stream and the SSR replay must hand the browser the same box, or a
+        // refresh would change the layout the turn already established.
+        width: Option<i64>,
+        height: Option<i64>,
     },
     #[serde(rename = "turn_done")]
     TurnDone {

@@ -48,6 +48,12 @@ CREATE TABLE IF NOT EXISTS assets (
   source_url TEXT,
   mime TEXT NOT NULL,
   bytes INTEGER NOT NULL,
+  -- Pixel dimensions of the stored bytes, read from the file's own header at write
+  -- time. Nullable: a video, an unrecognised header, or a row predating this column
+  -- all mean "the <img> gets no width/height", never "guess one" — the request's size
+  -- is not it (measured 2026-11-09: asked 1024*448, provider returned 1536x640).
+  width INTEGER,
+  height INTEGER,
   created_at INTEGER NOT NULL
 );
 
@@ -110,7 +116,11 @@ CREATE INDEX IF NOT EXISTS idx_sessions_expire ON sessions(expire);
 /// `CREATE TABLE IF NOT EXISTS` cannot add a column to a table that already
 /// exists, and this database file survives deploys. So columns introduced after
 /// the first release are added explicitly here.
-const ADDED_COLUMNS: [(&str, &str, &str); 6] = [
+const ADDED_COLUMNS: [(&str, &str, &str); 8] = [
+    // The two dimensions the replay `<img>` reserves its box with. Read from the
+    // stored bytes, not from the request: docs/verification.md §40.
+    ("assets", "width", "INTEGER"),
+    ("assets", "height", "INTEGER"),
     ("messages", "mode", "TEXT"),
     // Every account that existed before roles did lands on the least privileged
     // role; the seeded super admin is created with `super` explicitly.

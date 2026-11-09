@@ -3,6 +3,7 @@ import { mkdir, writeFile } from 'node:fs/promises';
 import { extname, join, resolve } from 'node:path';
 import { resolveApiKey } from '@/bailian/token';
 import { loadConfig } from '@/config/configuration';
+import { imageDims } from '@/media/image-dims';
 
 export const DEFAULT_IMAGE_MODEL = 'wan2.7-image';
 
@@ -35,6 +36,13 @@ export interface StoredAsset {
   sourceUrl: string;
   mime: string;
   bytes: number;
+  /**
+   * Pixel dimensions read from the bytes themselves (`image-dims.ts`). Null for a
+   * video and for an unreadable header; the `<img>` then carries no dimensions rather
+   * than a guessed pair.
+   */
+  width: number | null;
+  height: number | null;
 }
 
 export function assertImageModel(model: string): void {
@@ -259,12 +267,18 @@ export class MediaService {
     const filePath = join(directory, `${kind}-${stamp}-${suffix}${extension}`);
     await writeFile(filePath, bytes);
 
+    // Measured off the bytes already in hand — no second read from disk, and nothing
+    // taken from the requested `size`, which the provider is free to snap.
+    const dimensions = kind === 'image' ? imageDims(bytes) : null;
+
     return {
       kind,
       filePath,
       sourceUrl,
       mime: MIME_BY_EXTENSION[extension] ?? 'application/octet-stream',
       bytes: bytes.byteLength,
+      width: dimensions ? dimensions[0] : null,
+      height: dimensions ? dimensions[1] : null,
     };
   }
 

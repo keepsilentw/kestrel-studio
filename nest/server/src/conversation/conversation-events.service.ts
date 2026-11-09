@@ -34,6 +34,9 @@ export type ConversationEvent =
       url: string;
       mime: string;
       bytes: number;
+      /** The pair `AssetView` carries, so the live frame reserves the same box a reload will. */
+      width: number | null;
+      height: number | null;
     }
   | { type: 'turn_done'; messageId: number }
   | { type: 'turn_error'; messageId: number; message: string }

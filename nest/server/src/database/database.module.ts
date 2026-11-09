@@ -67,6 +67,11 @@ CREATE TABLE IF NOT EXISTS assets (
   source_url TEXT,
   mime TEXT NOT NULL,
   bytes INTEGER NOT NULL,
+  -- Pixel dimensions of the stored bytes, read from the file's own header at write
+  -- time. Nullable: a video, an unreadable header, or a row predating the column all
+  -- mean the img gets no width/height, never that one is invented.
+  width INTEGER,
+  height INTEGER,
   created_at INTEGER NOT NULL
 );
 
@@ -124,6 +129,10 @@ CREATE INDEX IF NOT EXISTS idx_events_conversation ON conversation_events(conver
  * columns introduced after the first release are added explicitly here.
  */
 const ADDED_COLUMNS: { table: string; column: string; definition: string }[] = [
+  // The two dimensions a replay `<img>` reserves its box with. Read from the stored
+  // bytes, not from the request: docs/verification.md §40.
+  { table: 'assets', column: 'width', definition: 'INTEGER' },
+  { table: 'assets', column: 'height', definition: 'INTEGER' },
   { table: 'messages', column: 'mode', definition: 'TEXT' },
   // Every account that existed before roles did lands on the least privileged
   // role; the seeded super admin is created with `super` explicitly.

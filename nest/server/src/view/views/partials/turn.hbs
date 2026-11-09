@@ -36,7 +36,12 @@
       {{#if (eq this.kind "video")}}
         <video src="{{this.url}}" controls preload="metadata" class="asset-video"></video>
       {{else}}
-        <img src="{{this.url}}" alt="生成的图片" loading="lazy" class="asset-image">
+        {{! Both dimensions or neither: a lone width lets the browser keep its own
+            ratio, which distorts the reserved box instead of fixing the reflow. Same
+            rule as rust/server/src/view/templates.rs. Nested rather than (and …)
+            because this app registers one helper only, `eq` (src/main.ts:40) — and a
+            missing helper is a render-time throw, not a compile error. }}
+        <img src="{{this.url}}"{{#if this.width}}{{#if this.height}} width="{{this.width}}" height="{{this.height}}"{{/if}}{{/if}} alt="生成的图片" loading="lazy" class="asset-image">
       {{/if}}
       <figcaption class="asset-actions">
         <a href="{{this.url}}" download class="asset-download">下载</a>

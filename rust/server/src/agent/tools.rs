@@ -478,6 +478,8 @@ mod tests {
                     source_url: None,
                     mime: "image/png".to_string(),
                     bytes: 4,
+                    width: None,
+                    height: None,
                 },
             )
             .await

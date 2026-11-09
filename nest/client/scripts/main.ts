@@ -90,6 +90,14 @@ interface StoredAsset {
   url: string;
   mime: string;
   bytes: number;
+  /**
+   * Pixel dimensions, null when the server could not read them from the file. Mirrors
+   * `AssetView` on both servers — this hand-restated shape is exactly the drift
+   * `crates/proto` was created to end, and the browser half of the WASM client reads
+   * the typed version instead (`rust/client/src/chat_core.rs`).
+   */
+  width: number | null;
+  height: number | null;
 }
 
 interface StoredToolCall {
@@ -127,6 +135,18 @@ function readString(source: Record<string, unknown>, key: string): string {
 function readNumber(source: Record<string, unknown>, key: string): number {
   const value = source[key];
   return typeof value === 'number' ? value : Number.NaN;
+}
+
+/**
+ * A pixel dimension off the wire, or null. `null` — not 0 — is what the caller needs:
+ * the `<img>` gets `width`/`height` only when **both** are known, because a lone one
+ * lets the browser keep its own ratio and the reserved box comes out distorted, which
+ * is worse than the reflow this exists to remove. Same rule as
+ * `rust/client/src/chat_page.rs`'s `append_asset`.
+ */
+function readDimension(source: Record<string, unknown>, key: string): number | null {
+  const value = source[key];
+  return typeof value === 'number' && value > 0 ? value : null;
 }
 
 function scrollToBottom(): void {
@@ -178,7 +198,13 @@ function buildAssistantTurn(mode: string | null): AssistantTurn {
   return { article, reasoningSection, reasoningBody, content, toolList, assetList };
 }
 
-function appendAsset(container: HTMLElement, url: string, kind: string): void {
+function appendAsset(
+  container: HTMLElement,
+  url: string,
+  kind: string,
+  width: number | null,
+  height: number | null,
+): void {
   const figure = document.createElement('figure');
   figure.className = 'asset';
 
@@ -195,6 +221,10 @@ function appendAsset(container: HTMLElement, url: string, kind: string): void {
     image.className = 'asset-image';
     image.src = url;
     image.alt = '生成的图片';
+    if (width !== null && height !== null) {
+      image.width = width;
+      image.height = height;
+    }
     media = image;
   }
 
@@ -264,7 +294,7 @@ function renderStoredMessage(message: StoredMessage): HTMLElement {
     const list = document.createElement('div');
     list.className = 'assets';
     for (const asset of message.assets) {
-      appendAsset(list, asset.url, asset.kind);
+      appendAsset(list, asset.url, asset.kind, asset.width, asset.height);
     }
     article.append(list);
   }
@@ -667,7 +697,13 @@ function openConversationStream(conversationId: string, from: string | null): vo
     const data = streamData(event);
     const turn = data === null ? null : turnOf(data);
     if (data !== null && turn !== null) {
-      appendAsset(turn.assetList, readString(data, 'url'), readString(data, 'kind'));
+      appendAsset(
+        turn.assetList,
+        readString(data, 'url'),
+        readString(data, 'kind'),
+        readDimension(data, 'width'),
+        readDimension(data, 'height'),
+      );
     }
   });
 

@@ -74,6 +74,15 @@ export const assets = sqliteTable('assets', {
   sourceUrl: text('source_url'),
   mime: text('mime').notNull(),
   bytes: integer('bytes').notNull(),
+  /**
+   * Pixel dimensions of the stored bytes, read from the file's own header when it was
+   * written. Nullable in the same three senses as `rust/server/src/db.rs`: a video, an
+   * unrecognised header, and a row predating the column all mean "no `width`/`height`
+   * on the `<img>`". Never a guess — the requested size is not it (measured 2026-11-09:
+   * asked `1024*448`, the provider returned 1536x640).
+   */
+  width: integer('width'),
+  height: integer('height'),
   createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
 });
 

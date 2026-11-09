@@ -237,6 +237,8 @@ async fn removing_an_account_takes_its_rows_and_its_files() {
                 source_url: None,
                 mime: "image/png".to_string(),
                 bytes: 4,
+                width: None,
+                height: None,
             },
         )
         .await
