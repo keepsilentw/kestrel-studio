@@ -2440,8 +2440,42 @@ markdown 给），不是这次要关的东西。真要关，方向是让 marked 
 
 1. **没部署。** 改动在仓库里，线上仍是 11:37 那版；`nest/client` 那半要随下一次 `make deploy`
    的 `make build-web` 才进 `public/assets/main.js`。
+   **同日 12:43 已部署**（§39）。本节原文按本文件惯例留着；但第 3 条**至今仍然成立**——今天对外的
+   是 `wasm` 档，浏览器里的文本渲染路径本来就是 `kestrel-md`，见 §39.2 第 1 条。
 2. 今天实际对外的是 Rust 那一套（`client="wasm"`，且第二套不对外，见 §37.3），所以这次修的是
    **策略一致性**而不是一个正在被利用的洞。这条要在文档里说明白，免得下次读成一个紧急修复。
 3. 浏览器里没有真实助手消息走过新出口（`/admin` 回放页那条 lazy-image *issue* 的 count 也没重量）。
 4. 复测脚手架在 `~/tmp` 里（rustc 直编 `crates/md` + 把 TS 出口 `tsc` 出来 require，用
    `NODE_PATH` 指到 `nest/server/node_modules`），跑完即删；本次样本全是手造的，**不含生产正文**。
+
+## 39. 渲染出口与新标记上线（2026-11-09 12:43 部署）
+
+§38 的渲染出口改动（`6b1db9d`）与 §29 的红隼标记（`c387f4d`）一起上线。没有 schema 改动。
+
+| 步骤 | 读数 |
+|---|---|
+| 部署前快照 | `docker compose stop` → `Stopped`；`data/backup-20261109-pre-renderparity.db`，md5 `4482a35ad7c8…` **与上午 `…-pre-voiceguard.db` 逐字节相同**——那之后活库没有一次写入，`data/` 里共 10 份约定快照 |
+| `make deploy` | 容器 `Recreated`/`Started`，`/login` 200 |
+| 重拨 | `CLIENT_BUNDLE=wasm docker compose up -d` → `client="wasm"`；`running`、`max-size=10m max-file=5`、`restart=unless-stopped`；启动日志三行 INFO，**零 ERROR / 零 WARN** |
+| 线上产物判据 | `curl /logo.svg` = **1118 字节**且命中新注释（`grep -c 'malar stripe'` = 1）；语音守卫那句仍在 `/wasm/kestrel_client_bg.wasm` 与 `/assets/voice.js` 各命中 1 次——**上一轮的改动没被这一轮冲掉** |
+| 浏览器（新标签页，真人登录态） | `/login` 302 → `/`（会话穿过两次部署没断），顶栏 `.brand-logo` `naturalWidth=64`、渲染盒 **32×32**，`#stream` 7 个 `<article>`；控制台只有 §3 那条既有 Chrome *issue*（lazy image，count=2），**零 error 零 warning** |
+
+### 39.1 一条要记的加载事实
+
+第一次 `new_page` 开 `/` **超时失败两次**（10s、45s），第二次也用了 66 秒才起来。不是这次部署坏了：
+同一时刻从开发机走公网测，`/login` 200 / **3.2s**、`kestrel_client_bg.wasm` 200 / **2.0s / 376 KB**、
+`/logo.svg` 200 / 1118 字节；宿主机本地更快（首页 5ms、wasm 5ms）。
+**原因就是这个部署形态本身**：wasm 包 376 KB，而宿主机**出站带宽实测约 65 KB/s**
+（deployment.md §1 那条 77 倍不对称），浏览器还要在拿到包之后实例化它。
+所以判据要按这个数量级设：**页面首屏在公网走 HTTPS 需要几十秒**，`new_page` 的默认超时不够用，
+别把「工具超时」读成「站点挂了」——先 curl 测时延再决定要不要怀疑应用。
+
+### 39.2 这一节没证的
+
+1. **渲染出口那半在浏览器里没有被真实消息走过**：`/` 上那 7 个 `<article>` 是 `kestrel-md`（Rust 服务端）
+   渲染的历史内容，而 `nest/client` 那份 marked 出口只在 `nest` 档下才会被加载。今天对外是 `wasm` 档，
+   所以线上用户看到的文本渲染路径本来就是 `kestrel-md`——这次改的是**两套一致**，不是补一个正在漏的洞。
+   要在浏览器里验它，得把档位拨回 `nest`（`docker compose up -d` 去掉 `CLIENT_BUNDLE`），那会把
+   wasm 客户端的既有验收（§22–§26 那一串）换成另一套实现，不是这次该做的事。
+2. 颊纹/眼在 16 px favicon 下的实际观感由截图判断，没有在真实标签页尺寸上量过像素。
+3. 并行（两套同时接同一个文件）仍然没做过，而且按 §37.3 那个决定，它现在没有对外场景。
