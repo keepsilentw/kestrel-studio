@@ -804,3 +804,32 @@ verification.md §11.5），所以一条 `--extern` 就够，不需要任何 reg
 （§11.5 拒 `pulldown-cmark` 用的就是同一条理由），Nest 侧要动 `package.json` 与 lockfile。
 而这里真正需要的只是四个魔数。**"要不要加依赖"要先问"需要的是库还是一个函数"**，
 否则很容易为了读 8 个字节引入一个编解码器。
+
+## 31. 修好了但 lint 还在报：量症状，别量代理指标（2026-11-09）
+
+尺寸这件事按 §40 的测量做完、上线、回填，`assets` 19/19 都有尺寸，服务端发出的 HTML 里两张
+`<img>` 都带着 `width="1024" height="1024"`——**然后 DevTools 那条
+`Lazy-loaded images should have explicit dimensions` 仍然报 count=2，节点就是这两张。**
+
+如果这时候还在用那条 issue 当判据，结论会是"修复无效"，而它是错的。改成直接量它代理的那个症状：
+
+```js
+// navigate_page 的 initScript，先于页面任何脚本
+new PerformanceObserver((list) => {
+  for (const e of list.getEntries()) if (!e.hadRecentInput) window.__ls.push(e);
+}).observe({ type: 'layout-shift', buffered: true });
+```
+
+重载、再滚到底让懒加载的图真的进视口，读数：**`shiftsTotal=0`**，而且其中一张在
+`complete=false / natural=0x0`（还没下载完）时**已经占着 758×758 的盒子**。
+这条待办原本描述的现象——"图片突然展开把下面的正文推走"——前置条件已经不成立。
+
+**为什么会这样**：样式表里 `.asset-image { width: 100%; height: auto; }` 把元素的宽度交给 CSS，
+属性只用来算宽高比。Chromium 那条启发式是否因此不给分，**我没证实**（这个环境里搜索取不到结果，
+源码没读到），只能算与观测一致的一个假设。要消掉那行计数的方向是给 `.asset-image` 补
+`aspect-ratio`——但那是为了让 lint 闭嘴，不是为了让页面不跳，页面不跳已经量出来了，所以没做。
+
+**可迁移的那一条**：任何"浏览器报 issue/警告"类的待办，**先问清楚它是哪个症状的代理指标，然后去量
+那个症状本身**。代理指标会因为它自己的启发式（这里还是未证实的那一条）给出与事实相反的结论；
+而 `layout-shift` 这类是用户真实感受到的东西。反过来也成立：这条 issue 从此不能当作这个缺陷的判据，
+`roadmap.md` §3 里已经按这个口径改写。

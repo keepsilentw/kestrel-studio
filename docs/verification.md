@@ -2597,3 +2597,60 @@ GIF / WebP VP8X·VP8L·VP8）与 `nest/server/src/media/image-dims.ts`。在 `st
 2. 线上真实文件的可读性没验过（本地那 19 张是拷贝过来的，读得出来；容器里 `storage/` 是挂载卷，
    路径解析走的是同一套 `resolve_asset_path`）。
 3. 回填**不会**改动任何已有列，也不会删文件；最坏情况是某行永远留在 NULL 并被每趟重试一次。
+
+## 42. 尺寸与回填上线，以及那条 issue 为什么还在（2026-11-09 13:51 部署）
+
+### 42.1 部署与库侧
+
+| 步骤 | 读数 |
+|---|---|
+| 快照 | `data/backup-20261109-pre-image-dims.db`，md5 `39df3feba7bf…` 与主文件一致；停容器时 `assets` 最后一列还是 `created_at`（第 7 列），**没有** `width`/`height` |
+| `make deploy` → 重拨 | 新镜像、容器 Recreated/Started；`CLIENT_BUNDLE=wasm docker compose up -d` → 启动行 `client="wasm"`，`/login` 200，`max-size=10m max-file=5`、`restart=unless-stopped`，日志零 ERROR 零 WARN |
+| 迁移 | `PRAGMA table_info(assets)` 末尾现在是 `7|created_at`、`8|width`、`9|height` |
+| **回填** | `images=19 filled=19 null=0`；分布 `1024×1024 ×12`、`1000×1000 ×4`、`1536×640 ×2`、`1536×1024 ×1` |
+| 交叉核对 | 这组分布与 §40.1 那次**独立的 python 逐张测量逐档相同**——两套实现（Rust 探针 vs python 手解）在同一批真实文件上给出同一个答案 |
+| 视频 | `videos=4 with_dims=0`——按设计留 NULL（探针只读图片头） |
+
+回填那次的启动日志**没留下来**：`make deploy` 起一次容器、重拨档位又起一次，`docker logs` 只有当前容器的了。所以那一趟的证据取的是库里的结果，不是日志行。
+
+### 42.2 标记侧
+
+在登录态页面里 `fetch('/?c=16')` 取服务端真正发出的 HTML：
+
+```html
+<img src="/api/v1/assets/21/download" width="1024" height="1024" alt="生成的图片" loading="lazy" class="asset-image">
+<img src="/api/v1/assets/22/download" width="1024" height="1024" alt="生成的图片" loading="lazy" class="asset-image">
+```
+
+DOM 侧同样读到 `getAttribute('width')='1024'`。**旧行也有尺寸了**——回填不是新数据才生效。
+
+### 42.3 那条 Chrome *issue* 仍然报 count=2，但症状量出来是零
+
+`list_console_messages` 仍给 `Lazy-loaded images should have explicit dimensions (count: 2)`，
+受影响节点就是上面两张。但属性确实已经在了，所以这次不再靠这条计数判断，而是**直接量它代理的那个东西**：
+注入 `layout-shift` 观察者（`hadRecentInput=false` 那些）→ 重载 → 再滚到底让懒加载的图真的进入视口。
+
+```
+shiftsAtLoad=0  shiftsTotal=0  entries=[]
+img[0]  complete=true   natural=1024x1024  attrs=1024x1024  used=758x758
+img[1]  complete=false  natural=0x0        attrs=1024x1024  used=758x758
+```
+
+**关键那一行是 `img[1]`**：它当时还没下载完（`natural=0x0`），可已经占着一个 **758×758** 的盒子——
+也就是 §40 那条待办说的「图片突然展开把下面正文推走」的前置状态已经不成立。
+整页（含两张图加载完成之后）布局偏移计数 **0**。
+
+所以这条 *issue* 现在**不能再当作这个缺陷的判据**，判据换成 `layout-shift` 的实测。
+为什么属性都在了它还要报：样式表里 `.asset-image { width: 100%; height: auto; }`（`main.css:338`）
+把元素的实际宽度交给 CSS，属性只用来算宽高比——**Chromium 这条启发式是否因此不给分，我没能证实**
+（本环境的搜索取不到结果，源码没读到），这是一个与观测一致的假设，不是结论。
+真要消掉那行计数，方向是给 `.asset-image` 补一条 `aspect-ratio`，但那是为了让 lint 闭嘴而不是为了让页面不跳——
+页面不跳已经量出来了，所以没做。
+
+### 42.4 这一节没证的
+
+1. 上面那个 CSS 假设没验过。
+2. `/admin` 只读回放页（§23.5 量到 count=11 那一屏）没重量——它走的是同一套模板与同一批回填后的行，
+   预期同样 0 位移，但没测。
+3. 新产生的图片（下一次真实出图）没走线上——`store()` 里那条读头部的路径这次只被单元断言与
+   离线 19 张图证过。

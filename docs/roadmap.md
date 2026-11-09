@@ -282,10 +282,17 @@ openai 面须置 compat 位 `stream_include_usage = true`，否则全程 `usage:
   时读一次，`AssetView` 带上线，模板与两个客户端**成对才输出**属性。
   为什么不能用请求里的 `size`：生产 19 张图逐张对撞过，一张请求 `1024*448`、供应商返回
   `1536×640`（它会吸附尺寸），照请求值写就是错宽高比的盒子，比要修的跳动更糟。
-  测量、判据与门读数在 verification.md §40，坑在 implementation-notes.md §30。**未部署**，
-  **未部署**。旧行也不会一直留着 NULL：**启动时有一趟有界回填**（两侧各 500 行/趟、只选
+  测量、判据与门读数在 verification.md §40，坑在 implementation-notes.md §30。
+  **已上线（13:51 那次 `make deploy`，§42）**：`assets` 两列补上，启动回填把既有 **19/19 张图**
+  全部填出尺寸（分布与 §40 那次独立测量逐档相同），旧行的 `<img>` 现在也带盒子。
+  旧行也不会一直留着 NULL：**启动时有一趟有界回填**（两侧各 500 行/趟、只选
   `width IS NULL`、读不出继续留 NULL），设计、被测试纠正过的那处理解（unreadable 每趟会重试）
-  与门读数在 verification.md §41。部署后第一次启动预期打一条 `backfilled pixel dimensions …`。
+  与门读数在 verification.md §41。这次上线它确实跑了，但那条 `backfilled pixel dimensions …`
+  日志没留下来（`make deploy` 起一次、重拨档位又起一次，`docker logs` 只剩当前容器），
+  证据取的是库里的 `filled=19`——要复现日志行得单独重启一次容器。
+  **但这条待办不能算"issue 消失了"**：DevTools 那条计数仍报 count=2，而实测布局偏移是 **0**
+  （未下载完的图已经占着 758×758 的盒子）。判据换成 `layout-shift`，别再拿这条 issue 当这个缺陷的
+  度量——理由与那个尚未证实的 CSS 假设写在 §42.3。
   2026-11-06 下午在新链路上量到了实际条数：产品页 c=11 是 **count=2**，只读回放页
   `/admin/conversations/3`（11 个资产）是 **count=11**——与"只有回放命中"的判断一致（verification.md §23.5）。
 - 语音的遗留项（设计与已落地的部分见 [architecture.md](./architecture.md) §11）：
