@@ -1943,3 +1943,175 @@ UNIQUE 游标索引）两侧同改。改法与理由在那节和 implementation-
    窗口准备的，但窗口本身没实测过；旧代码那侧的 `MAX+INSERT` 仍可能落重复对，直到它也升级。
 4. **provider 层的重复计费**是否真被止住——这只在并行实测里有意义，单元层只证了认领互斥。
 5. wasm 客户端与 `CLIENT_BUNDLE` 档位不受影响，未重拨、未部署、未走浏览器。
+
+> 上面第 2、5 两条写于本节（当天上午，尚未部署）。同一天 09:49 之后已被 §32 与 §33 取代：
+> 活库的迁移走过（0 对重复，未重编号任何行）、`wasm` 档重拨并走过浏览器一屏、启动收尾的 owner 规则
+> 在线上重演过。第 1 条（并行）与第 3、4 条仍然成立。原文按本文件的惯例不改。
+
+## 32. 这一版上线：活库的迁移走完了，新写入带上 owner（2026-11-09 09:49 部署）
+
+§31 那三处改造的代码上线。这一节是宿主机上的机器证据 + 同一浏览器里的一屏。
+
+### 32.1 部署前的预检（停容器，取快照，本地只读）
+
+按宿主机既存约定先做快照：`docker compose stop` → `-wal` 与 `-shm` 消失（干净关闭，WAL 已
+checkpoint）→ `cp -a data/kestrel-studio.db data/backup-20261109-pre-ownedwrites.db`（两边 md5 相同
+`65d3bf0670a09e100a7983e8ba954f35`，872 KB，这是 `data/` 里第 7 份备份）。取回本地用 python 的
+sqlite **3.53.4** 只读打开查（宿主机自带的是 3.7.17，见 32.3 那句）。读数：
+
+| 查的 | 结果 | 对本次迁移意味着 |
+|---|---|---|
+| `messages` 列 | 无 `owner`；`mode` 在末尾 | 走 `ALTER ADD COLUMN` 那条路径 |
+| `generation_tasks` 列 | 无 `claimed_by` / `claimed_at` | 同上 |
+| `pragma_index_list('conversation_events')` | `idx_events_conversation` 的 `unique=0` | 索引存在但普通 → 迁移会 drop/create |
+| 重复 `(conversation_id, seq)` 对 | **0 对**（6,827 行事件，逐会话 `COUNT(*)=MAX(seq)` 全成立） | **不重编号任何数据**，修复循环空转 |
+| 空 content 的 assistant 行 | **0 行** | 启动收尾无事可做，不该出现 `abandoned=` |
+| 非终态任务 | **0 行**（4 个任务全 `succeeded`） | claim 路径不会动到既有行 |
+| 行数 | users 2 / conversations 16 / messages 76 / assets 23 / events 6,827 / tasks 4 / sessions 3 | — |
+
+也就是说这次部署只可能走温和路径：三条 `ALTER`、一次索引替换、零行数据改写。
+
+### 32.2 部署与档位
+
+`make deploy`（build-linux + build-wasm + deploy.sh）→ 新镜像
+`sha256:0d53ed29f3bbc9b12d44efa62aa7f76647aad15aa7684492491050ee6dedcf4b`，容器 `Recreated`/`Started`，
+`/login` 200。启动日志三行、**ERROR 与 WARN 各 0 条**，没有 `finalized … abandoned` 那行（与 32.1 的
+0 空占位一致），也没有那条"修了 N 个重复游标"的 `ERROR`（0 对重复）。
+
+`make deploy` 不带 `CLIENT_BUNDLE`，档位按 §2.2 回到 `nest`——启动行随之变成 `client="nest"`，
+随后 `CLIENT_BUNDLE=wasm docker compose up -d` 重拨，启动行 `kestrel-studio listening on
+http://localhost:8848 client="wasm"`。顺带核对：`running`、`json-file max-size=10m max-file=5`、
+`restart=unless-stopped`。
+
+### 32.3 活库的 schema 回查
+
+宿主机自带的 `sqlite3` 是 **3.7.17**（2013 年的），它**不支持 `pragma_table_info('x')` 这种表值
+函数**——写成 `SELECT … FROM pragma_table_info(...)` 会报 `no such column: (`,看着像语法错而不是版本问题。
+得用经典 `PRAGMA table_info(messages);`。（另外 `pragma_index_list` 的列里没有 `sql`，索引定义要从
+`sqlite_master` 取。）
+
+- `messages` 第 8 列 `owner|TEXT`（可空，追加在表尾）
+- `generation_tasks` 第 16、17 列 `claimed_by|TEXT`、`claimed_at|INTEGER`
+- `PRAGMA index_list(conversation_events)` → `idx_events_conversation` 的 `unique=1`
+- `sqlite_master.sql` → `CREATE UNIQUE INDEX idx_events_conversation ON conversation_events(conversation_id, seq)`
+
+一个不留神会被当成 bug 的性质：**活库的列序与新建于内存的库不同**（`ALTER ADD COLUMN` 只能追加在尾部，
+而 DDL 里 `owner` 写在 `created_at` 之前）。所有读写都按列名，不看位置，所以两侧仍然同形；
+`SELECT *` 的位置式读法在这里会出错——现有的 SQL 没有这种写法。
+
+### 32.4 同一浏览器里那一屏（chrome-devtools MCP，新标签页，真人登录态，`wasm` 档）
+
+| 动作 | 读数 |
+|---|---|
+| 打开 `/` | 画的仍是会话 16（`data-conversation-id="16"`、`data-start-seq="352"`、7 个 `<article>`），含一张图与一段视频——**部署前**就在库里的内容 |
+| 点「新会话」 | `/?new=1`、`data-conversation-id` 消失、`<article>` 0、侧栏无高亮；textarea 自动聚焦且快捷键提示那行按 §30 出现 |
+| 空舞台选「对话」发一句（`用一个词回答：红隼是什么`） | 地址栏被改写成 `/?c=17`（`?new=1` 不残留），一轮流式跑到「猛禽。」，composer 自己解锁 |
+| 刷新 | SSR 回放 2 个 `<article>`、`data-start-seq="21"`、侧栏高亮在 c=17 |
+| 控制台 | 首屏那一条是 §3 记过的既有 Chrome *issue*（`loading="lazy"` 缺尺寸，**count=2**，对应会话 16 的两张图）；**回放那一屏 0 条**。全程零 error、零 warning |
+
+### 32.5 写路径的库侧证据（这次真正要证的三件事）
+
+| 查的 | 读数 |
+|---|---|
+| 新行的 owner | `messages` id=77（user，len 12）与 id=78（assistant，len 3）**都是 `owner='rust'`** |
+| 全表 owner 分布 | `NULL` 76 行 / `rust` 2 行——正是迁移期的形状：旧行无主，新行有主 |
+| 会话 17 的 journal | 21 行，`MIN(seq)=1`、`MAX(seq)=21`、`COUNT(DISTINCT seq)=21`；类型序列 `user_message → turn_started → reasoning → text → turn_done` |
+| 全库重复 `(conversation_id, seq)` | 0 对（游标索引此后会直接拒绝第二次落同值） |
+| `generation_tasks` | 4 行全 `succeeded`，`claimed_by` / `claimed_at` 仍是 `NULL`——claim 只作用于非终态行，旧行不动是对的 |
+
+**这一条是 §13.2 第 3 处第一次在活库上被证明**：新的单语句游标分配（`INSERT … SELECT MAX+1 … RETURNING`）
+跑出来的 journal 连续、不重、且终态帧落到了 `turn_done`。
+
+### 32.6 边界：这一节没证的
+
+1. **并行仍未测**。`nest` service 还挂在 profile 上、没起过，两套从没同时对着这个文件写过。
+   §31 是单元层，这一节是单进程线上层，两者都不代替那次并行实测。
+2. **启动收尾的 owner 规则没在活库上走过**。它要"提交一轮 → 中途重启容器"（§26 那次的重演），
+   而重启不在这次"部署"的范围里，所以没做，等确认。已知的替代证据只有 §31 那条单元断言。
+3. **Nest 侧的同一批改动没上线**：`Dockerfile.nest` 的镜像是 11-07 建的那版，不含这次代码。
+4. 视频任务这次没重跑（会话 16 里那段视频是部署前产的），所以**claim 在真实渲染上只走过一次单元断言**，
+   线上这一版还没有一条非终态任务可查。
+
+## 33. 启动收尾的 owner 规则在活库上实测（2026-11-09 09:58–10:00，两次容器重启，用户批准）
+
+§13.2 第 1 条那个 Critical 的修复，之前只有单元断言（§31）。这次在**线上那个库**上跑了两遍，
+因为「自己的行无条件收尾 / 对方的行不碰 / 无主行等宽限期」这三条规则里，前两条只有在**真有一个在飞的
+轮次被杀**时才看得出区别。
+
+### 33.1 造一个能区分三种 owner 的局面
+
+宿主机时间 `1794189507619`（09:58:27 前后），往测试会话 17 里插三行 assistant 空占位：
+
+| id | `owner` | `created_at` | 该被收尾吗 |
+|---|---|---|---|
+| 79 | `nest` | 新鲜 | **不该**——这是对面那套正在 streaming 的行 |
+| 80 | `NULL` | 新鲜 | **不该**——无主且没过宽限期，归属不可判定 |
+| 81 | `NULL` | 过期 6 分钟 | **该**——过了 5 分钟宽限期的无主行 |
+
+`make deploy-restart`（= `docker compose restart`）之后：
+
+```
+INFO kestrel_studio: finalized assistant rows left by a previous process abandoned=1
+id|owner|len        79|nest|0    80||0    81||18  本轮处理失败：服务在轮次完成前中断。
+seq|type|message_id 22|turn_error|81
+```
+
+**只有一行被抓**，正是 81。79 与 80 的 `content` 长度仍是 0，journal 也只多了那一帧
+（会话 17 此前是 21 条事件，之后 `seq=22` 是 `turn_error` 指向 message 81）。
+
+### 33.2 再跑一遍真实的那次：一轮在飞时被杀
+
+浏览器（真人登录态、`wasm` 档、同一个标签页）在会话 17 里用「对话」模式提交一句长指令
+（`分二十个要点逐条详细展开…`），流式跑起来 6 秒后重启容器。重启前一刻库里的空占位有三行：
+
+```
+in-flight: id=79 len=0     ← 上一轮的合成外来行
+in-flight: id=80 len=0     ← 上一轮的合成无主新鲜行
+in-flight: id=83 len=0     ← owner='rust'，这一轮真的被杀在这里
+```
+
+重启后：`finalized … abandoned=1`——**三行里只抓走属于自己的那一行**，合成那两行第二次没被动。
+journal 尾部 `1284|text → 1285|text → 1286|text → 1287|turn_error|message_id=83`（那一轮被杀前
+已经流到 1,286 帧）。会话 17 共 1,287 行事件、`MAX(seq)=1287`、全库重复 `(conversation_id, seq)` 0 对。
+
+**页面在没有刷新的情况下自己解锁了**：`#stream` 最后一条 assistant 变成「服务在轮次完成前中断。」，
+composer 可输入。这一帧是发布在客户端断线之后、且新进程 accept 之前的一帧，它能到浏览器只能
+是重连带 `Last-Event-ID` 被按游标重放的结果（网络面两次 `GET /api/v1/conversations/17/stream?from=22`
+都是 200，第二次是重连）。这条与 §26.3 同形，差别是这次收尾谓词已经带上 owner 过滤。
+
+刷新那一屏：`data-start-seq="1287"`、5 个 `<article>`、composer 未锁、**控制台 0 条**。
+
+### 33.3 控制台那一条 error 的归因
+
+在「提交 → 中途重启」那一屏里，浏览器报了 1 条 `[error] Failed to load resource:
+net::ERR_HTTP2_PROTOCOL_ERROR`。它是**被掐断的那条 SSE 响应本身**（`/api/v1/conversations/17/stream`），
+由这次重启造成，不是应用行为：紧接着一次干净刷新，控制台 0 条。记在这里是为了下次别把它当成回归——
+判据是「同一条路径不做人为 kill 时是否复现」，而不是「出现过 error」。
+
+### 33.4 测试数据是怎么清的（以及为什么不能用 UI 清）
+
+登录用的 `tww316` 是**超管**，而删除会话的入口对超管刻意不渲染
+（`rust/server/src/view/templates.rs:140` 的 `page.can_delete_conversations`，端点同一规则），
+历史面板里因此没有 `data-delete-conversation` 按钮，UI 这条路走不通。
+
+所以按会话 id 精确删（先查归属：`id=17 / title=用一个词回答：红隼是什么 / username=tww316 / msgs=7 /
+events=1287 / **assets=0**`——没有资产意味着没有镜像文件要跟着删），删除顺序与应用的
+`delete_conversations` 一致（事件、任务、消息、会话，一个事务）：
+
+```
+conv|msgs|events|empty_placeholders|conv_total|events_total
+0   |0   |0     |0                 |16        |6827
+```
+
+`events_total` 与 `conv_total` 回到 §32.1 预检那两个数（16 个会话 / 6,827 行事件），全库空占位 0 行。
+**这是本节唯一一处直接写生产库的动作**（三行合成占位 + 一次按 id 的删除），范围只限会话 17，
+而会话 17 整个是本次与 §32 的测试产物。
+
+### 33.5 边界
+
+1. 合成行是用宿主机 `sqlite3`（3.7.17）写的，不是用应用路径写的。它能被新代码正确读到，
+   这是「Nest 那套写的行 Rust 会怎么对待」的代理证据——**代理的是列的语义，不是 Nest 的真实写入**：
+   真并行的形状（两侧同时持有、`attempts` 交错、8s tick 撞在一起）仍未测，见 §31.4 第 1 条。
+2. 这一节证的是**收尾谓词的归属判断**，不是「跨套解锁」：79/80 两行之所以永远空着，正是因为
+   Rust 不再碰它们；真要看到对面那套把它们收尾，得让 Nest 真的在跑（P4 取消后那是排期问题不是代码问题）。
+3. 视频任务的 claim 仍未在线上走过一次真实渲染（§32.6 第 4 条不变）。

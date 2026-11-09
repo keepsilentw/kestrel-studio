@@ -99,6 +99,11 @@ make nest-logs
 坏，但 Nest 会在 Rust 还带着旧代码（`MAX`+`INSERT` 两步、无 owner）时就并行，那个窗口的形状只写在
 verification.md §31.4，没实测过。
 
+**这一序已经走过一次**：2026-11-09 09:49 的 `make deploy` 就是「Rust 先迁移活库」那一步的落地——
+预检（停容器 → 快照 → 本地只读）查出 0 对重复游标，所以那次只补了三列并把索引换成 UNIQUE，没有重编号
+任何行；回查读数在 verification.md §32.2-§32.3。**下一步是并行实测**（两套同时挂同一个 `./data`），
+过了才有 `make nest-up` 接活库。
+
 **Nest 重新接管流量时，会再登出一次所有人**：Nest 只认 `sess.passport.user`，读不懂 Rust 写在顶层 `user` 的行
 （反向是通的，Rust 两个位置都认）。所以凡是在 Rust 上登录过的会话，退回 Nest 后都要重新登录。
 机制与实测见 [verification.md](verification.md) §13.4 与 architecture.md §13.2。

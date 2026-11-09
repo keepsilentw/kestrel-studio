@@ -650,8 +650,10 @@ WebSocket 的 upgrade 不经过 Express，所以 `AuthenticatedGuard` 对它无�
   「同时在线」成了目标，于是并行这件事必须单独写清楚）。**结论：两套现在不能同时接同一个活库。**
 
   **2026-11-09 状态：下面 1、2、3 三处的代码改造两侧都已到位**（单元层读数见 verification.md §31，
-  改法与过程中咬人的形状见 implementation-notes.md §24）。这条结论**仍然成立**，但挡路的已经不是
-  代码：两套从没同时对着同一个文件跑过，那次实测（§28 只做了一半）排在 `make nest-up` 之前。
+  改法与过程中咬人的形状见 implementation-notes.md §24，Rust 那侧已上线并且第 1 处在线上重演过，见
+  verification.md §32 与 §33）。这条结论**仍然成立**，但挡路的已经不是代码：两套从没**同时**对着
+  同一个文件跑过——第 1 条是单进程线上实测（对面那套没在跑，所以「外来行不被抓」只能用合成行代理），
+  第 2、3 条仍只有单元断言。那次并行实测（§28 只做了一半）排在 `make nest-up` 之前。
   第 4 条按决策不改代码，由入口固定来挡。
 
   1. **启动收尾会抓走对方在飞的轮次**——Critical，已在库副本上实测。两侧谓词完全同形，都不带
@@ -670,6 +672,10 @@ WebSocket 的 upgrade 不经过 Express，所以 `AuthenticatedGuard` 对它无�
      两者在行里无法区分，所以那个 5 分钟是两侧的协议（`UNOWNED_STALE_AFTER_MS`）。
      位置：`rust/server/src/conversation/repo.rs::abandon_stale_placeholders`、
      `nest/server/src/conversation/conversation.service.ts::abandonStalePlaceholders`。
+     **且不只在单元里成立**：2026-11-09 在活库上跑过两次重启，局面是四种行并存
+     （`owner='nest'` 新鲜 / `owner IS NULL` 新鲜 / `owner IS NULL` 过期 6 分钟 / `owner='rust'` 的
+     **真在飞轮次**），两次都 `abandoned=1`，抓的分别是过期无主行与自己那一行，合成那两行两次没被动；
+     被杀那一轮的页面在没有刷新的情况下自己解锁。读数在 verification.md §33。
   2. **任务 worker 不 claim**——Critical。`active()` 两侧都是纯 SELECT 非终态行
      （`nest/server/src/task/task.service.ts:79-87`、`rust/server/src/task/service.rs:126-138`），
      写回是无前置条件的 `UPDATE … WHERE id = ?`，没有 owner 也没有 attempts 递增。两套各自的

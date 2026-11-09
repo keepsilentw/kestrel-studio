@@ -583,3 +583,29 @@ string，反引号无所谓，但它是 `DDL.split(';')` 逐条执行的，注�
 页面标签表一起改，还会让「崩溃时正持有」的任务掉出队列，而租约过期后没人再认领它；`attempts`
 更不碰——它计的是供应商失败次数、驱动 `MAX_MIRROR_ATTEMPTS`，而租约每 8 秒续一次，把它放进 claim
 等于在任何东西失败之前先跑光那个计数。claim 只需要「一条语句 + 一个条件 + 看 changes()」。
+
+## 25. 宿主机自带 sqlite3 3.7.17：pragma 表值函数的写法直接报语法错（2026-11-09）
+
+部署后想在宿主机上回查活库的 schema，`ssh lavo-test "sqlite3 … 'SELECT name FROM pragma_table_info(x)'"`
+这条路**走不通**，报的是 `Error: near "(": syntax error`——看着像引号被 shell 吃掉了，其实是宿主机自带的
+3.7.17（2013 年）不认识 **pragma 表值函数**（把 `pragma_xxx(…)` 当表用是 3.16 才有的）。换经典写法就有结果：
+
+```bash
+sqlite3 -header data/kestrel-studio.db 'PRAGMA table_info(messages);'
+sqlite3 data/kestrel-studio.db 'PRAGMA index_list(conversation_events);'   # 列: seq|name|unique|origin
+sqlite3 data/kestrel-studio.db "SELECT sql FROM sqlite_master WHERE name='idx_events_conversation';"
+```
+
+两个连带的坑：`pragma_index_list` 的输出里**没有 `sql` 列**（索引定义要从 `sqlite_master` 取）；
+而 `sqlite3 data.db "SELECT … FROM pragma_index_list('t') WHERE name='x'"` 里 `WHERE name=` 这种
+按列过滤，也同样是 3.16+ 的能力。
+
+要跑复杂查询（窗口、`GROUP BY … HAVING`、CTE）就别在宿主机上凑：`docker compose stop` 之后 `-wal`
+与 `-shm` 会消失（干净关闭已 checkpoint），此时 `cp -a` 出来的库文件是一致的，scp 回开发机用 python 的
+sqlite **3.53.4** 以 `file:…?mode=ro` 打开查。判据：**先看 `data/` 里 `-wal` 的大小**——0 字节才说明
+主文件就是当前全部状态；容器在跑且 wal 非空时只拷主文件会丢掉最近的写入（2026-11-09 那次预检就是靠
+这点决定先 stop 再快照，顺手留下 `data/backup-20261109-pre-ownedwrites.db`）。
+
+顺带一条属于 schema 而不是属于工具的事实：**`ALTER TABLE ADD COLUMN` 只能追加在表尾**，所以活库
+`messages` 的列序（`owner` 排在 `created_at` 之后）与新建的内存库（DDL 里写在之前）**不同**。两侧所有
+SQL 都按列名读写，因此仍然同形；但任何人写 `SELECT *` 再按下标取值，就会在两个库上拿到不同的列。
