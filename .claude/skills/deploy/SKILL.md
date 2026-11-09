@@ -159,8 +159,15 @@ deploys that afternoon; the running one started 13:47 — `ENTRYPOINT
 contract source and, since 2026-11-07 (roadmap.md §4.5), as a **permanent second
 backend**: P4 (delete the Node stack) was revoked, so nothing under `nest/` is
 slated for removal. Both stacks share one SQLite file, and a browser's session
-only works on the stack that issued its cookie — route per entry point (separate
-ports or subdomains), never round-robin requests between the two.
+only works on the stack that issued its cookie. **There is no second entry point, and
+none is planned (decided 2026-11-09): no second subdomain exists, so `nest/server` does
+not serve users** — `make nest-up` is a host-internal action only. Do not reach for a
+port as the isolation: cookie ownership keys on host and path, **not on port**, so
+`:8848` and `:8849` share one `connect.sid` slot; and splitting by path collides on the
+same slot plus the two different signing schemes. The only isolating dimension is another
+host. Running both stacks against one file was verified on a database copy
+(`docs/verification.md` §34); reproducing that setup uses a `.backup` copy and two
+`127.0.0.1`-bound containers, never the live `./data`.
 
 What is known from the host, not inferred (docs/verification.md §13):
 
