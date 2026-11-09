@@ -452,6 +452,10 @@ class VoiceConnection {
     const messageId = this.assistantMessageId;
     const calls = this.pendingCalls.splice(0);
     if (session === null || conversationId === null || messageId === null) {
+      // Same rule as `interrupt()`: with no row to file the calls cannot be answered,
+      // but the turn is over and the page has to be told - otherwise `busy` stays set
+      // for the rest of the call (docs/implementation-notes.md §33).
+      this.finalizeTurn();
       return;
     }
 
@@ -514,12 +518,26 @@ class VoiceConnection {
   private finalizeTurn(): void {
     const messageId = this.assistantMessageId;
     const conversationId = this.conversationId;
+    // Only a call that was **mid-turn** gets to announce a close. A stray
+    // `response.done` or a second failure after the turn already settled must not put
+    // a second `done` on the wire - same rule as the one error line per run of
+    // failures in `onRealtime`.
+    const closing = this.busy;
     this.busy = false;
     if (this.silenceTimer !== null) {
       clearTimeout(this.silenceTimer);
       this.silenceTimer = null;
     }
     if (messageId === null || conversationId === null) {
+      // Close it on the wire anyway. Whether a row could be written is our business;
+      // that the turn is over is **the page's**, and nothing else will tell it:
+      // without this frame the button stays held for the rest of the call, and an
+      // utterance deferred behind an interruption never lands
+      // (docs/implementation-notes.md §33). `send` still swallows it once the socket
+      // is being torn down, which is what `close` relies on.
+      if (closing) {
+        this.send({ type: 'done' });
+      }
       return;
     }
     this.assistantMessageId = null;

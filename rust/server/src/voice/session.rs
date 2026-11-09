@@ -404,7 +404,11 @@ impl VoiceCall {
         let (Some(conversation_id), Some(message_id)) =
             (self.conversation_id, self.assistant_message_id)
         else {
+            // Same rule as `interrupt`: with no row to file the calls cannot be
+            // answered, but the turn is over and the page has to be told - otherwise
+            // `busy` stays set for the rest of the call (docs/implementation-notes.md §33).
             self.pending_calls.clear();
+            self.finalize_turn().await;
             return;
         };
         let calls = std::mem::take(&mut self.pending_calls);
@@ -482,11 +486,26 @@ impl VoiceCall {
     }
 
     async fn finalize_turn(&mut self) {
+        // Only a call that was **mid-turn** gets to announce a close. A stray
+        // `response.done` or a second failure after the turn already settled must not
+        // put a second `done` on the wire - the page's button state is the contract
+        // here, and one run of upstream failures is one problem (see the same rule on
+        // the error frame in `on_realtime`).
+        let closing = self.busy;
         self.busy = false;
         self.silence = None;
         let (Some(message_id), Some(conversation_id)) =
             (self.assistant_message_id, self.conversation_id)
         else {
+            // Close it on the wire anyway. Whether a row could be written is our
+            // business; that the turn is over is **the page's**, and nothing else will
+            // tell it: without this frame the button stays held for the rest of the
+            // call, and an utterance deferred behind an interruption never lands
+            // (docs/implementation-notes.md §33). `send` still swallows it once the
+            // call is being torn down, which is what `close` relies on.
+            if closing {
+                self.send(ServerFrame::Done).await;
+            }
             return;
         };
         self.assistant_message_id = None;
@@ -654,7 +673,19 @@ mod tests {
             "{first:?}"
         );
         call.on_realtime(RealtimeEvent::Failed("buffer overflow".into())).await;
-        assert!(frames(&mut out).is_empty(), "a run of failures is one problem");
+        // The second refusal says nothing new - **but the turn that was just committed
+        // still has to close on the wire**, and that frame is what the page's button
+        // waits for. Asserting the channel was silent here was pinning the hole.
+        let rest = frames(&mut out);
+        assert_eq!(
+            rest.iter().filter(|frame| frame.contains("\"type\":\"error\"")).count(),
+            0,
+            "a run of failures is one problem: {rest:?}"
+        );
+        assert!(
+            rest.iter().any(|frame| frame.contains("\"type\":\"done\"")),
+            "the committed turn closed: {rest:?}"
+        );
     }
 
     #[tokio::test]
@@ -840,6 +871,78 @@ mod tests {
             "nothing to cancel upstream"
         );
         assert!(call.busy, "the turn is untouched");
+    }
+
+    /// A turn is closed on the wire whether or not there was a row to write.
+    ///
+    /// `open_turn` files the user row and the assistant placeholder with `.ok()`, so a
+    /// database failure leaves a live upstream response with **no row behind it**. If
+    /// the close is then skipped along with the write, the page cannot tell the two
+    /// apart: `busy` stays set, the button stays held for the rest of the call, and
+    /// (since the barge-in) an utterance deferred behind that turn never goes out.
+    /// docs/implementation-notes.md §33.
+    #[tokio::test]
+    async fn a_turn_with_no_row_to_write_still_closes_on_the_wire() {
+        let (mut call, _commands, _events, mut out, _state) = fixture().await;
+        call.busy = true;
+        call.assistant_message_id = None;
+
+        call.finalize_turn().await;
+
+        assert!(!call.busy);
+        assert_eq!(
+            frames(&mut out),
+            vec![r#"{"type":"done"}"#.to_string()],
+            "the page is told the turn ended, because nothing else will tell it"
+        );
+    }
+
+    /// The same hole through the interruption path, which is where it now bites harder:
+    /// the muted page waits for a close that never arrives.
+    #[tokio::test]
+    async fn an_interrupt_still_closes_when_the_turn_has_no_row() {
+        let (mut call, mut commands, _events, mut out, _state) = fixture().await;
+        call.busy = true;
+        call.responding = true;
+        call.assistant_message_id = None;
+
+        call.receive(ClientFrame::Cancel).await;
+
+        assert!(matches!(commands.recv().await, Some(Command::CancelResponse)));
+        assert!(
+            frames(&mut out)
+                .iter()
+                .any(|frame| frame.contains("\"type\":\"done\"")),
+            "otherwise the browser stays muted and its deferred commit never lands"
+        );
+    }
+
+    /// The adjacent branch of the same hole: a `response.done` that carries tool calls,
+    /// with no assistant row left to file their results against. Dropping the calls is
+    /// right; keeping the turn open is not.
+    #[tokio::test]
+    async fn a_tool_round_with_no_row_to_file_still_closes_the_turn() {
+        let (mut call, mut commands, _events, mut out, _state) = fixture().await;
+        call.busy = true;
+        call.assistant_message_id = None;
+        call.pending_calls.push((
+            "call-1".to_string(),
+            "generate_image".to_string(),
+            "{}".to_string(),
+        ));
+
+        call.on_realtime(RealtimeEvent::ResponseDone).await;
+
+        assert!(call.pending_calls.is_empty(), "the calls are dropped, not replayed");
+        assert!(
+            frames(&mut out)
+                .iter()
+                .any(|frame| frame.contains("\"type\":\"done\"")),
+            "the turn still closes on the wire"
+        );
+        while let Ok(command) = commands.try_recv() {
+            panic!("a dispatch with no row must not reach upstream: {command:?}");
+        }
     }
 
     #[tokio::test]
