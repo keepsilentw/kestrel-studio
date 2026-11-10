@@ -413,8 +413,11 @@ openai 面须置 compat 位 `stream_include_usage = true`，否则全程 `usage:
     同一日新增一条**安全件**：`crates/md` 的嵌套上限 32 层（`MAX_NESTING`），Nest 侧 `renderMarkdown`
     包 try/catch——因为两边崩法不对称，栈溢出在这台机上是**进程终止**而 `marked` 抛的是可捕获异常
     （§46.7）。逐条读数、marked 18 那六根钩子的取舍、「所谓脚注其实是引用式链接」那条纠错，
-    见 verification.md §46 与 implementation-notes.md §35。**未部署**：`crates/md` 同时进服务端与
-    wasm 客户端，要随下一次 `make deploy` 才上线。
+    见 verification.md §46 与 implementation-notes.md §35。
+    **已上线（2026-11-10 16:29 `make deploy` + 16:30 重拨 `wasm`，读数在 verification.md §47）**：
+    线上那份 wasm 的 `renderMarkdown` 被逐条调了一遍，16 条构造与钉住的字节串相同。
+    **仍未验的一条**：一条真实助手消息带着这些构造走完「SSE 流式画出来 → 重载走 SSR 回放」这一整条路
+    ——§47 那条验法调的是渲染器本体，绕过了消息管线，而补它要花一次真轮子（钱与生产数据都在里面）。
   - **打断（barge-in）已落地（2026-11-09），但未在浏览器里走过**：上一句还在播时再按住，
     页面立刻静音 + 发 `cancel`，中继转成上游的 `response.cancel` 并当场收尾那一轮。
     判据、三方职责与那条「无推理可取消时上游回错误」的出处在

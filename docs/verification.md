@@ -2907,6 +2907,9 @@ assetImages=11  videos=0  lazy=11  missingDims=0  layoutShifts=0
 
 ## 46. 两套 markdown 归到一个子集：80 条样本同形（2026-11-10，**未部署**）
 
+> **本节原文写成「未部署」时是真的；16:29 那次 `make deploy` 之后不是了。**
+> 上线读数与线上那份 wasm 的函数级验证在 §47，本节只讲口径与构造层读数。
+
 §38.3 留下的那 8 类分歧今天关了。方向既不是「让 `kestrel-md` 追上 CommonMark」，也不是「让 marked
 什么都不渲染」，而是把一句话写成契约：**`crates/md` 那个子集是两套在线实现共同的口径**。于是每条分歧
 只有两个去处——内容需要它，就补进子集；产品不要它，就在 marked 那侧退回文字。
@@ -3049,9 +3052,10 @@ cargo**，免得落一份没人跟踪的 lock，implementation-notes.md §18）�
 
 ### 46.6 这一节没证的
 
-1. **没部署，也没在浏览器里走过。** 线上仍是 11-09 15:04 那份（§44.4）。`crates/md` 同时编进服务端
-   与 wasm 客户端，所以下一次 `make deploy`（含 `build-wasm`）才是这条口径真正上线的时候；Nest 那
-   两份 renderer 改动要随 `make build-web` 才进 `public/assets/main.js`。
+1. ~~没部署。~~ **16:29 已部署并 16:30 重拨 `wasm`**，读数在 §47。但「没在浏览器里被一条真实
+   助手消息走过」这半句**仍然成立**：§47 那条函数级验证调的是线上那一份 wasm 的 `renderMarkdown`，
+   不花钱也不写库，代价是它证明的是「渲染器在线上且行为如钉」，不是「有人看见了一条这样的消息」。
+   新加的两条 CSS 也一样：只核到它在产物里，那一屏没看过。
 2. 80 条是**构造层**样本，不是内容层：它不能证明生产正文里没有第三种形状。§46.5 那些 0 是 LIKE
    近似，其可信度依据的是 §36.3 那次与 python 正则的逐条对撞。而 §46.2 那张表本身就是反例——
    **每一轮都还有下一轮想不到的形状**。
@@ -3105,3 +3109,85 @@ SSR + 所有在连的 SSE，一次终止带走所有人的这一轮；`marked` �
 **没量的**：加上限之后 `markdown()` 的耗时与输入尺寸的关系——只有一个 400 层的点（0.06 秒内）
 与一个不可比的大输入，**没有曲线**；也没量过一个中等尺寸（比如 500 KB）正文的渲染耗时。
 以及 32 层这一段在生产里会不会因为某个新模型突然被踩到——靠 §46.5 那行「引用块」哨兵先看。
+
+## 47. §46 那套口径上线，以及一套不花钱不写库的线上验法（2026-11-10 16:29 部署、16:30 重拨）
+
+`git log`：`f116b6c` + `e242b0e` 是代码，`68e8fde` + `52bd12b` 是文档，`3c0773c..52bd12b` 已推。
+
+### 47.1 部署与档位
+
+| 步骤 | 读数 |
+|---|---|
+| `make deploy` | 交叉编译 → 上传 context 10.47 MB → 宿主机建镜像（两条 `COPY`，无拉取）→ 容器 Recreated/Started → 脚本自己等到 `/login` 应答 |
+| 镜像 | `created=2026-11-10T16:29:46+08:00`、`entrypoint=[/app/kestrel-studio]`、`kestrel-studio:latest Up`、`0.0.0.0:8848->8848/tcp` |
+| 启动日志 | `Bailian credentials resolved` / `expired sessions cleared=0` / `kestrel-studio listening on http://localhost:8848 client="wasm"` |
+| 档位 | `make deploy` 不带 `CLIENT_BUNDLE`，所以起先是默认的 `nest`；16:30 `CLIENT_BUNDLE=wasm docker compose up -d` 重拨，日志那行的 `client="wasm"` 是这件事的凭据 |
+| 有没有人掉线 | 没有：没换侧、`.env` 保持（脚本打 `keeping existing .env on host`），`expired sessions cleared=0` |
+
+端点面（宿主机内 `127.0.0.1:8848`）：`/login 200 909B`、`/assets/main.css 200 16747B`、
+`/assets/main.js 200 61954B`、`/capture.js 200 1687B`、`/wasm/kestrel_client_bg.wasm 200 391780B`、
+`/api/voice/ticket 405`（这条只收 POST，405 是对的）、`/admin 302`。公网经 openresty：
+`https://try.kestrel.justwork.link/admin` → `302 -> …/login`。
+
+**五个静态资源本机与宿主机 md5 逐个相同**（`main.css 09f01204…`、`main.js 8832a1ae…`、
+`kestrel_client_bg.wasm a30fe09c…`、`kestrel_client.js cb999e92…`、`capture.js 4c8d7616…`），
+所以「线上那份就是这台机今天建的那份」不靠推断。
+
+### 47.2 新渲染器确实随包上线了
+
+`crates/md` 编进了两处产物，两处的字面量都数得到：
+
+| 找什么 | 线上 wasm | 线上 SSR ELF | `HEAD~4` 的那份源码 |
+|---|---|---|---|
+| `<blockquote>` / `<hr>` / ` start="` | 4 处 | 4 处 | **各 0 处** |
+
+最后一列是这条判据的意义：这三个字面量在部署前的源码里一条都没有，所以它们在产物里出现
+只能是今天这次改动带上去的。
+
+### 47.3 线上那份 wasm 的函数级读数：16 条构造逐字节相同
+
+这次没有提交一条真消息（那要花钱、要写库、还要留一条测试会话）。改用一个不花钱也不写库的口子：
+`rust/client/src/wasm.rs` 把同一个渲染器以 `renderMarkdown` 导出了，所以可以在页面里直接调
+**线上那一份** wasm：
+
+```js
+const client = await import('/wasm/kestrel_client.js');
+await client.default();
+client.buildInfo();                       // → ["0.1.0", "release"]
+client.renderMarkdown('> 甲\n乙');         // → <blockquote>\n<p>甲\n乙</p>\n</blockquote>
+```
+
+16 条构造（引用块、lazy continuation、`---`、setext 一级与二级、嵌套列表、松散列表、
+`<ol start="2">`、marker 变更断表、空条目、`~~~` 围栏、图片、勾选框、引用式链接与定义行、
+四格缩进、条目内的围栏）逐条与 §46 钉住的期望串比字节：
+
+```
+total=16 pass=16 failures=[]
+```
+
+上限也在线上：`>`×100 → `cappedBlockquotes=32` 且余下的标记是 `&gt;`（`capOk=true`）。
+
+**这条验法的边界要说清**：它证明的是**渲染器本体在线上、行为与钉住的字节串相同**，
+它**绕过了消息管线**——所以「一条真实助手消息写引用块 → SSE 流式画出来 → 重载走 SSR 回放」
+这一整条路今天仍未在线上走过一次。要补的话，一次 `对话` 模式（零工具）的轮子就够，
+但那是花真钱写真数据的事，不在「部署」这两个字里。
+
+### 47.4 浏览器那一屏（真人登录态，`wasm` 档）
+
+| 页面 | 控制台 |
+|---|---|
+| `/`（会话页，7 轮，含一张图一段视频） | 1 条：那条已知的 lazy-image *issue*（`count=2`，§42.3 已把判据换成 `layout-shift`）；**0 error / 0 warning** |
+| `/voice` | 零条；`#voice-status`「按住按钮开始说话」、按钮在、无 `.client-error` |
+| `/admin` | 零条 |
+
+DOM 里 `.turn-assistant .content` 下的 `blockquote`、`hr`、`img`、`input` **全是 0** ——
+与 §46.5 那句「线上 40 条消息里这十三类全 0」是同一件事的两个说法，也说明这次改动今天
+不会改变任何人已经看到的东西。
+
+### 47.5 这一节没证的
+
+1. 见 §47.3 末：**真实消息走过消息管线**这一条没验；新构造的视觉效果（含那两条 CSS）没在浏览器里看过。
+2. Nest 那侧的四根钩子随 `main.js` 上了线，但第二套今天**不对外**（roadmap.md §4.5），
+   所以那份改动没有一帧真实流量经过——它是策略一致性，不是在线修复。
+3. `strings` 找字面量只能证明「这些串在包里」，不能证明某个分支被跑到；分支级的证据在 §47.3。
+4. 本次没有重跑 `make census-prod`（部署不写正文，§46.5 那次就是今天 15:5x 的读数）。
