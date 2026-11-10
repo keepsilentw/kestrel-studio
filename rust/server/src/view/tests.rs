@@ -378,6 +378,302 @@ fn the_table_rules_that_keep_prose_from_turning_into_a_table() {
     assert!(after.contains("<table>"), "{after}");
 }
 
+/// The block constructs the two online stacks disagreed about.
+///
+/// Measured construct by construct on 2026-11-09 (docs/verification.md §36.2) and closed on
+/// 2026-11-10 by moving them into the subset here, rather than by bending `marked` further
+/// away from what an answer looks like. Each shape below is the one `marked` produced,
+/// re-measured in the same run — the point of the exercise is that nobody has to remember
+/// which side was right.
+#[test]
+fn the_block_constructs_that_used_to_reach_users_as_text() {
+    // `~~~` fences. Before this the opening line fell through to the paragraph, where the
+    // strike pass paired `~~` and the code came out as `<del>~js console.log(1)</del>` —
+    // worse than unrendered, and it was the version on the wire.
+    assert_eq!(
+        markdown("~~~js\nconsole.log(1)\n~~~"),
+        "<pre><code class=\"language-js\">console.log(1)</code></pre>"
+    );
+    assert_eq!(
+        markdown("~~~\nplain\n~~~"),
+        "<pre><code>plain</code></pre>",
+        "a tilde fence with no info string carries no class, as `` ` `` does not either"
+    );
+    assert_eq!(
+        markdown("~~旧值~~"),
+        "<p><del>旧值</del></p>",
+        "two tildes are still strikethrough, not a fence"
+    );
+
+    // Blockquotes, nested the same way by recursion.
+    assert_eq!(
+        markdown("> 引用一行"),
+        "<blockquote>\n<p>引用一行</p>\n</blockquote>"
+    );
+    assert_eq!(
+        markdown("> 甲\n> 乙"),
+        "<blockquote>\n<p>甲\n乙</p>\n</blockquote>",
+        "quoted lines stay one soft-wrapped paragraph"
+    );
+    assert_eq!(
+        markdown("> > 甲"),
+        "<blockquote>\n<blockquote>\n<p>甲</p>\n</blockquote>\n</blockquote>"
+    );
+    assert_eq!(markdown(">"), "<blockquote></blockquote>");
+
+    // Thematic breaks, including the spaced form that also matches an item marker.
+    assert_eq!(markdown("---"), "<hr>");
+    assert_eq!(markdown("***"), "<hr>");
+    assert_eq!(markdown("___"), "<hr>");
+    assert_eq!(markdown("- - -"), "<hr>");
+
+    // Setext headings, and the rule about which of the two `---` readings wins.
+    assert_eq!(markdown("标题\n==="), "<h1>标题</h1>");
+    assert_eq!(markdown("标题\n---"), "<h2>标题</h2>");
+    assert_eq!(
+        markdown("文本\n- - -"),
+        "<p>文本</p>\n<hr>",
+        "a spaced rule under text is a rule, not a level-2 heading"
+    );
+    assert_eq!(
+        markdown("甲\n\n---\n\n乙"),
+        "<p>甲</p>\n<hr>\n<p>乙</p>",
+        "blank lines on both sides make it a rule again"
+    );
+
+    // Nested lists, emitted inside the preceding item rather than flattened beside it.
+    assert_eq!(
+        markdown("- 甲\n  - 乙\n- 丙"),
+        "<ul>\n<li>甲<ul>\n<li>乙</li>\n</ul>\n</li>\n<li>丙</li>\n</ul>"
+    );
+    assert_eq!(
+        markdown("1. 甲\n   1. 乙"),
+        "<ol>\n<li>甲<ol>\n<li>乙</li>\n</ol>\n</li>\n</ol>",
+        "ordered lists nest too, at a column of three because their marker is three wide"
+    );
+    assert_eq!(
+        markdown("- 甲\n- 乙"),
+        "<ul>\n<li>甲</li>\n<li>乙</li>\n</ul>",
+        "a flat list is unchanged by all of this"
+    );
+}
+
+/// What the subset still refuses, now refused **the same way on both stacks**.
+///
+/// These stay text on purpose; the fix was making `marked` agree, not adding them here.
+/// The reasoning per construct is in `crates/md/src/lib.rs` and docs/roadmap.md §4.1.1.
+#[test]
+fn what_the_subset_keeps_out_and_shows_as_source() {
+    // Images: assets come from the tool pipeline, and this used to collapse into a link
+    // with a stray `!` in front of it.
+    assert_eq!(
+        markdown("![红隼](https://example.test/a.png)"),
+        "<p>![红隼](https://example.test/a.png)</p>"
+    );
+    assert_eq!(
+        markdown("图 ![一张](https://example.test/a.png) 完"),
+        "<p>图 ![一张](https://example.test/a.png) 完</p>",
+        "and the prose around it survives"
+    );
+
+    // Task-list checkboxes: no form controls in assistant prose.
+    assert_eq!(
+        markdown("- [ ] 甲\n- [x] 乙"),
+        "<ul>\n<li>[ ] 甲</li>\n<li>[x] 乙</li>\n</ul>"
+    );
+
+    // Reference links, and footnotes, which arrive as a shortcut reference to a
+    // definition line. Both halves of the construct stay where they were typed.
+    assert_eq!(
+        markdown("有脚注[^1]。\n\n[^1]: 说明一行"),
+        "<p>有脚注[^1]。</p>\n<p>[^1]: 说明一行</p>"
+    );
+    assert_eq!(
+        markdown("见 [文档][ref]。\n\n[ref]: https://example.test/x?a=1&b=2"),
+        "<p>见 [文档][ref]。</p>\n<p>[ref]: https://example.test/x?a=1&amp;b=2</p>",
+        "escaped once, including inside a line that is not a link here"
+    );
+
+    // An inline link is still a link — the refusal above is about the reference forms.
+    assert_eq!(
+        markdown("[红隼](https://example.test?a=1&b=2)"),
+        "<p><a href=\"https://example.test?a=1&amp;b=2\">红隼</a></p>"
+    );
+}
+
+/// Marker spellings, lazy continuation, and the five list rules that only a widened sample
+/// set found. The sample set grew 19 → 72 across four rounds (docs/verification.md §46.2),
+/// and every round produced divergences the previous round could not have seen: this file is
+/// the reason those readings are pinned rather than described.
+#[test]
+fn the_marker_spellings_and_the_lazy_continuation_line() {
+    assert_eq!(markdown("+ 甲\n+ 乙"), "<ul>\n<li>甲</li>\n<li>乙</li>\n</ul>");
+    assert_eq!(markdown("1) 甲\n2) 乙"), "<ol>\n<li>甲</li>\n<li>乙</li>\n</ol>");
+    assert_eq!(
+        markdown("- 甲\n  + 乙"),
+        "<ul>\n<li>甲<ul>\n<li>乙</li>\n</ul>\n</li>\n</ul>",
+        "a different bullet character at a deeper column still nests"
+    );
+    assert_eq!(markdown("- 甲\n\n  继续一段\n\n- 乙"), {
+        // a loose list, with a second paragraph inside the first item
+        "<ul>\n<li><p>甲</p>\n<p>继续一段</p>\n</li>\n<li><p>乙</p>\n</li>\n</ul>"
+    });
+
+    // The line under a quoted paragraph belongs to the quote; a blank line closes it.
+    assert_eq!(
+        markdown("> 甲\n乙"),
+        "<blockquote>\n<p>甲\n乙</p>\n</blockquote>"
+    );
+    assert_eq!(
+        markdown("> 甲\n>\n> 乙"),
+        "<blockquote>\n<p>甲</p>\n<p>乙</p>\n</blockquote>",
+        "a bare `>` is a blank line inside the quote, not a continuation"
+    );
+    assert_eq!(
+        markdown("> 甲\n- 乙"),
+        "<blockquote>\n<p>甲</p>\n</blockquote>\n<ul>\n<li>乙</li>\n</ul>",
+        "a line that opens a block of its own is not lazy text"
+    );
+    // …and prose that needs no indent at all still continues a list item (CommonMark's rule,
+    // which `marked` follows): without this the list broke in half.
+    assert_eq!(markdown("- 甲\n后面一段"), "<ul>\n<li>甲\n后面一段</li>\n</ul>");
+}
+
+/// The list identity rules, each one taken from the same run of both engines over the same
+/// sample (docs/verification.md §46.2, rounds 3 and 4).
+#[test]
+fn the_list_identity_rules_the_samples_found() {
+    // A bullet character change ends the list; the number an ordered item carries does not.
+    assert_eq!(
+        markdown("* 甲\n- 乙"),
+        "<ul>\n<li>甲</li>\n</ul>\n<ul>\n<li>乙</li>\n</ul>",
+        "two lists, as marked makes them"
+    );
+    assert_eq!(
+        markdown("1. 甲\n2) 乙"),
+        "<ol>\n<li>甲</li>\n</ol>\n<ol start=\"2\">\n<li>乙</li>\n</ol>",
+        "the delimiter is part of a list's identity, the count is not"
+    );
+    assert_eq!(
+        markdown("1. 甲\n2. 乙\n3. 丙"),
+        "<ol>\n<li>甲</li>\n<li>乙</li>\n<li>丙</li>\n</ol>"
+    );
+
+    // `<ol start="N">` when the list does not open on 1 — dropping it would renumber an
+    // answer that is continuing somebody else's list.
+    assert_eq!(
+        markdown("2. 甲\n3. 乙"),
+        "<ol start=\"2\">\n<li>甲</li>\n<li>乙</li>\n</ol>"
+    );
+
+    // A lone marker is an empty item, not a paragraph about a dash.
+    assert_eq!(
+        markdown("甲\n\n-\n\n乙"),
+        "<p>甲</p>\n<ul>\n<li></li>\n</ul>\n<p>乙</p>"
+    );
+
+    // A gap between items loosens the whole list, including the items before the gap.
+    assert_eq!(
+        markdown("- 甲\n\n- 乙"),
+        "<ul>\n<li><p>甲</p>\n</li>\n<li><p>乙</p>\n</li>\n</ul>"
+    );
+    assert_eq!(
+        markdown("- 甲\n- 乙"),
+        "<ul>\n<li>甲</li>\n<li>乙</li>\n</ul>",
+        "no gap, no paragraphs"
+    );
+
+    // Content indented under a marker stays **inside** that item, including a fence — which
+    // is the shape an answer uses for a command per step.
+    assert_eq!(
+        markdown("- 步骤一\n  ```bash\n  npm i\n  ```\n- 步骤二"),
+        "<ul>\n<li>步骤一<pre><code class=\"language-bash\">npm i</code></pre>\n</li>\n<li>步骤二</li>\n</ul>"
+    );
+    assert_eq!(
+        markdown("- 甲\n  > 引用"),
+        "<ul>\n<li>甲<blockquote>\n<p>引用</p>\n</blockquote>\n</li>\n</ul>"
+    );
+    assert_eq!(
+        markdown("- 甲\n  # 标题"),
+        "<ul>\n<li>甲<h1>标题</h1>\n</li>\n</ul>",
+        "an indented ATX heading is still a heading, at any column this subset reaches"
+    );
+}
+
+/// Four columns of indentation is an indented code block to CommonMark. This subset has no
+/// such construct — a fenced block is the code shape this product uses — so an over-indented
+/// run is verbatim text, and `renderer.code` in `nest/server/src/common/markdown.ts` bends
+/// `marked` to the same rule (docs/verification.md §46.2, round 5).
+#[test]
+fn an_over_indented_run_is_text_not_a_code_block() {
+    assert_eq!(
+        markdown("段落\n\n    四格缩进的一行\n\n结束"),
+        "<p>段落</p>\n<p>四格缩进的一行</p>\n<p>结束</p>"
+    );
+    assert_eq!(markdown("    - 甲\n    - 乙"), "<p>- 甲\n- 乙</p>");
+    assert_eq!(
+        markdown("    ```js\n    let x = 1;\n    ```"),
+        "<p>```js\nlet x = 1;\n```</p>",
+        "and the run is escaped verbatim, not run through the inline pass — otherwise an \
+         over-indented fence becomes a paragraph of stray code spans"
+    );
+    assert_eq!(
+        markdown("\t一个制表符开头"),
+        "<p>一个制表符开头</p>",
+        "a tab is four columns, so it is the same case"
+    );
+    assert_eq!(
+        markdown("- 甲\n\n      更深六格"),
+        "<ul>\n<li><p>甲</p>\n<p>更深六格</p>\n</li>\n</ul>",
+        "inside an item the over-indent is dropped the same way"
+    );
+    assert_eq!(
+        markdown("   ```js\n   let x = 1;\n   ```"),
+        "<pre><code class=\"language-js\">let x = 1;</code></pre>",
+        "three columns is still a fence"
+    );
+}
+
+/// The nesting cap, and why a cap belongs in a renderer at all: this code runs inside the
+/// server's own process on text a model produced, and a model can be prompt-injected. Measured
+/// on the same build (docs/verification.md §46.6): uncapped, a line of 5,000 `>` aborted the
+/// process with a stack overflow — which kills every live SSE connection, not one request.
+/// `marked` on the same input throws a catchable `RangeError` between 3,000 and 5,000 levels.
+#[test]
+fn nesting_stops_at_thirty_two_levels() {
+    let source = format!("{} 深", ">".repeat(4_000));
+    let deep = markdown(&source);
+
+    assert_eq!(deep.matches("<blockquote>").count(), 32, "{deep}");
+    assert!(deep.contains("&gt;"), "the markers past the cap stay the text they were typed as");
+
+    let lines: String =
+        (1..=400usize).map(|level| format!("{}- 层{level}\n", " ".repeat(level * 2))).collect();
+    let lists = markdown(&lines);
+
+    assert!(lists.matches("<ul>").count() <= 33, "{}", lists.matches("<ul>").count());
+    assert_eq!(lists.matches("<li>").count(), 400, "the work stays linear once nesting stops");
+}
+
+/// The document that closes the gap, pinned in **three** places: here,
+/// `nest/server/__tests__/common/markdown.test.ts` and
+/// `nest/client/__tests__/markdown.test.ts`. One string, three renderers, so a change to
+/// any of the three shows up as a failure somewhere rather than as two pages that disagree
+/// in production (docs/verification.md §46 is the reading that made this worth pinning).
+#[test]
+fn one_document_renders_identically_through_both_stacks() {
+    let source = "![隼](https://example.test/a.png)\n\n> 引用一行\n\n- 甲\n  - 乙\n\n文本 **粗** [文档][ref]\n\n[ref]: https://example.test/x?a=1&b=2";
+
+    assert_eq!(
+        markdown(source),
+        "<p>![隼](https://example.test/a.png)</p>\n\
+         <blockquote>\n<p>引用一行</p>\n</blockquote>\n\
+         <ul>\n<li>甲<ul>\n<li>乙</li>\n</ul>\n</li>\n</ul>\n\
+         <p>文本 <strong>粗</strong> [文档][ref]</p>\n\
+         <p>[ref]: https://example.test/x?a=1&amp;b=2</p>"
+    );
+}
+
 /// The ids the WASM voice page looks up, read out of **its own source** — the
 /// same device [`required_ids`] uses for the chat page and `nest/client/scripts/main.ts`.
 /// A shell that stops carrying one is a hard failure in the browser, so it has to
