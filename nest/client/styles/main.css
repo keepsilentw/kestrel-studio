@@ -261,6 +261,25 @@ body {
   white-space: pre-wrap;
 }
 
+/* The block constructs that moved into the markdown subset on 2026-11-10
+   (crates/md, docs/verification.md §46). Before this they could only be produced by the
+   Nest stack; now both stacks can, and the user-agent defaults — a 40px quote indent and a
+   full-width inset rule — are not the two-colour system this page uses. Both stacks render
+   through the same stylesheet, so one rule per element covers SSR replay, the live stream
+   and /admin. */
+.turn-assistant .content blockquote {
+  margin: 10px 0;
+  padding-left: 12px;
+  border-left: 2px solid var(--border);
+  color: var(--muted);
+}
+
+.turn-assistant .content hr {
+  margin: 18px 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+}
+
 .turn-assistant .content p:first-child {
   margin-top: 0;
 }
