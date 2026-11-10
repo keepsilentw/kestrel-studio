@@ -2945,8 +2945,8 @@ wasm 客户端），所以那五条今天的实际表现是「内容能写、页
 
 方法照 §36.4：`rustc` 把 `crates/md/src/lib.rs` 按绝对路径编进一个驱动（**不在 `crates/md/` 里跑
 cargo**，免得落一份没人跟踪的 lock，implementation-notes.md §18），Nest 侧把
-`nest/server/src/common/markdown.ts` 用 `tsc` 出来 `require`（`NODE_PATH` 指到
-`nest/server/node_modules`），比的是同一份 corpus 过两个引擎后的**结构签名**。比较器照 §36.1，
+`nest/server/src/common/markdown.ts` 用 `tsc` 编成 CJS 再取它的 `renderMarkdown`，
+比的是同一份 corpus 过两个引擎后的**结构签名**。比较器照 §36.1，
 本次**没有**加实体归一——Nest 侧那个 `escapeHtml` 改成与 `escape()` 同一套五个字符之后，
 引号的拼写差异就是真分歧，不该被抹掉。80 条样本全手造，不含生产正文——这一点与 §36.4 那轮不同
 （那轮脚手架里有生产消息，所以跑完即删）。
@@ -2956,6 +2956,11 @@ cargo**，免得落一份没人跟踪的 lock，implementation-notes.md §18）�
 形状**：三处逐字断言（本节末）+ census 那六行哨兵，比一份跨语言双跑脚本更不会被下一个人跳过。
 `~/tmp` 不是归档位置——下次要复算，按上面三步现搭一份同样的语料；本节那些形状名
 （`loose_nested`、`indented_fence_four_space`、`deep_quote_20` 这一类）就是搭它用的清单。
+
+**复搭时会踩的一颗小石子**（本次实测到的，不是推测）：入口脚本是 ESM，而 **ESM 不认 `NODE_PATH`**——
+§38.4 那句「`NODE_PATH` 指到 `nest/server/node_modules`」只对 `require` 那条路成立。这次是把
+`nest/server/node_modules/marked` 软链到脚手架自己的 `node_modules/marked` 下才跑得起来的
+（`marked` 自身没有依赖，所以一条 `ln -s` 就够；换成有依赖的包这一条不适用）。
 
 每一轮的读数（`分歧` 那一列就是下一轮要修的东西）：
 
