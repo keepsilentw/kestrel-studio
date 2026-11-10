@@ -920,6 +920,44 @@ WebSocket 的 upgrade 不经过 Express，所以 `AuthenticatedGuard` 对它无�
 这一项原本是两套之间的一处安全策略分歧，逐构造读数与那条被推翻的修法都在
 [verification.md](verification.md) §38。
 
+**2026-11-10：连那句「只是子集范围」也关掉了。子集现在是两套的共同口径，不是 Rust 一侧的偏好**，
+于是每一条分歧只有两个去处——内容需要它就补进子集，产品不要它就在 marked 上退回文字：
+
+| 方向 | 构造 | 落点 |
+|---|---|---|
+| **进子集**（Rust 侧改，两套同形） | `~~~` 围栏、引用块（含它的 lazy continuation 那一行）、分隔线、setext 标题、**列表整套身份规则**：缩进嵌套、`+` 与 `1)` 两种 marker、marker 一变就断表、`<ol start="N">`、空条目、松散列表（条目之间一个空行则每项套 `<p>`）、条目内部缩进的段落与块（围栏 / 引用块 / 标题算这一条目的）、缩进不超过 3 列的 ATX 标题 | `crates/md/src/lib.rs`：`fence_marker` / `quote_block` / `is_thematic_break` / `setext_level` / `item_mark` + `same_list` + `render_list`（`Block` 那一层）/ `indented_block`。缺的那一侧正是**线上在跑的这一侧**，所以此前它们是「内容能写、页面显示成文字」；`~~~js` 更糟，行内那条 `~~` 把它渲染成 `<del>~js …</del>`（implementation-notes.md §35 第三条）。**这些规则一条都不是设计出来的**，是 verification.md §46.2 那六轮样本一轮一轮量出来的 |
+| **退回文字**（Nest 侧改） | 图片、任务列表勾选框、引用式链接与 `[label]: url` 定义行（脚注按引用链接同一条路） | `nest/server/src/common/markdown.ts` 与浏览器那份手抄副本的 `use({...})`：`renderer.image` / `renderer.checkbox` 两根，加 `hooks.processAllTokens` 把 `def` 换成段落——`def` 没有对应的 renderer 方法，这一条**在 renderer 层没有对象可渲染** |
+| 同上，第二条 | **四格缩进（或制表符）的缩进代码块** | 同一根 `use({...})` 上的 `renderer.code`：判据只能是 `token.raw`（`token.lang` 在「无 info 的围栏」那一支同样是 `undefined`，分不开），返回的串必须自带结尾换行，否则下一块粘成 `</p><p>` |
+
+**缩进代码这一式为什么在子集外面**：围栏才是这个产品的代码形状（§4.4 那批工具与提示词都按围栏写），
+而「四格缩进」在正文里更常是缩进排版的散文——把它渲染成灰底代码框是误导。两边同判据：
+缩进 ≥4 列的连续行是一段**转义文字**，且**不过行内那一遍**（否则一行缩进的 ```` ``` ```` 会变成
+一串乱码 code span，这条是量出来的，见 verification.md §46.2 第 6 轮）。
+
+理由不是能力：资产由工具管线与 `assets` 表给（roadmap.md §4.1.1 当初就写了这句），正文不是表单，
+引用式链接要文档级一遍。判据也换了形状——**同一条输入、三处钉同一段输出**：
+`rust/server/src/view/tests.rs`（`one_document_renders_identically_through_both_stacks`）、
+`nest/server/__tests__/common/markdown.test.ts`、`nest/client/__tests__/markdown.test.ts`。
+36 条起步、最后 80 条构造样本双跑的结构读数（每一轮量出什么见 verification.md §46.2 那张表）、
+六根钩子的取舍、以及「marked 18 其实没有脚注实现」那条纠正，
+都在 [verification.md](verification.md) §46；哨兵 `scripts/markdown-census.sql` 的标签随之改成
+「已支持」，要报警的只剩五类（原始 HTML、图片、任务列表、引用式链接、四格缩进行），
+线上今天五类全 0。
+
+**仍未归一的只剩一条，而且是刻意的**：子集那四条与 CommonMark 的边界差异（§16），
+加上引用块不支持 lazy continuation（`> 甲` 后面跟一行不带 `>` 的文字会结束引用块）。
+两套现在在这一点上行为相同，所以它是**口径**而不是漂移。
+
+**2026-11-10 更正上面这段的两处**：引用块的 lazy continuation 已经**进了子集**（`quote_block` 那条
+`open_paragraph` 分支），所以它不再是边界差异；剩下那条是表格的四条刻意差异（§16）。同一日新增一条
+**不是口径而是安全件**的边界：`crates/md` 的嵌套深度上限是 32 层（`MAX_NESTING`），到顶之后引用标记
+按文字显示、列表不再往下套。理由是两套的崩法不对称——收了嵌套列表与块内块之后这里是真递归，
+而 `crates/md` 跑在服务端自己的进程里，栈溢出是**进程终止**（带走所有在连的 SSE），
+`marked` 抛的 `RangeError` 只是可捕获的请求失败。Nest 侧因此把 `renderMarkdown` 包进 try/catch，
+抛出退成整段转义文字。崩点实测定在「Rust 5,000 层终止 / marked 3,000 层过、5,000 层抛」，
+32 这个数因此**远高于线上见过的深度（引用块 0 条）而远低于两边的崩点**；
+「33 到 ~3,000 层」那一段两侧形状不同，是写下来的边界。逐条见 verification.md §46.7。
+
 2026-11-02 又把历史下拉的行类型 `ConversationSummary` 从 `rust/server/src/conversation/repo.rs` 搬了过来（server 侧改成再导出），因为 WASM 客户端的 `refresh_history` 现在要解析它——同一条规矩：改字段名在消费方编译失败。注意它是**蛇形**（`updated_at`），因为这个端点从来就这么答，模块里那套 camelCase 只属于日志 payload。
 
 `rust/server/src/voice/protocol.rs` 仍在，内容只剩再导出与**线名测试**——测试钉的是 JSON 上的

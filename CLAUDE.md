@@ -331,6 +331,24 @@ Vite 只做打包，产物固定为 `public/assets/main.js` / `main.css`（由 `
 - 图片/视频二进制不入库，只存元数据 + 磁盘路径（`storage/`）。落盘文件名是随机串、扩展名按 kind 白名单兜底（不信任 URL），provider 的 URL 从不外泄（会过期）。
 - **`assets.file_path` 存的是文件名，不是路径**，读取时由 `nest/server/src/media/asset-path.ts` 的 `resolveAssetPath()` 按当前 `STORAGE_DIR` 展开（旧行的绝对路径若还在原处仍兼容）。写库时用 `storedAssetName()`。**不要把绝对路径塞进数据**：项目搬一次目录，历史资产就会对属主也 404，见 `docs/implementation-notes.md` §7。
 - 正文字段的 markdown 是**服务端用 `marked` 渲染**成 HTML 交给模板三花括号输出的，客户端在每个 `text` delta 上增量重渲染；`reasoning` 按纯文本追加，不解析。
+  **但口径不是 `marked` 的口径**：`crates/md` 那个子集是两套在线实现共同的契约（2026-11-10 定，
+  `docs/architecture.md` §13.4 末段与 `docs/verification.md` §46）。所以 Nest 侧所有 markdown 出口都走
+  `nest/server/src/common/markdown.ts`（SSR 的 `view/render.ts` 与 `main.ts` 那两处流式/回放都从它取），
+  浏览器侧那份是手抄副本，改一处必须同批改另一处。**子集之外一律退回文字**：原始 HTML、图片、
+  任务列表勾选框、引用式链接与它的 `[label]: url` 定义行、**四格缩进的缩进代码块**（围栏才是这个产品的
+  代码形状；缩进 ≥4 列的一段是转义文字，且**不过行内那一遍**）。
+- 想关掉一个 marked 特性时别去试 `tokenizers.*`——返回 `false` 只是回落到内置实现，关不掉。能用的层只有
+  `renderer.*` 与 `hooks.processAllTokens`（`def` 那种「没有 renderer 方法的 token」只能走后者）。
+  `renderer.*` 返回的串**要自己带结尾换行**——marked 的块间分隔就来自它，少了会粘成 `</p><p>`。
+  六根钩子的逐条取舍在 `implementation-notes.md` §35 与 `docs/verification.md` §46.3。
+- **这里是真递归，而输入是模型写的**：`crates/md` 的嵌套上限是 `MAX_NESTING = 32`（到顶按文字显示），
+  Nest 侧 `renderMarkdown` 包了 try/catch（抛出退成整段转义文字）。两边必须都有，因为崩法不对称——
+  栈溢出在这台单进程机上是**进程终止**，会带走所有在连的 SSE；`marked` 抛的 `RangeError` 只是一个请求。
+  崩点读数在 §46.7。
+- 判据是同一条输入在三处钉同一段输出：`rust/server/src/view/tests.rs`、
+  `nest/server/__tests__/common/markdown.test.ts`、`nest/client/__tests__/markdown.test.ts`。
+  改任何一侧的渲染策略都会在那里红；两套的构造层对照（80 条样本）用 `~/tmp/md-parity/` 那套脚手架重跑，
+  方法写在 §46.2。
 
 ## 配置
 
