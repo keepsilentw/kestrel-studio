@@ -303,8 +303,7 @@ mod tests {
                 base_url: "https://bailian.test".to_string(),
                 chat_model: "chat-model".to_string(),
                 reasoning_effort: crate::config::ReasoningEffort::High,
-                video_model_t2v: "t2v".to_string(),
-                video_model_i2v: "i2v".to_string(),
+                video_model: "video".to_string(),
                 voice_model: "voice".to_string(),
             },
         }

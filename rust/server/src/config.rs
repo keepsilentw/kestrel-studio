@@ -4,8 +4,7 @@ use url::Url;
 
 const DEFAULT_BASE_URL: &str = "https://token-plan.cn-beijing.maas.aliyuncs.com";
 const DEFAULT_CHAT_MODEL: &str = "deepseek-v4.1-flash";
-const DEFAULT_T2V_MODEL: &str = "happyhorse-1.1-t2v";
-const DEFAULT_I2V_MODEL: &str = "happyhorse-1.1-i2v";
+const DEFAULT_VIDEO_MODEL: &str = "wan3.0-video";
 const DEFAULT_VOICE_MODEL: &str = "qwen-audio-3.0-realtime-plus";
 const DEFAULT_PUBLIC_BASE_URL: &str = "https://try.kestrel.justwork.link";
 const DEFAULT_REASONING_EFFORT: ReasoningEffort = ReasoningEffort::High;
@@ -44,8 +43,10 @@ pub struct BailianConfig {
     pub base_url: String,
     pub chat_model: String,
     pub reasoning_effort: ReasoningEffort,
-    pub video_model_t2v: String,
-    pub video_model_i2v: String,
+    /// One model covers both text-to-video and image-to-video: the render is
+    /// image-to-video only when the request carries a `first_frame` media item,
+    /// so there is nothing to pick between here.
+    pub video_model: String,
     /// The realtime speech model behind /voice.
     pub voice_model: String,
 }
@@ -203,10 +204,8 @@ impl AppConfig {
                 chat_model: read_env("BAILIAN_CHAT_MODEL")
                     .unwrap_or_else(|| DEFAULT_CHAT_MODEL.to_string()),
                 reasoning_effort: read_reasoning_effort(),
-                video_model_t2v: read_env("BAILIAN_VIDEO_MODEL_T2V")
-                    .unwrap_or_else(|| DEFAULT_T2V_MODEL.to_string()),
-                video_model_i2v: read_env("BAILIAN_VIDEO_MODEL_I2V")
-                    .unwrap_or_else(|| DEFAULT_I2V_MODEL.to_string()),
+                video_model: read_env("BAILIAN_VIDEO_MODEL")
+                    .unwrap_or_else(|| DEFAULT_VIDEO_MODEL.to_string()),
                 voice_model: read_env("BAILIAN_VOICE_MODEL")
                     .unwrap_or_else(|| DEFAULT_VOICE_MODEL.to_string()),
             },
@@ -265,8 +264,7 @@ impl AppConfig {
                 base_url: "https://bailian.invalid".to_string(),
                 chat_model: "chat-model".to_string(),
                 reasoning_effort: ReasoningEffort::High,
-                video_model_t2v: "t2v-model".to_string(),
-                video_model_i2v: "i2v-model".to_string(),
+                video_model: "video-model".to_string(),
                 voice_model: "voice-model".to_string(),
             },
         }

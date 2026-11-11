@@ -163,7 +163,7 @@ async fn pending_tasks_and_the_catch_up_cursor_are_painted() {
             message_id: Some(message_id),
             kind: TaskKind::Video,
             provider_task_id: "provider-1".to_string(),
-            model: "t2v-model".to_string(),
+            model: "video-model".to_string(),
             prompt: "红隼俯冲".to_string(),
             params: json!({ "duration": 5 }),
         })

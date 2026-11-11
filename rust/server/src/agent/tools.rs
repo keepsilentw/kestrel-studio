@@ -18,10 +18,11 @@ use super::mode::{Mode, ModePrompt};
 /// back to the model as a tool result it can react to.
 const TOOL_TIMEOUT: Duration = Duration::from_secs(120);
 
-const DEFAULT_VIDEO_SIZE: &str = "1280*720";
+const DEFAULT_VIDEO_RESOLUTION: &str = "720P";
+const DEFAULT_VIDEO_RATIO: &str = "16:9";
 const DEFAULT_VIDEO_DURATION: i64 = 5;
-const MIN_VIDEO_DURATION: i64 = 1;
-const MAX_VIDEO_DURATION: i64 = 10;
+const MIN_VIDEO_DURATION: i64 = 2;
+const MAX_VIDEO_DURATION: i64 = 30;
 
 /// Text handed back to the model as a tool result, with the ids of any assets it
 /// just produced appended.
@@ -82,11 +83,11 @@ fn generate_image_spec() -> FunctionTool {
                 },
                 "size": {
                     "type": "string",
-                    "description": "Output size such as 1024*1024. Defaults to 1024*1024."
+                    "description": "Output size as width*height, such as 1024*1024. Pixel area must stay within 512*512..2048*2048. Omit to let the model pick a resolution."
                 },
                 "count": {
                     "type": "integer",
-                    "description": "How many images to generate, 1 to 4. Defaults to 1."
+                    "description": "How many images to generate, 1 to 6. Defaults to 1."
                 }
             },
             "required": ["prompt"],
@@ -106,9 +107,15 @@ fn generate_video_spec() -> FunctionTool {
                     "type": "string",
                     "description": "What should happen in the video: subject, action, camera movement, lighting, mood. Write it in the same language as the user request."
                 },
-                "size": {
+                "resolution": {
                     "type": "string",
-                    "description": "Output size such as 1280*720. Defaults to 1280*720."
+                    "enum": ["1080P", "720P", "480P"],
+                    "description": format!("Resolution tier of the output video. Defaults to {DEFAULT_VIDEO_RESOLUTION}.")
+                },
+                "ratio": {
+                    "type": "string",
+                    "enum": ["adaptive", "21:9", "16:9", "4:3", "1:1", "3:4", "9:16"],
+                    "description": format!("Aspect ratio of the output video. Defaults to {DEFAULT_VIDEO_RATIO}.")
                 },
                 "duration": {
                     "type": "integer",
@@ -228,7 +235,7 @@ async fn generate_image(
         return ToolOutcome::failure("prompt is required.");
     }
     let size = read_string(args, "size", "1024*1024");
-    let count = clamp(read_number(args, "count", 1.0), 1, 4) as u32;
+    let count = clamp(read_number(args, "count", 1.0), 1, 6) as u32;
 
     let urls = match state
         .media
@@ -267,7 +274,8 @@ async fn generate_video(
     if prompt.is_empty() {
         return ToolOutcome::failure("prompt is required.");
     }
-    let size = read_string(args, "size", DEFAULT_VIDEO_SIZE);
+    let resolution = read_string(args, "resolution", DEFAULT_VIDEO_RESOLUTION);
+    let ratio = read_string(args, "ratio", DEFAULT_VIDEO_RATIO);
     let duration = clamp(
         read_number(args, "duration", DEFAULT_VIDEO_DURATION as f64),
         MIN_VIDEO_DURATION,
@@ -300,7 +308,9 @@ async fn generate_video(
     }
 
     let bailian = &state.config.bailian;
-    let model = if first_frame.is_none() { bailian.video_model_t2v.clone() } else { bailian.video_model_i2v.clone() };
+    // Text-to-video and image-to-video are the same model: which one this is
+    // depends only on whether a first frame is attached below.
+    let model = bailian.video_model.clone();
     let frame_url = first_frame
         .as_ref()
         .map(|(id, _path)| build_signed_frame_url(&state.config, *id, chrono::Utc::now().timestamp_millis()));
@@ -311,7 +321,8 @@ async fn generate_video(
             api_key,
             &prompt,
             &model,
-            &size,
+            &resolution,
+            &ratio,
             duration as u32,
             frame_url.as_deref(),
         )
@@ -331,7 +342,8 @@ async fn generate_video(
             model: model.clone(),
             prompt: prompt.clone(),
             params: json!({
-                "size": size,
+                "resolution": resolution,
+                "ratio": ratio,
                 "duration": duration,
                 "firstFrameAssetId": first_frame.as_ref().map(|(id, _)| *id),
             }),
@@ -348,7 +360,7 @@ async fn generate_video(
     };
 
     ToolOutcome::success(format!(
-        "Video task {task_id} submitted with {model} at {size}, {duration}s{frame_note}. The render takes a few minutes and the result is pushed to the page automatically. Tell the user the task is under way; do not submit it again."
+        "Video task {task_id} submitted with {model} at {resolution} {ratio}, {duration}s{frame_note}. The render takes a few minutes and the result is pushed to the page automatically. Tell the user the task is under way; do not submit it again."
     ))
 }
 
@@ -442,7 +454,14 @@ mod tests {
         assert!(video.parameters["properties"]["duration"]["description"]
             .as_str()
             .expect("description")
-            .contains("1 to 10"));
+            .contains("2 to 30"));
+        // The tiers are an enum, not free text: a made-up size string used to reach
+        // the provider as a 400 minutes later.
+        assert_eq!(
+            video.parameters["properties"]["resolution"]["enum"],
+            json!(["1080P", "720P", "480P"])
+        );
+        assert!(video.parameters["properties"].get("ratio").is_some());
         assert!(video.parameters["properties"].get("first_frame_asset_id").is_some());
 
         let task = specs.iter().find(|spec| spec.name == "get_video_task").expect("spec");
@@ -544,9 +563,9 @@ mod tests {
                 message_id: Some(2),
                 kind: TaskKind::Video,
                 provider_task_id: "p-1".to_string(),
-                model: "t2v-model".to_string(),
+                model: "video-model".to_string(),
                 prompt: "红隼俯冲".to_string(),
-                params: json!({ "size": "1280*720" }),
+                params: json!({ "resolution": "720P", "ratio": "16:9" }),
             })
             .await
             .expect("task");

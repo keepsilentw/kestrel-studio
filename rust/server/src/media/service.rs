@@ -8,8 +8,8 @@ use crate::task::TaskKind;
 
 use super::StoredAsset;
 
-pub const DEFAULT_IMAGE_MODEL: &str = "wan2.7-image";
-const IMAGE_MODELS: [&str; 2] = ["wan2.7-image", "wan2.7-image-pro"];
+pub const DEFAULT_IMAGE_MODEL: &str = "qwen-image-3.0-pro";
+const IMAGE_MODELS: [&str; 1] = ["qwen-image-3.0-pro"];
 
 const MIME_BY_EXTENSION: [(&str, &str); 7] = [
     (".png", "image/png"),
@@ -151,7 +151,8 @@ impl MediaService {
         api_key: &str,
         prompt: &str,
         model: &str,
-        size: &str,
+        resolution: &str,
+        ratio: &str,
         duration: u32,
         first_frame_url: Option<&str>,
     ) -> Result<String, AppError> {
@@ -161,14 +162,16 @@ impl MediaService {
         );
         let mut input = serde_json::json!({ "prompt": prompt });
         if let Some(frame) = first_frame_url {
-            // Image-to-video: the provider fetches this itself, so it has to be the
-            // signed, publicly reachable frame URL, not a localhost path.
+            // The media item is what turns the single video model into an
+            // image-to-video render. The provider fetches the frame itself, so it
+            // has to be the signed, publicly reachable frame URL, not a localhost
+            // path.
             input["media"] = serde_json::json!([{ "type": "first_frame", "url": frame }]);
         }
         let body = serde_json::json!({
             "model": model,
             "input": input,
-            "parameters": { "size": size, "duration": duration },
+            "parameters": { "resolution": resolution, "ratio": ratio, "duration": duration },
         });
 
         // Without this header the endpoint runs synchronously and the request would
@@ -415,12 +418,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn only_the_two_shipped_image_models_are_accepted() {
-        assert!(assert_image_model("wan2.7-image").is_ok());
-        assert!(assert_image_model("wan2.7-image-pro").is_ok());
+    fn only_the_shipped_image_model_is_accepted() {
+        assert!(assert_image_model("qwen-image-3.0-pro").is_ok());
         let error = assert_image_model("nope").expect_err("rejected");
         assert!(error.contains("Unsupported image model \"nope\""), "{error}");
-        assert!(error.contains("wan2.7-image-pro"), "the message lists what works");
+        assert!(error.contains("qwen-image-3.0-pro"), "the message lists what works");
     }
 
     #[test]

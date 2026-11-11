@@ -1279,7 +1279,7 @@ mod tests {
             .expect("lookup")
             .is_some());
 
-        // i2v looks the frame up scoped to one conversation.
+        // The first-frame lookup is scoped to one conversation.
         assert!(service.image_asset_in(10, asset_id).await.expect("scoped").is_some());
         assert!(service.image_asset_in(20, asset_id).await.expect("other conversation").is_none());
         // The signed frame endpoint is unscoped by design.

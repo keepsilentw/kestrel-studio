@@ -16,7 +16,7 @@ pub struct NewTask {
     pub provider_task_id: String,
     pub model: String,
     pub prompt: String,
-    /// Provider parameters (size, duration, ...), stored as JSON.
+    /// Provider parameters (size, resolution, ratio, duration, ...), stored as JSON.
     pub params: Value,
 }
 
@@ -308,9 +308,9 @@ mod tests {
             message_id: Some(7),
             kind: TaskKind::Video,
             provider_task_id: "provider-1".to_string(),
-            model: "happyhorse-1.1-t2v".to_string(),
+            model: "wan3.0-video".to_string(),
             prompt: "一只红隼俯冲".to_string(),
-            params: serde_json::json!({ "size": "1280*720", "duration": 5 }),
+            params: serde_json::json!({ "resolution": "720P", "ratio": "16:9", "duration": 5 }),
         }
     }
 
@@ -348,7 +348,7 @@ mod tests {
         assert_eq!(one.status, TaskStatus::Queued);
         assert_eq!(one.attempts, 0);
         assert_eq!(one.message_id, Some(7));
-        assert!(one.params.expect("params").contains("1280*720"));
+        assert!(one.params.expect("params").contains("720P"));
 
         // A restart reads the same rows back: the queue lives in the database.
         let restarted = TaskService::new(pool.clone(), Arc::new(EventLog::new(pool.clone())));
