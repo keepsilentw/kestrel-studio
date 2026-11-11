@@ -441,7 +441,7 @@ kestrel-studio/
 | `BAILIAN_API_KEY` | 可选，未设时回退读 cc-switch 库 |
 | `BAILIAN_BASE_URL` | 默认 Token Plan 端点 |
 | `BAILIAN_CHAT_MODEL` / `BAILIAN_REASONING_EFFORT` | 文本轮次的模型与思考档位 |
-| `BAILIAN_VIDEO_MODEL_T2V` / `_I2V` | 文生视频 / 图生视频模型 |
+| `BAILIAN_VIDEO_MODEL` | 视频模型，文生视频与图生视频共用（`wan3.0-video`，按 `input.media` 有无首帧分流） |
 | `BAILIAN_VOICE_MODEL` | `/voice` 的实时语音模型。WS 地址由 `BAILIAN_BASE_URL` 换协议头得来（见 §11.1） |
 | `PUBLIC_BASE_URL` | 图生视频交给供应商取首帧的公网前缀；签名帧 URL 由 `common/signed-url.ts` 拼出 |
 | `DATABASE_FILE` | 默认 `data/kestrel-studio.db` |

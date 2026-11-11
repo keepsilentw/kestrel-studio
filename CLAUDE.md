@@ -374,7 +374,7 @@ provider 工厂在此之前就已经直接调 `loadConfig()` 了。`nest/server/
 | `BAILIAN_BASE_URL` | Token Plan 端点 | |
 | `BAILIAN_CHAT_MODEL` | `deepseek-v4.1-flash` | |
 | `BAILIAN_REASONING_EFFORT` | `high` | 取值 `minimal\|low\|medium\|high`，见下方「容易踩的坑」 |
-| `BAILIAN_VIDEO_MODEL_T2V` / `_I2V` | `happyhorse-1.1-t2v` / `-i2v` | |
+| `BAILIAN_VIDEO_MODEL` | `wan3.0-video` | 文生视频与图生视频同一个模型，靠 `input.media` 里有无 `first_frame` 分流 |
 | `BAILIAN_VOICE_MODEL` | `qwen-audio-3.0-realtime-plus` | `/voice` 的实时语音模型；`/api-ws/v1/realtime` 的地址由 `BAILIAN_BASE_URL` 换协议头得来 |
 
 ## 容易踩的坑
