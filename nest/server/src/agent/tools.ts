@@ -50,10 +50,15 @@ export interface AgentTool {
  */
 const TOOL_TIMEOUT_MS = 120_000;
 
-const DEFAULT_VIDEO_SIZE = '1280*720';
+const DEFAULT_VIDEO_RESOLUTION = '720P';
+const DEFAULT_VIDEO_RATIO = '16:9';
 const DEFAULT_VIDEO_DURATION = 5;
-const MIN_VIDEO_DURATION = 1;
-const MAX_VIDEO_DURATION = 10;
+const MIN_VIDEO_DURATION = 2;
+const MAX_VIDEO_DURATION = 30;
+
+const VIDEO_RESOLUTIONS = ['480P', '720P', '1080P'] as const;
+const VIDEO_RATIOS = ['adaptive', '21:9', '16:9', '4:3', '1:1', '3:4', '9:16'] as const;
+const IMAGE_COUNT_MAX = 6;
 
 const GENERATE_IMAGE_SPEC: ResponsesFunctionTool = {
   type: 'function',
@@ -72,11 +77,13 @@ const GENERATE_IMAGE_SPEC: ResponsesFunctionTool = {
       },
       size: {
         type: 'string',
-        description: 'Output size such as 1024*1024. Defaults to 1024*1024.',
+        description:
+          'Output size as width*height, e.g. 1024*1024. Pixel area must stay within 512*512..2048*2048. ' +
+          'Omit to let the model pick a resolution.',
       },
       count: {
         type: 'integer',
-        description: 'How many images to generate, 1 to 4. Defaults to 1.',
+        description: `How many images to generate, 1 to ${IMAGE_COUNT_MAX}. Defaults to 1.`,
       },
     },
     required: ['prompt'],
@@ -100,9 +107,17 @@ const GENERATE_VIDEO_SPEC: ResponsesFunctionTool = {
           'What should happen in the video: subject, action, camera movement, lighting, mood. ' +
           'Write it in the same language as the user request.',
       },
-      size: {
+      resolution: {
         type: 'string',
-        description: 'Output size such as 1280*720. Defaults to 1280*720.',
+        enum: [...VIDEO_RESOLUTIONS],
+        description: `Resolution tier. Defaults to ${DEFAULT_VIDEO_RESOLUTION}.`,
+      },
+      ratio: {
+        type: 'string',
+        enum: [...VIDEO_RATIOS],
+        description:
+          `Aspect ratio. Use "adaptive" to follow the first frame when animating an image. ` +
+          `Defaults to ${DEFAULT_VIDEO_RATIO}.`,
       },
       duration: {
         type: 'integer',
@@ -156,7 +171,7 @@ function createGenerateImageTool(media: MediaService): AgentTool {
         return { ok: false, output: 'prompt is required.', assets: [] };
       }
       const size = readString(args, 'size', '1024*1024');
-      const count = clamp(readNumber(args, 'count', 1), 1, 4);
+      const count = clamp(readNumber(args, 'count', 1), 1, IMAGE_COUNT_MAX);
 
       const urls = await media.generateImages({
         prompt,
@@ -196,7 +211,8 @@ function createGenerateVideoTool(
         return { ok: false, output: 'prompt is required.', assets: [] };
       }
 
-      const size = readString(args, 'size', DEFAULT_VIDEO_SIZE);
+      const resolution = readString(args, 'resolution', DEFAULT_VIDEO_RESOLUTION);
+      const ratio = readString(args, 'ratio', DEFAULT_VIDEO_RATIO);
       const duration = clamp(
         readNumber(args, 'duration', DEFAULT_VIDEO_DURATION),
         MIN_VIDEO_DURATION,
@@ -230,12 +246,14 @@ function createGenerateVideoTool(
       }
 
       const { bailian } = loadConfig();
-      const model = firstFrame === null ? bailian.videoModelT2v : bailian.videoModelI2v;
+      // One model for both modes: it branches on the presence of a first frame.
+      const model = bailian.videoModel;
 
       const providerTaskId = await media.submitVideo({
         prompt,
         model,
-        size,
+        resolution,
+        ratio,
         duration,
         ...(firstFrame !== null ? { firstFrameUrl: buildSignedFrameUrl(firstFrame.id) } : {}),
       });
@@ -247,7 +265,7 @@ function createGenerateVideoTool(
         providerTaskId,
         model,
         prompt,
-        params: { size, duration, firstFrameAssetId: firstFrame?.id ?? null },
+        params: { resolution, ratio, duration, firstFrameAssetId: firstFrame?.id ?? null },
       });
 
       const frameNote =
@@ -256,7 +274,7 @@ function createGenerateVideoTool(
       return {
         ok: true,
         output:
-          `Video task ${taskId} submitted with ${model} at ${size}, ${duration}s${frameNote}. ` +
+          `Video task ${taskId} submitted with ${model} at ${resolution}/${ratio}, ${duration}s${frameNote}. ` +
           'The render takes a few minutes and the result is pushed to the page automatically. ' +
           'Tell the user the task is under way; do not submit it again.',
         assets: [],

@@ -20,8 +20,7 @@ const ENV_KEYS = [
   'BAILIAN_BASE_URL',
   'BAILIAN_CHAT_MODEL',
   'BAILIAN_REASONING_EFFORT',
-  'BAILIAN_VIDEO_MODEL_T2V',
-  'BAILIAN_VIDEO_MODEL_I2V',
+  'BAILIAN_VIDEO_MODEL',
   'ACCESS_LOG',
 ] as const;
 
@@ -63,8 +62,7 @@ describe('loadConfig — 默认值', () => {
     expect(config.bailian.baseUrl).toBe('https://token-plan.cn-beijing.maas.aliyuncs.com');
     expect(config.bailian.chatModel).toBe('deepseek-v4.1-flash');
     expect(config.bailian.reasoningEffort).toBe('high');
-    expect(config.bailian.videoModelT2v).toBe('happyhorse-1.1-t2v');
-    expect(config.bailian.videoModelI2v).toBe('happyhorse-1.1-i2v');
+    expect(config.bailian.videoModel).toBe('wan3.0-video');
   });
 
   it('空字符串等同于未设置', () => {
@@ -161,7 +159,7 @@ describe('loadConfig — 每次调用都重新读环境', () => {
 describe('loadConfig — SESSION_SECRET', () => {
   it('非 production 缺省时随机值在本进程内保持稳定', () => {
     // Signing happens in one loadConfig() call and verification in another; a
-    // value that changed in between would reject every i2v frame.
+    // value that changed in between would reject every signed frame.
     const first = loadConfig().sessionSecret;
     expect(first).toMatch(/^[0-9a-f]{64}$/);
     expect(loadConfig().sessionSecret).toBe(first);

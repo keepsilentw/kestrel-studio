@@ -5,9 +5,9 @@ import { resolveApiKey } from '@/bailian/token';
 import { loadConfig } from '@/config/configuration';
 import { imageDims } from '@/media/image-dims';
 
-export const DEFAULT_IMAGE_MODEL = 'wan2.7-image';
+export const DEFAULT_IMAGE_MODEL = 'qwen-image-3.0-pro';
 
-const IMAGE_MODELS = new Set(['wan2.7-image', 'wan2.7-image-pro']);
+const IMAGE_MODELS = new Set(['qwen-image-3.0-pro']);
 
 const MIME_BY_EXTENSION: Record<string, string> = {
   '.png': 'image/png',
@@ -163,7 +163,8 @@ export class MediaService {
   async submitVideo(options: {
     prompt: string;
     model: string;
-    size: string;
+    resolution: string;
+    ratio: string;
     duration: number;
     firstFrameUrl?: string;
   }): Promise<string> {
@@ -190,7 +191,13 @@ export class MediaService {
             prompt: options.prompt,
             ...(media.length > 0 ? { media } : {}),
           },
-          parameters: { size: options.size, duration: options.duration },
+          // wan3.0-video takes a resolution tier plus an aspect ratio, not a
+          // pixel size: the old `size: "1280*720"` form is rejected.
+          parameters: {
+            resolution: options.resolution,
+            ratio: options.ratio,
+            duration: options.duration,
+          },
         }),
       },
     );

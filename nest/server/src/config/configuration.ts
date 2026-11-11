@@ -3,14 +3,13 @@ import { join } from 'node:path';
 
 const DEFAULT_BASE_URL = 'https://token-plan.cn-beijing.maas.aliyuncs.com';
 const DEFAULT_CHAT_MODEL = 'deepseek-v4.1-flash';
-const DEFAULT_T2V_MODEL = 'happyhorse-1.1-t2v';
-const DEFAULT_I2V_MODEL = 'happyhorse-1.1-i2v';
+const DEFAULT_VIDEO_MODEL = 'wan3.0-video';
 const DEFAULT_VOICE_MODEL = 'qwen-audio-3.0-realtime-plus';
 
 /**
  * Used to build the signed, publicly reachable frame URL that image-to-video
  * hands to the provider (the provider fetches it itself, so a localhost value
- * makes i2v unusable — the video tool rejects it explicitly).
+ * makes the first-frame mode unusable — the video tool rejects it explicitly).
  */
 const DEFAULT_PUBLIC_BASE_URL = 'https://try.kestrel.justwork.link';
 
@@ -22,8 +21,12 @@ export interface BailianConfig {
   baseUrl: string;
   chatModel: string;
   reasoningEffort: ReasoningEffort;
-  videoModelT2v: string;
-  videoModelI2v: string;
+  /**
+   * One model serves both text-to-video and image-to-video: `wan3.0-video`
+   * branches on whether `input.media` carries a first frame, so there is no
+   * t2v/i2v pair to configure any more.
+   */
+  videoModel: string;
   /** The realtime speech model behind /voice. */
   voiceModel: string;
 }
@@ -157,8 +160,7 @@ export function loadConfig(): AppConfig {
       baseUrl: (readEnv('BAILIAN_BASE_URL') ?? DEFAULT_BASE_URL).replace(/\/+$/, ''),
       chatModel: readEnv('BAILIAN_CHAT_MODEL') ?? DEFAULT_CHAT_MODEL,
       reasoningEffort: readReasoningEffort(),
-      videoModelT2v: readEnv('BAILIAN_VIDEO_MODEL_T2V') ?? DEFAULT_T2V_MODEL,
-      videoModelI2v: readEnv('BAILIAN_VIDEO_MODEL_I2V') ?? DEFAULT_I2V_MODEL,
+      videoModel: readEnv('BAILIAN_VIDEO_MODEL') ?? DEFAULT_VIDEO_MODEL,
       voiceModel: readEnv('BAILIAN_VOICE_MODEL') ?? DEFAULT_VOICE_MODEL,
     },
   };

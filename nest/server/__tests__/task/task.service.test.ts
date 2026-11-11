@@ -29,9 +29,9 @@ const newTask = (conversationId: number, overrides: Partial<NewTask> = {}): NewT
   messageId: null,
   kind: 'video',
   providerTaskId: 'provider-1',
-  model: 'happyhorse-1.1-t2v',
+  model: 'wan3.0-video',
   prompt: '一只红隼掠过水面',
-  params: { size: '1280*720', duration: 5 },
+  params: { resolution: '720P', ratio: '16:9', duration: 5 },
   ...overrides,
 });
 
@@ -117,7 +117,8 @@ describe('TaskService.create', () => {
     const id = harness.tasks.create(newTask(conversationId));
 
     expect(JSON.parse(taskRow(id).params ?? '')).toEqual({
-      size: '1280*720',
+      resolution: '720P',
+      ratio: '16:9',
       duration: 5,
     });
   });

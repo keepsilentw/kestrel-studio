@@ -102,7 +102,7 @@ async function buildHarness(): Promise<Harness> {
         messageId: null,
         kind: 'video',
         providerTaskId,
-        model: 'happyhorse-1.1-t2v',
+        model: 'wan3.0-video',
         prompt: '一只红隼掠过水面',
         params: {},
       });

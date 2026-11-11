@@ -18,8 +18,7 @@ describe('DEFAULT_IMAGE_MODEL', () => {
 
 describe('assertImageModel', () => {
   it('接受受支持的模型', () => {
-    expect(() => assertImageModel('wan2.7-image')).not.toThrow();
-    expect(() => assertImageModel('wan2.7-image-pro')).not.toThrow();
+    expect(() => assertImageModel('qwen-image-3.0-pro')).not.toThrow();
   });
 
   it('拒绝未支持的模型', () => {
@@ -27,17 +26,17 @@ describe('assertImageModel', () => {
   });
 
   it('错误信息里列出受支持模型，便于排障', () => {
-    expect(() => assertImageModel('nope')).toThrow('wan2.7-image-pro');
+    expect(() => assertImageModel('nope')).toThrow('qwen-image-3.0-pro');
   });
 
   it('不做大小写归一化', () => {
-    expect(() => assertImageModel('WAN2.7-IMAGE')).toThrow();
+    expect(() => assertImageModel('QWEN-IMAGE-3.0-PRO')).toThrow();
   });
 
   it('空字符串与近似名都被拒', () => {
     expect(() => assertImageModel('')).toThrow();
-    expect(() => assertImageModel('wan2.7')).toThrow();
-    expect(() => assertImageModel('wan2.7-image-pro-plus')).toThrow();
+    expect(() => assertImageModel('qwen-image')).toThrow();
+    expect(() => assertImageModel('qwen-image-3.0-pro-plus')).toThrow();
   });
 });
 
