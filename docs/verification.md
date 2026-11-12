@@ -3329,3 +3329,17 @@ idx_api_tokens_user(user_id, revoked_at)
 4. **Nest 侧只在单进程本地验过**：两套同时挂同一份库并跑、以及真实宿主（App/小程序）的接入，
    分别属于 §4.5 的入口问题与 P2，本轮没有重测。
 5. **令牌没有过期时间**：长期令牌只能显式撤销；这是 roadmap.md §5.1 的选择，不是遗漏。
+
+### 49.6 上线（2026-11-12 11:13-11:14）
+
+| 步骤 | 读数 |
+|---|---|
+| `make deploy` | `cargo zigbuild --release` 54.27s；`wasm-pack` 1.34s；上传 context 4.9 MB；镜像 `sha256:55baa603…`；容器 Recreated / Started；脚本等到 `/login` 应答 |
+| 档位 | 部署后默认 `nest`，随后 `CLIENT_BUNDLE=wasm docker compose up -d` 重拨 |
+| 启动日志 | `Bailian credentials resolved` / `expired sessions cleared=0` / `listening on http://localhost:8848 client="wasm"`；grep `ERROR` / `WARN` 零行 |
+| 线上新路由 | `POST /api/v1/session` 无效凭据 → 401 `{"message":"用户名或密码错误","statusCode":401}`；`GET /api/v1/tokens` 无凭据 → 401；`/login` → 200 |
+| 生产库 | `api_tokens` 表与 `idx_api_tokens_user` 已建，`SELECT COUNT(*)` = 0 |
+
+**边界**：线上只用无效凭据探过路由，没有用真实账号登录，也没有在生产上签过一枚设备令牌。
+那条端到端要等 P2 的真宿主接入时自然发生；本轮证明的是「新二进制已上线、迁移已执行、
+路由存在且未授权请求被挡住」。
