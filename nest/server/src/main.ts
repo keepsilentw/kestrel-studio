@@ -8,6 +8,9 @@ import hbs from 'hbs';
 import { join } from 'node:path';
 import passport from 'passport';
 import { AppModule } from '@/app.module';
+import { AuthService } from '@/auth/auth.service';
+import { createBearerMiddleware } from '@/auth/bearer.middleware';
+import { TokenService } from '@/auth/token.service';
 import { createAccessLogMiddleware } from '@/common/access-log';
 import { loadConfig } from '@/config/configuration';
 import { loadEnvFile } from '@/config/env-file';
@@ -62,6 +65,9 @@ async function bootstrap(): Promise<void> {
 
   app.use(passport.initialize());
   app.use(passport.session());
+  // After passport.session(), so Bearer can override a cookie principal and clear
+  // it when the header is present but invalid.
+  app.use(createBearerMiddleware(app.get(TokenService), app.get(AuthService)));
 
   await app.listen(config.port);
 }

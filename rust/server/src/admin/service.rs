@@ -159,7 +159,7 @@ impl AdminService {
     }
 
     /// Removes an account and everything it owns: conversations, messages, tasks,
-    /// asset rows and the mirrored files.
+    /// asset rows, device tokens and the mirrored files.
     ///
     /// The conversation cascade is `ConversationService`'s (shared with deleting a
     /// single conversation); the account row goes after it, so a failure there
@@ -189,6 +189,13 @@ impl AdminService {
         let ids: Vec<i64> = rows.iter().filter_map(|row| row.try_get("id").ok()).collect();
 
         let (conversations, assets) = self.conversations.delete_conversations(&ids).await?;
+        // Device tokens reference the account, so they go before the user row or the
+        // foreign key refuses the delete. Sessions are keyed by sid with the user id
+        // inside the JSON blob, so they are not a constraint here.
+        sqlx::query("DELETE FROM api_tokens WHERE user_id = ?1")
+            .bind(id)
+            .execute(&self.pool)
+            .await?;
         sqlx::query("DELETE FROM users WHERE id = ?1")
             .bind(id)
             .execute(&self.pool)

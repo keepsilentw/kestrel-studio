@@ -4,7 +4,7 @@ import { asc, count, eq } from 'drizzle-orm';
 import { ROLE_LABEL, parseRole, type Role, type Viewer } from '@/auth/roles';
 import { ConversationService } from '@/conversation/conversation.service';
 import { DRIZZLE_INSTANCE, type DrizzleDb } from '@/database/database.module';
-import { assets, conversations, messages, users, type User } from '@/database/schema';
+import { apiTokens, assets, conversations, messages, users, type User } from '@/database/schema';
 
 /** Accounts are typed by hand on the admin page, so keep them URL-safe. */
 const USERNAME_PATTERN = /^[a-zA-Z0-9_-]{3,32}$/;
@@ -157,6 +157,9 @@ export class AdminService {
       .map((row) => row.id);
 
     const removed = await this.conversations.deleteConversations(conversationIds);
+    // Device tokens reference the account, so they go before the user row or the
+    // foreign key refuses the delete.
+    this.db.delete(apiTokens).where(eq(apiTokens.userId, id)).run();
     this.db.delete(users).where(eq(users.id, id)).run();
 
     return { ok: true, conversations: removed.conversations, assets: removed.assets };

@@ -7,3 +7,4 @@ pub mod routes;
 pub mod seed;
 pub mod session;
 pub mod service;
+pub mod tokens;

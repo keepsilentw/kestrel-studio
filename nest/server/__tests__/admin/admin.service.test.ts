@@ -193,6 +193,12 @@ describe('AdminService.remove', () => {
     const assetPath = join(filesDir, 'owned.png');
     const conversationId = harness.conversations.create(alice, '会话');
     harness.conversations.appendUserMessage(conversationId, '问', 'chat');
+    // A device token references the account, so the removal has to clear it first.
+    harness.raw
+      .prepare(
+        "INSERT INTO api_tokens (user_id, label, token_hash, created_at) VALUES (?, 'phone', 'hash', 1)",
+      )
+      .run(alice);
     expect(existsSync(assetPath)).toBe(true);
 
     const root = harness.seedUser('root', 'super');
@@ -207,6 +213,10 @@ describe('AdminService.remove', () => {
     expect(existsSync(assetPath)).toBe(false);
     const assets = harness.raw.prepare('SELECT COUNT(*) AS n FROM assets WHERE id = ?').get(assetId) as { n: number };
     expect(assets.n).toBe(0);
+    const tokens = harness.raw
+      .prepare('SELECT COUNT(*) AS n FROM api_tokens WHERE user_id = ?')
+      .get(alice) as { n: number };
+    expect(tokens.n).toBe(0);
   });
 
   it('不动 STORAGE_DIR 之外的文件', async () => {

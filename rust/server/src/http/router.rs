@@ -1,4 +1,4 @@
-use axum::routing::{get, post};
+use axum::routing::{delete, get, post};
 use axum::Router;
 use tower_http::trace::TraceLayer;
 
@@ -27,6 +27,12 @@ pub fn build(state: AppState) -> Router {
         .route("/admin/users/{id}/delete", get(admin::confirm_delete).post(admin::remove_user))
         .route("/admin/users/{id}/password", post(admin::reset_password))
         .route("/logout", post(routes::logout))
+        .route("/api/v1/session", post(routes::json_login))
+        .route(
+            "/api/v1/tokens",
+            post(routes::create_token).get(routes::list_tokens),
+        )
+        .route("/api/v1/tokens/{id}", delete(routes::revoke_token))
         .route("/api/v1/conversations", post(chat::create_conversation).get(chat::list_conversations))
         .route("/api/v1/conversations/{id}/turns", post(chat::start_turn))
         .route("/api/v1/conversations/{id}/delete", post(chat::delete_conversation))

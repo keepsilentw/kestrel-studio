@@ -244,6 +244,13 @@ async fn removing_an_account_takes_its_rows_and_its_files() {
         .await
         .expect("asset");
 
+    // A device token references the account, so the removal has to clear it first.
+    sqlx::query("INSERT INTO api_tokens (user_id, label, token_hash, created_at) VALUES (?1, 'phone', 'hash', 1)")
+        .bind(target_id)
+        .execute(&state.pool)
+        .await
+        .expect("token");
+
     // The confirm page states the cost before the form exists.
     let confirm = text_body(
         app.clone()
@@ -307,9 +314,16 @@ async fn removing_an_account_takes_its_rows_and_its_files() {
         ("conversations", "SELECT COUNT(*) AS n FROM conversations WHERE user_id = ?1"),
         ("messages", "SELECT COUNT(*) AS n FROM messages WHERE conversation_id = ?1"),
         ("assets", "SELECT COUNT(*) AS n FROM assets WHERE message_id = ?1"),
+        ("api_tokens", "SELECT COUNT(*) AS n FROM api_tokens WHERE user_id = ?1"),
     ] {
         let n: i64 = sqlx::query(sql)
-            .bind(if table == "users" || table == "conversations" { target_id } else { message_id })
+            .bind(
+                if table == "users" || table == "conversations" || table == "api_tokens" {
+                    target_id
+                } else {
+                    message_id
+                },
+            )
             .fetch_one(&state.pool)
             .await
             .unwrap_or_else(|error| panic!("{table}: {error}"))

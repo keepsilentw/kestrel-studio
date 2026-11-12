@@ -156,8 +156,29 @@ export const generationTasks = sqliteTable('generation_tasks', {
   finishedAt: integer('finished_at', { mode: 'timestamp_ms' }),
 });
 
+/**
+ * Revocable long-lived credentials for non-browser hosts (docs/roadmap.md §5.1).
+ * Only the SHA-256 digest is stored: this file is a plain backup target, and a
+ * leaked backup must not equal a working credential on every device. The `sessions`
+ * table is deliberately not modelled here — better-sqlite3-session-store owns it.
+ */
+export const apiTokens = sqliteTable('api_tokens', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  userId: integer('user_id')
+    .notNull()
+    .references(() => users.id),
+  label: text('label').notNull(),
+  tokenHash: text('token_hash').notNull().unique(),
+  createdAt: integer('created_at', { mode: 'timestamp_ms' }).notNull(),
+  /** Refreshed at most once an hour, so a read does not become a write per request. */
+  lastSeenAt: integer('last_seen_at', { mode: 'timestamp_ms' }),
+  /** Null while active; set once and never cleared. Revoked rows stay as an audit trail. */
+  revokedAt: integer('revoked_at', { mode: 'timestamp_ms' }),
+});
+
 export type User = typeof users.$inferSelect;
 export type Conversation = typeof conversations.$inferSelect;
 export type Message = typeof messages.$inferSelect;
 export type Asset = typeof assets.$inferSelect;
 export type GenerationTask = typeof generationTasks.$inferSelect;
+export type ApiToken = typeof apiTokens.$inferSelect;

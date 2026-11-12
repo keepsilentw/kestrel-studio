@@ -121,6 +121,20 @@ CREATE INDEX IF NOT EXISTS idx_tasks_conversation ON generation_tasks(conversati
 -- non-unique era left behind first. Declaring it UNIQUE in this string would instead
 -- refuse to boot on such a database.
 CREATE INDEX IF NOT EXISTS idx_events_conversation ON conversation_events(conversation_id, seq);
+
+-- Revocable long-lived credentials for non-browser hosts (docs/roadmap.md §5.1).
+-- Only the SHA-256 of the token is stored: this file is a plain backup target,
+-- and a leaked backup must not equal a working credential on every device.
+CREATE TABLE IF NOT EXISTS api_tokens (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  label TEXT NOT NULL,
+  token_hash TEXT NOT NULL UNIQUE,
+  created_at INTEGER NOT NULL,
+  last_seen_at INTEGER,
+  revoked_at INTEGER
+);
+CREATE INDEX IF NOT EXISTS idx_api_tokens_user ON api_tokens(user_id, revoked_at);
 `;
 
 /**

@@ -3196,3 +3196,136 @@ DOM 里 `.turn-assistant .content` 下的 `blockquote`、`hr`、`img`、`input` 
    所以那份改动没有一帧真实流量经过——它是策略一致性，不是在线修复。
 3. `strings` 找字面量只能证明「这些串在包里」，不能证明某个分支被跑到；分支级的证据在 §47.3。
 4. 本次没有重跑 `make census-prod`（部署不写正文，§46.5 那次就是今天 15:5x 的读数）。
+
+## 48. 八期 P0 的机器可核实部分：域名/TLS 与 chunked 配置（2026-11-12）
+
+八期 P0 要落三条读数（roadmap.md §5.3）。这一节只覆盖不需要真机、不需要业务请求的两条半，
+读数取自 lavo-test 上的只读命令；没有发起任何 SSE 业务请求，所以不写库、不花钱。
+
+### 48.1 小程序的域名与 TLS 要求，对上了线上配置
+
+官方文档（2026-11-12 打开）：<https://developers.weixin.qq.com/miniprogram/dev/framework/ability/network.html>
+
+| 官方要求 | 线上读数 |
+|---|---|
+| 必须是 HTTPS（WebSocket 为 WSS），域名不能是 IP 或 localhost | `https://try.kestrel.justwork.link`，`/login` 默认请求返回 `HTTP/1.1 200 OK` |
+| 域名必须经过 ICP 备案 | **未查**（见 §48.4） |
+| 只能配具体的子域名，父域名配置不覆盖子域名 | 证书 SAN 与站点 `server_name` 都是具体子域名 `try.kestrel.justwork.link` |
+| TLS 不低于 1.2，且部分 Android 不支持高于 1.2 的版本 | `ssl_protocols TLSv1.3 TLSv1.2`；`openssl s_client` 协商到 `TLSv1.2` |
+| 证书链必须完整 | 服务端一次下发 4 张：叶子 `CN=try.justwork.link` → `YE1` → `Root YE` → `ISRG Root X2` → `ISRG Root X1`；`Verify return code: 0 (ok)` |
+| 证书域名必须匹配 | SAN 含 `DNS:try.kestrel.justwork.link`（同证书覆盖另外 8 个 `try.*` 站点） |
+
+复现命令（在 lavo-test 上执行，只读）：
+
+```bash
+openssl s_client -connect 127.0.0.1:443 -servername try.kestrel.justwork.link -showcerts </dev/null
+```
+
+### 48.2 `enableChunked` 这条线在 openresty 侧的形状
+
+官方 `wx.request` 文档（2026-11-12 打开）：<https://developers.weixin.qq.com/miniprogram/dev/api/network/request/wx.request.html>
+写明 `enableChunked` 是 boolean、默认 `false`、基础库 2.20.2 起支持，作用是「开启 transfer-encoding chunked」；
+同页高性能模式一段又写明**声明了 `enableChunked` 的请求会走 HTTP/1**，其余请求自动 HTTP/2 或 HTTP/3。
+
+对应到站点配置 `/opt/1panel/www/sites/try.kestrel.justwork.link/proxy/kestrel.conf`：
+
+| 配置项 | 读数 | 对这条线的作用 |
+|---|---|---|
+| `chunked_transfer_encoding` | `on` | 允许 openresty 以 chunked 回给客户端 |
+| `proxy_buffering` / `proxy_cache` | `off` / `off` | 不把流式响应憋到最后一次性吐出 |
+| `proxy_http_version` | `1.1` | 到上游是 HTTP/1.1，SSE 可以边产边转 |
+| `proxy_read_timeout` / `proxy_send_timeout` | `300s` / `300s` | 单次出图静默几十秒不会断 |
+| server 块 | `http2 on`、`ssl_protocols TLSv1.3 TLSv1.2` | 声明 `enableChunked` 后协商回 HTTP/1.1，已实测 `/login` 走 HTTP/1.1 返回 200 |
+
+结论只到「服务端形状满足」：chunked 开着、缓冲关着、HTTP/1.1 可用。
+**逐帧到达客户端**这一半没有验，验它需要小程序或真机（§48.4）。
+
+### 48.3 目标宿主读 chunked 的能力
+
+小程序的路径是 `enableChunked: true` 配合 `RequestTask.onChunkReceived`（同为 2.20.2 起），
+官方文档确认了 API 存在与语义；这仍不等于真机上的增量到达表现。
+App 宿主尚未选定（roadmap.md §5.6），今天没有对应读数。
+
+### 48.4 这一节没证的
+
+1. **真机/开发者工具里的增量到达**：`enableChunked` + `onChunkReceived` 在「一条连接里持续吐 event」
+   这种 SSE 用法下的缓冲表现，仍需要小程序环境才能测。这条不成立时改的是形态（例如轮询或分片拉取），
+   不是客户端一处小修。
+2. **`justwork.link` 的 ICP 备案状态**：没有查 MIIT，属外部事实，不能由证书或配置推出来。
+3. **App 与小程序谁先接**：未定，挡 P2（roadmap.md §5.6）。
+4. **没有发起业务 SSE 请求**：所以「线上逐帧到达」这条今天没有新证据，§47.4 的浏览器读数不覆盖它。
+
+## 49. 八期 P1：设备令牌与 JSON 会话入口（2026-11-12，双端实现 + 本地验收，未部署）
+
+### 49.1 落成的契约
+
+| 调用 | 语义 | 状态 |
+|---|---|---|
+| `POST /api/v1/session` | 用户名口令 → `{token, userId}`；`token` 就是会话 sid，可直接当 Bearer，7 天过期 | 200 |
+| `POST /api/v1/tokens` | 签发设备令牌 → `{id, label, token, createdAt}`，明文只出现这一次 | 201 |
+| `GET /api/v1/tokens` | 当前账号未撤销的令牌，按 id 倒序 | 200 |
+| `DELETE /api/v1/tokens/{id}` | 撤销（幂等读作 404）；下一次请求即 401 | 200 `{ok:true}` |
+| 既有 `/api/v1/*` | `Authorization: Bearer` 优先，无此头回落 cookie；两者同时存在只认 Bearer | 不变 |
+
+两种 Bearer 都接受：设备令牌（`kst_` 前缀，库存 SHA-256 摘要）与会话 sid（`sessions` 表，
+与 cookie 同源）。身份不做合并：Bearer 无效时即使带着有效 cookie 也是 401。
+
+### 49.2 表与启动迁移
+
+两侧 DDL 同形，启动时幂等创建：
+
+```sql
+api_tokens(id, user_id, label, token_hash UNIQUE, created_at, last_seen_at, revoked_at)
+idx_api_tokens_user(user_id, revoked_at)
+```
+
+`last_seen_at` 只在距上次记录超过一小时时写一次，避免每个只读请求都变成 SQLite 写。
+撤销写 `revoked_at`，不删行，留作审计；`GET` 只列未撤销的。
+删号路径跟着清理 `api_tokens`（两侧都改，测试里钉了断言）：令牌行有指向 `users` 的外键，
+不先删它，删号会被 FK 拒绝。
+
+### 49.3 同一条 curl 序列，两套各跑一遍
+
+环境：Rust `:8852`、Nest `:8853`，各自独立的 `~/tmp/kestrel-p1/*.db` 与 storage，
+`admin/123456` 由非生产启动的 seed 建出。序列与读数（两侧逐项相同）：
+
+| 步骤 | Rust | Nest |
+|---|---|---|
+| `POST /api/v1/session` | 200，`{token,userId}` | 200（首跑是 `@Post` 默认 201，加 `@HttpCode(200)` 后复跑） |
+| `POST /api/v1/tokens`（Bearer = sid） | 201，`kst_…` | 201，`kst_…` |
+| `POST /api/v1/conversations`（Bearer = 设备令牌） | 201 `{conversationId:1}` | 201 `{conversationId:1}` |
+| `GET /api/v1/tokens`（Bearer = 设备令牌） | 200，含 `lastSeenAt` | 200，含 `lastSeenAt` |
+| `POST .../turns` `{prompt:"只回复 ok",mode:"chat"}` | 202 `messageId:2` | 202 `messageId:2` |
+| `GET .../stream?from=0`（Bearer = sid） | `seq` 1..4：`user_message` / `turn_started` / `text:"ok"` / `turn_done` | 同左，逐帧同形 |
+| `DELETE /api/v1/tokens/{id}` | 200 `{ok:true}` | 200 `{ok:true}` |
+| 再用被撤销的设备令牌取会话 | 401 | 401 |
+| 再用会话 sid 取会话 | 200（撤销只作用于设备令牌） | 200 |
+| HTML `POST /login` → cookie → `GET /api/v1/conversations` | 302 → 200 | 302 → 200 |
+| 有效 cookie + `Authorization: Bearer bogus` | 401（不回落 cookie） | 401 |
+
+模型调用只发生了两次（两侧各一轮，`chat` 模式，提示词「只回复 ok」），写的是
+`~/tmp/kestrel-p1` 下的临时库，没有碰生产库。
+
+### 49.4 单测与类型检查
+
+| 项 | 读数 |
+|---|---|
+| `cargo test`（`rust/server`，含新增 `auth::tokens` 3 条） | **201 passed, 0 failed, 2 ignored** |
+| `pnpm --dir nest/server test`（含新增 `token.service` 5 条） | **507 passed, 33 files** |
+| `pnpm --dir nest/server run typecheck` | 两个 tsconfig 均通过 |
+| `cargo check --manifest-path rust/server/Cargo.toml --tests` | 通过 |
+
+### 49.5 这一节没证的
+
+1. **未部署**：线上仍是 11-10 的二进制，没有任何真实流量经过这套令牌。
+2. **浏览器那一屏已于同日复跑通过**（2026-11-12 11:03，Chrome DevTools MCP 恢复后）：
+   `wasm` 档、`localhost:8852`，登录 → 新会话 → 对话模式发「只回复 ok」→ 流式落地 `ok` →
+   composer 解锁。`/` 与 `/voice` 的 `list_console_messages` 都是 **no console messages**
+   （零 error / 零 warning）。网络序：`/wasm/kestrel_client.js` 与 `.wasm` 200/304、
+   `POST /api/v1/conversations` 201、`POST .../turns` 202、`GET .../stream?from=0` 200。
+   `/admin` 没进：这次登录的是普通 `admin`，被 302 回 `/`；超管页保留 §47.4 的 11-10 读数，
+   本轮没复跑。
+3. **令牌管理界面不在 P1**：`/api/v1/tokens` 只有契约，用户自助那一屏与超管列表是 P3。
+4. **Nest 侧只在单进程本地验过**：两套同时挂同一份库并跑、以及真实宿主（App/小程序）的接入，
+   分别属于 §4.5 的入口问题与 P2，本轮没有重测。
+5. **令牌没有过期时间**：长期令牌只能显式撤销；这是 roadmap.md §5.1 的选择，不是遗漏。

@@ -260,6 +260,12 @@ openai 面须置 compat 位 `stream_include_usage = true`，否则全程 `usage:
 
 ## 3. 当前待办
 
+- **2026-11-12 八期 P1 双端实现完成、本地验收通过（verification.md §49），未部署**。
+  四个端点（JSON 会话、签发 / 列表 / 撤销设备令牌）与 Bearer 优先解析在 Nest 与 Rust
+  两套都落了地，`api_tokens` 表两侧 DDL 同形、启动幂等创建；同一条 curl 序列在两套上
+  逐项通关（含一轮真实 `chat` 流式回放、撤销后 401、cookie 零回归）。线上仍是 11-10 的
+  二进制，所以「活库上跑过」这件事还没有发生。浏览器那一屏同日复跑通过：`wasm` 档
+  登录、发一轮、流式落地 `ok`，`/` 与 `/voice` 控制台零条（verification.md §49.5）。
 - **2026-11-10 八期开了，挡在前面那个技术问题同日定了**：多端要接的是同一套 `/api/v1`，而今天
   这条面上**每一个 JSON 端点与那条 SSE 都靠 session cookie**（Rust 侧 `auth::guards::Authed` 从
   `Cookie` 头取；Nest 侧 `AuthenticatedGuard` 同理），非浏览器宿主用不上它。裁决、分期与判据写在 §5，
@@ -801,7 +807,8 @@ P1 的判据一条不减（仍是真实麦克风采集 1 条），但它的**后
 `§2.3` 那句判断在这里兑现：决定多端能否复用的不是内核语言，而是产品 API 边界——那条边界
 **二期就已经做完**（`/api/v1`、提交与订阅分开、对话级 SSE + `seq` 续传、会话有轮次在跑时吃 `409`、
 游标低于保留窗口回一帧 `resync`，见 architecture.md §4.2 与 verification.md §8）。
-所以这一期不依赖第五期（内核）也不依赖第六期（语言），代码今天一行未动。
+所以这一期不依赖第五期（内核）也不依赖第六期（语言）。2026-11-10 排期时代码一行未动；
+2026-11-12 P1 已在两套后端落地并本地验收（verification.md §49），只是还没部署。
 
 ### 5.1 裁决：cookie 留给浏览器，非浏览器宿主用**可撤销的 Bearer 设备令牌**
 
@@ -815,6 +822,11 @@ Nest 侧 `AuthenticatedGuard` 同理。这是唯一的硬缺口，其余都是�
 | `POST /api/v1/tokens` | 给一台设备签发长期令牌，明文只在这一次响应里出现 | cookie（浏览器里点了「登录这台设备」才有） |
 | `GET /api/v1/tokens` / `DELETE /api/v1/tokens/{id}` | 列表 / 撤销 | cookie 或 Bearer 皆可 |
 | 既有 `/api/v1/*` 全部 | 不变 | `Authorization: Bearer <t>` 优先；无此头回落 cookie。**两者同时存在时不做身份合并**，只认前者 |
+
+**2026-11-12 落地状态**：上表四个端点与 Bearer 解析已在 Nest / Rust 两套实现
+（`auth/token.*`、`auth/tokens.rs`、`auth/bearer.middleware.ts`）；`POST /api/v1/session`
+返回会话 sid，两种 Bearer（设备令牌与会话 sid）都由同一处解析。本地 curl 全序列与单测读数在
+verification.md §49，**未部署**。
 
 存储是一张新表 `api_tokens(id, user_id, label, token_hash, created_at, last_seen_at, revoked_at)`，
 库里存 **SHA-256 摘要**。为什么是摘要不是明文：`./data/kestrel-studio.db` 在宿主机上是明文文件，
@@ -837,14 +849,16 @@ Nest 侧 `AuthenticatedGuard` 同理。这是唯一的硬缺口，其余都是�
 
 | 期 | 内容 | 完成判据 |
 |---|---|---|
-| P0 | **外部前提核实**，不写代码 | §5.4 那三条未核实的一条条落成读数：小程序合法域名与 TLS 要求、`enableChunked` 在我们 openresty 上的实际行为（声明它会走 HTTP/1，而 SSE 的形态要在那条线上看）、目标宿主要能读 chunked body。任何一条不成立，改的是形态不是客户端 |
-| P1 | 令牌与 JSON 会话入口，**两套后端同改** + 建表迁移 | 同一条 curl 序列在两套上分别打通：登录 → 签令牌 → 建会话 → 提交一轮 → `?from=` 续传 → 撤销后再取吃 401；且旧 cookie 路径**零回归**（`wasm` 档那一屏照 verification.md §22 那张表复跑，控制台零条） |
+| P0 | **外部前提核实**，不写代码 | §5.4 那三条未核实的一条条落成读数：小程序合法域名与 TLS 要求、`enableChunked` 在我们 openresty 上的实际行为（声明它会走 HTTP/1，而 SSE 的形态要在那条线上看）、目标宿主要能读 chunked body。任何一条不成立，改的是形态不是客户端。**2026-11-12：机器可核实部分已落（verification.md §48），剩真机增量到达与 ICP 备案状态** |
+| P1 | 令牌与 JSON 会话入口，**两套后端同改** + 建表迁移 | 同一条 curl 序列在两套上分别打通：登录 → 签令牌 → 建会话 → 提交一轮 → `?from=` 续传 → 撤销后再取吃 401；且旧 cookie 路径**零回归**（`wasm` 档那一屏照 verification.md §22 那张表复跑，控制台零条）。**2026-11-12：双端实现 + 本地 curl 全序列与单测通过（verification.md §49），未部署；浏览器那一屏同日复跑通过（`/` 与 `/voice` 控制台零条）** |
 | P2 | 第一个真宿主接上（等 §5.6） | 照 §13.5 那五条的形状：登录、一轮流式、出图、断线续传、噪音为零 |
 | P3 | 令牌管理面 | 用户自助那一屏 + 超管侧列表；撤销当场生效（下一次请求 401），不需要等过期 |
 
 ### 5.4 已核实与未核实
 
-- **已核实（读码）**：每个 JSON 端点都挂 cookie 守卫（`rust/server/src/http/router.rs:30-37`）；
+- **已核实（读码）**：P1 之前每个 JSON 端点都挂 cookie 守卫（`rust/server/src/http/router.rs:30-37`）；
+  P1 起 `principal_from` 先认 Bearer、无头再回落 cookie，Nest 侧由 `auth/bearer.middleware.ts`
+  在 guard 之前写入 `request.user`；
   而 `asset_frame` **有意在守卫之外**，签名串就是它的授权
   （`rust/server/src/http/asset_frame.rs:14`、`nest/server/src/common/signed-url.ts`）——
   所以图片/视频帧这一条**不需要**新鉴权就能给非浏览器宿主用，P1 不含它。
@@ -853,8 +867,12 @@ Nest 侧 `AuthenticatedGuard` 同理。这是唯一的硬缺口，其余都是�
   新版网络模块下**除声明了 `enableChunked` 之外均自动开启 HTTP/2/HTTP/3**，
   即声明它之后这条连接是 HTTP/1。
   https://developers.weixin.qq.com/miniprogram/dev/api/network/request/wx.request.html
-- **未核实**：小程序合法域名/备案与证书链要求；原生 App 的 cookie jar 行为；`enableChunked`
-  在「一条连接里持续吐 event」这种 SSE 用法下的真机缓冲表现。三条都归 P0。
+- **已核实（2026-11-12，读数在 verification.md §48）**：小程序合法域名与 TLS 要求（HTTPS、禁止 IP、
+  TLS ≥1.2、证书链完整、子域名单独配置），线上证书链校验 `0 (ok)`、SAN 覆盖
+  `try.kestrel.justwork.link`、协商 TLSv1.2；openresty 侧 `chunked_transfer_encoding on`、
+  `proxy_buffering off`、`proxy_http_version 1.1`、HTTP/1.1 请求实测 200。
+- **未核实**：`justwork.link` 的 ICP 备案状态（未查 MIIT）；原生 App 的 cookie jar 行为；
+  `enableChunked` 在「一条连接里持续吐 event」这种 SSE 用法下的真机缓冲表现。后两条归 P0 的真机部分。
 
 ### 5.5 这一期背的双端同改义务（§4.5 第 2 条的第三个实例）
 

@@ -131,6 +131,8 @@ hbs 只负责渲染首屏骨架：登录态判断、历史会话侧栏、页面�
   自动带 `Last-Event-ID`。手写 fetch+ReadableStream 帧读取器随它伺候的 POST
   流一起退役。服务端仍用 `@Res()` 裸写（`common/sse.ts` 的 `SseWriter`），
   `@Sse()` 装饰器带不了心跳注释帧与自定义头。
+  非浏览器宿主没有 cookie jar：同一批端点接受 `Authorization: Bearer`（设备令牌或
+  JSON 登录换来的会话 sid），Bearer 优先且不与 cookie 合并（docs/roadmap.md §5.1）。
 - 轮次事件的 `messageId` 就是该轮助手行的 id（roadmap 草案里的 `turnId`）：
   不另造一个只有服务端认识的标识符。
 
@@ -159,6 +161,7 @@ hbs 只负责渲染首屏骨架：登录态判断、历史会话侧栏、页面�
 |---|---|
 | `users` | id, username, password_hash, role, created_at |
 | `sessions` | sid, sess, expire —— Nest 侧由 better-sqlite3-session-store 独占管理，不纳入 drizzle schema；Rust 侧由 `auth/session.rs` 读写同一张表，形状差异见 §13.2 |
+| `api_tokens` | id, user_id, label, token_hash, created_at, last_seen_at, revoked_at —— 非浏览器宿主的长期令牌，只存 SHA-256 摘要，撤销写 `revoked_at`（docs/roadmap.md §5.1） |
 | `conversations` | id, user_id, title, deleted_at, created_at, updated_at |
 | `messages` | id, conversation_id, role, content, reasoning, tool_calls, mode, created_at |
 | `assets` | id, message_id, kind, file_path, source_url, mime, bytes, width, height, created_at |

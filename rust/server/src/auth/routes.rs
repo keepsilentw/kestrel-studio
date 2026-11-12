@@ -1,12 +1,18 @@
+use axum::extract::Path as UrlPath;
 use axum::extract::State;
 use axum::http::header::{HeaderMap, SET_COOKIE};
+use axum::http::StatusCode;
 use axum::http::HeaderValue;
-use axum::response::Response;
-use axum::Form;
+use axum::response::{IntoResponse, Response};
+use axum::{Form, Json};
 use serde::Deserialize;
+use serde_json::json;
 
+use super::guards::Authed;
 use super::session;
 use super::service::AuthService;
+use super::tokens;
+use crate::common::http::read_positive_int;
 use crate::error::AppError;
 use crate::state::AppState;
 
@@ -62,5 +68,79 @@ pub async fn logout(
         HeaderValue::from_str(&session::cleared_cookie()).expect("static cookie value"),
     );
     Ok(response)
+}
+
+/// The JSON twin of the HTML login form, for hosts that have no cookie jar.
+///
+/// It returns the same session sid the cookie carries, once. Bearer resolution
+/// accepts that sid directly (`auth::guards`), so a native host can use it right
+/// away and later exchange it for a revocable device token through
+/// `POST /api/v1/tokens`.
+#[derive(Debug, Deserialize)]
+pub struct SessionLogin {
+    #[serde(default)]
+    pub username: String,
+    #[serde(default)]
+    pub password: String,
+}
+
+pub async fn json_login(
+    State(state): State<AppState>,
+    Json(body): Json<SessionLogin>,
+) -> Result<Response, AppError> {
+    let user = AuthService::new(state.pool.clone())
+        .validate(&body.username, &body.password)
+        .await?
+        .ok_or_else(|| AppError::unauthorized("用户名或密码错误"))?;
+    let token = session::create(&state.pool, user.id).await?;
+    Ok(Json(json!({ "token": token, "userId": user.id })).into_response())
+}
+
+#[derive(Debug, Deserialize)]
+pub struct NewToken {
+    #[serde(default)]
+    pub label: String,
+}
+
+/// Mints a device token. The plaintext appears in this response and nowhere else;
+/// the row keeps only its SHA-256 digest.
+pub async fn create_token(
+    Authed(user): Authed,
+    State(state): State<AppState>,
+    Json(body): Json<NewToken>,
+) -> Result<Response, AppError> {
+    let issued = tokens::issue(&state.pool, user.id, &body.label).await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(json!({
+            "id": issued.id,
+            "label": tokens::normalize_label(&body.label),
+            "token": issued.token,
+            "createdAt": issued.created_at,
+        })),
+    )
+        .into_response())
+}
+
+pub async fn list_tokens(
+    Authed(user): Authed,
+    State(state): State<AppState>,
+) -> Result<Response, AppError> {
+    let rows = tokens::list(&state.pool, user.id).await?;
+    Ok(Json(json!(rows)).into_response())
+}
+
+pub async fn revoke_token(
+    Authed(user): Authed,
+    State(state): State<AppState>,
+    UrlPath(id): UrlPath<String>,
+) -> Result<Response, AppError> {
+    let Some(id) = read_positive_int(Some(&id)) else {
+        return Err(AppError::not_found("not found"));
+    };
+    if !tokens::revoke(&state.pool, user.id, id).await? {
+        return Err(AppError::not_found("not found"));
+    }
+    Ok(Json(json!({ "ok": true })).into_response())
 }
 
