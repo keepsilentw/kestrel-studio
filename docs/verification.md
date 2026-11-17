@@ -3343,3 +3343,88 @@ idx_api_tokens_user(user_id, revoked_at)
 **边界**：线上只用无效凭据探过路由，没有用真实账号登录，也没有在生产上签过一枚设备令牌。
 那条端到端要等 P2 的真宿主接入时自然发生；本轮证明的是「新二进制已上线、迁移已执行、
 路由存在且未授权请求被挡住」。
+
+## 50. 八期 P3：令牌管理面本地验收（2026-11-17）
+
+### 50.1 质量门与构建
+
+| 项 | 读数 |
+|---|---|
+| `make check` | Nest server / client typecheck 通过；`cargo check --tests` 两棵 Rust crate 通过 |
+| `make test` | Nest server **511 passed**；Nest client **72 passed**；Rust server **204 passed, 2 ignored**；Rust client **50 passed** |
+| `make build-web` | `public/assets/tokens.js` **3.78 kB**（gzip 1.77 kB）；`main.css` 18.09 kB |
+
+第一次在沙箱内跑 `make test` 时，6 个 Nest 套件因 `listen EPERM` 失败；原因是测试要绑定
+本地端口，不是断言失败。沙箱外重跑同一命令后全绿。
+
+### 50.2 浏览器：用户自助页
+
+环境：本地 Nest 服务 `http://localhost:9949`，默认 `nest` 客户端档；`tokens.js` 与档位无关。
+
+| 步骤 | 读数 |
+|---|---|
+| `admin` 登录 → `GET /settings/tokens` | 200；空列表显示「还没有设备令牌」 |
+| 填名称 `P3 browser check` → 签发 | 页面显示 `kst_…` 明文与「只显示这一次」提示；列表变为 1 行 |
+| 用该明文作 `Authorization: Bearer` → `GET /api/v1/tokens` | **200**，返回刚签发的行 |
+| 页面点撤销 → 确认 | 列表回到 0；提示「下一次请求会返回 401」 |
+| 同一 Bearer 再请求 | **401** `{"message":"未登录",...}` |
+| `list_console_messages` | `/`、`/settings/tokens` 均 **no console messages** |
+
+### 50.3 浏览器：超管只读列表
+
+为避免使用 `.env` 里的真实超管口令，临时建了一个本地超管 `p3check` 并插入一条有效令牌
+`admin-list-check`；验收后已删除该账号、该令牌、测试令牌与临时脚本，库回到 2 个既有账号、
+`api_tokens` 0 行。
+
+| 步骤 | 读数 |
+|---|---|
+| `p3check` 登录 → `GET /admin/tokens` | 200；表头为账号 / 名称 / 签发时间 / 最近使用 |
+| 页面内容 | 账号链接指向 `/admin/users/3`；名称 `admin-list-check`；最近使用「从未使用」 |
+| `list_console_messages` | **no console messages** |
+
+**边界**：本轮只验了本地 Nest 服务。Rust 服务端同改已过 `cargo check --tests` 与单测，
+但没有在浏览器里对 Rust 进程复跑；线上未部署，也没有用真实设备令牌接入。
+
+## 51. 八期 P3 上线（2026-11-17 09:54）
+
+### 51.1 构建与容器
+
+| 步骤 | 读数 |
+|---|---|
+| `make deploy` | `cargo zigbuild --release` **1m34s**；`wasm-pack` 1.13s；archive **5.0 MB** |
+| 镜像 | `sha256:6211ce6e435eceec7d4a68e46473f750d2f42723761b5d66db68ccdd9a9fbcce`，created `2026-11-17T09:54:01+08:00`，entrypoint `[/app/kestrel-studio]` |
+| 容器 | `Up`，`0.0.0.0:8848->8848/tcp` |
+| 档位 | 部署后默认 `nest`，随后 `CLIENT_BUNDLE=wasm docker compose up -d` 重拨；日志 `client="wasm"` |
+| 启动日志 | `Bailian credentials resolved` / `expired sessions cleared=0` / `listening … client="wasm"`；近 10 分钟 `ERROR|WARN` 计数 **0** |
+
+### 51.2 端点与产物
+
+宿主机 `127.0.0.1:8848` 只读探测：
+
+| 端点 | 状态 |
+|---|---|
+| `/login` | 200，909 B |
+| `/assets/main.css` | 200，18,092 B |
+| `/assets/tokens.js` | 200，3,787 B |
+| `/capture.js` | 200，1,687 B |
+| `/wasm/kestrel_client_bg.wasm` | 200，391,780 B |
+| `/settings/tokens` | 302 → `/login`（未带会话） |
+| `/admin/tokens` | 302 → `/login`（未带会话） |
+| `/api/v1/tokens` | 401（未带凭据） |
+| `/api/voice/ticket` | 405（只接受 POST） |
+
+本地与线上 md5 逐项相同：
+
+| 产物 | md5 |
+|---|---|
+| `assets/tokens.js` | `74ff1751562360d5637621a870035a99` |
+| `assets/main.css` | `379ea0ad348faae3afdb27b9cf596d4e` |
+| `wasm/kestrel_client_bg.wasm` | `a30fe09c977df148e08f0fd9049f44b3` |
+
+公网 HTTPS 经 openresty 本机解析：`/login` 200；`/settings/tokens` 与 `/admin/tokens`
+302 到登录页；`/api/v1/tokens` 401。
+
+### 51.3 数据面
+
+`api_tokens` 表存在且为 **0 行**，`users` 仍为 **2 行**；本次部署没有在生产上签发令牌，
+也没有用真实账号登录。P3 的签发 / 撤销 / 401 交互已在本地浏览器验过（§50.2）。
