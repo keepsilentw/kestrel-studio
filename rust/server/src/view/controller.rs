@@ -146,3 +146,13 @@ pub async fn voice(
         state.config.client_bundle,
     ))
 }
+
+/// `GET /settings/tokens` — the account's own device tokens. The frameworkless
+/// client script fills the list and drives the same JSON endpoints native hosts
+/// use, so no token logic is duplicated in either browser bundle.
+pub async fn tokens(ViewAuthed(user): ViewAuthed) -> Response {
+    html(super::templates::tokens_page(
+        &user.username,
+        user.role == crate::auth::roles::Role::Super,
+    ))
+}

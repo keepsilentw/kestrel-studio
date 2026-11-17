@@ -398,6 +398,52 @@ async fn super_count(state: &AppState) -> i64 {
         .expect("n")
 }
 
+#[tokio::test]
+async fn the_token_page_lists_active_tokens_with_their_owner() {
+    let (app, state) = app().await;
+    let (admin_cookie, _admin_id) = boss(&state).await;
+    let (user_cookie, user_id) = account(&state, "walker", Role::User).await;
+
+    sqlx::query(
+        "INSERT INTO api_tokens (user_id, label, token_hash, created_at, last_seen_at) \
+         VALUES (?1, 'phone', 'hash-active', 1, NULL)",
+    )
+    .bind(user_id)
+    .execute(&state.pool)
+    .await
+    .expect("active token");
+    sqlx::query(
+        "INSERT INTO api_tokens (user_id, label, token_hash, created_at, revoked_at) \
+         VALUES (?1, 'old-laptop', 'hash-revoked', 1, 2)",
+    )
+    .bind(user_id)
+    .execute(&state.pool)
+    .await
+    .expect("revoked token");
+
+    let anonymous = app.clone().oneshot(get("/admin/tokens", None)).await.expect("anonymous");
+    assert_eq!(anonymous.status(), StatusCode::FOUND);
+    assert_eq!(anonymous.headers()["location"], "/login");
+
+    let bounced = app
+        .clone()
+        .oneshot(get("/admin/tokens", Some(&user_cookie)))
+        .await
+        .expect("normal account");
+    assert_eq!(bounced.headers()["location"], "/");
+
+    let page = text_body(
+        app.oneshot(get("/admin/tokens", Some(&admin_cookie)))
+            .await
+            .expect("token list"),
+    )
+    .await;
+    assert!(page.contains("walker"), "{page}");
+    assert!(page.contains("phone"), "{page}");
+    assert!(page.contains("从未使用"), "{page}");
+    assert!(!page.contains("old-laptop"), "revoked rows stay out of the list: {page}");
+}
+
 async fn stored_hash(state: &AppState, username: &str) -> String {
     let row = sqlx::query("SELECT password_hash FROM users WHERE username = ?1")
         .bind(username)

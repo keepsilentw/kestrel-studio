@@ -1342,3 +1342,107 @@ body {
 .conversation-delete-yes:hover {
   filter: brightness(1.08);
 }
+
+/*
+ * ---------- device tokens ----------
+ *
+ * The plaintext is shown once, so it gets a box that can wrap a long
+ * `kst_…` credential without widening the page. The revoke dialog mirrors the
+ * conversation-delete dialog: the label being revoked is quoted in the question.
+ */
+.token-reveal {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 10px 12px;
+  align-items: center;
+  margin-top: 16px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--bg);
+}
+
+.token-reveal[hidden] {
+  display: none;
+}
+
+.token-reveal-title {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.token-value {
+  min-width: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--surface);
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.token-revoke-dialog {
+  width: min(380px, 92vw);
+  padding: 24px;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: var(--surface);
+  color: var(--text);
+}
+
+.token-revoke-dialog::backdrop {
+  background: rgb(20 16 14 / 72%);
+}
+
+.token-revoke-title {
+  margin: 0 0 14px;
+  font-size: 17px;
+  font-weight: 600;
+}
+
+.token-revoke-target {
+  margin: 0 0 10px;
+  padding: 8px 12px;
+  background: var(--bg);
+  border-radius: 10px;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}
+
+.token-revoke-hint {
+  margin: 0 0 18px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.token-revoke-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.token-revoke-actions > button {
+  padding: 9px 18px;
+  border-radius: 10px;
+  font-family: inherit;
+  font-size: 14px;
+  cursor: pointer;
+}
+
+.token-revoke-no {
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+}
+
+.token-revoke-yes {
+  border: none;
+  background: var(--danger);
+  color: #fff;
+}
+
+.token-revoke-yes:hover {
+  filter: brightness(1.08);
+}

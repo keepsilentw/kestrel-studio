@@ -804,3 +804,30 @@ fn the_chat_page_carries_every_element_the_wasm_client_requires() {
         );
     }
 }
+
+#[test]
+fn the_tokens_page_carries_its_script_and_revoke_dialog() {
+    let page = super::templates::tokens_page("walker", false);
+    assert!(page.contains("设备令牌"), "{page}");
+    assert!(page.contains("id=\"token-create-form\""), "{page}");
+    assert!(page.contains("id=\"token-list\""), "{page}");
+    assert!(page.contains("id=\"token-revoke-dialog\""), "{page}");
+    assert!(page.contains("src=\"/assets/tokens.js\""), "{page}");
+    assert!(page.contains("class=\"admin-page token-page\""), "{page}");
+    assert!(!page.contains("href=\"/admin\""), "a normal account gets no admin link: {page}");
+
+    let privileged = super::templates::tokens_page("boss", true);
+    assert!(privileged.contains("href=\"/admin\""), "{privileged}");
+}
+
+#[test]
+fn the_chat_header_links_to_the_token_page() {
+    let rendered = super::templates::chat_page(&page_fixture(
+        &[stored_message()],
+        &[ConversationEntry { id: 1, title: "一只红隼".to_string(), is_active: true }],
+        Some(1),
+        Some(3),
+        false,
+    ));
+    assert!(rendered.contains("href=\"/settings/tokens\""), "{rendered}");
+}

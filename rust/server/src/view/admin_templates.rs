@@ -31,6 +31,14 @@ pub struct ConversationRow {
     pub deleted_at_label: Option<String>,
 }
 
+pub struct TokenRow {
+    pub owner_id: i64,
+    pub owner_name: String,
+    pub label: String,
+    pub created_at_label: String,
+    pub last_seen_at_label: String,
+}
+
 pub struct AccountChip {
     pub id: i64,
     pub username: String,
@@ -81,7 +89,45 @@ pub fn accounts_page(username: &str, accounts: &[PresentedAccount], notice: Opti
         count = accounts.len(),
         rows = rows,
     );
-    shell("账号管理", &[("/", "返回对话"), ("/admin/conversations", "全站会话")], username, &main)
+    shell(
+        "账号管理",
+        &[("/", "返回对话"), ("/admin/conversations", "全站会话"), ("/admin/tokens", "设备令牌")],
+        username,
+        &main,
+    )
+}
+
+pub fn tokens_page(username: &str, rows: &[TokenRow]) -> String {
+    let mut body = String::new();
+    for row in rows {
+        body.push_str(&format!(
+            "          <tr>\n            <td><a href=\"/admin/users/{owner_id}\">{owner}</a></td>\n            <td>{label}</td>\n            <td>{created}</td>\n            <td>{seen}</td>\n          </tr>\n",
+            owner_id = row.owner_id,
+            owner = escape(&row.owner_name),
+            label = escape(&row.label),
+            created = escape(&row.created_at_label),
+            seen = escape(&row.last_seen_at_label),
+        ));
+    }
+    if body.is_empty() {
+        body.push_str("          <tr><td colspan=\"4\" class=\"admin-empty\">没有有效令牌</td></tr>\n");
+    }
+
+    let main = format!(
+        "  <main class=\"admin-main\">\n    <section class=\"admin-card\">\n      <h2 class=\"admin-title\">设备令牌（{count}）</h2>\n      <p class=\"admin-hint\">\n        只列有效令牌。明文只在签发时出现一次，超管也看不到；撤销由账号本人完成。\n      </p>\n      <table class=\"admin-table\">\n        <thead>\n          <tr>\n            <th>账号</th>\n            <th>名称</th>\n            <th>签发时间</th>\n            <th>最近使用</th>\n          </tr>\n        </thead>\n        <tbody>\n{rows}        </tbody>\n      </table>\n    </section>\n  </main>\n",
+        count = rows.len(),
+        rows = body,
+    );
+    shell(
+        "设备令牌",
+        &[
+            ("/", "返回对话"),
+            ("/admin", "账号管理"),
+            ("/admin/conversations", "全站会话"),
+        ],
+        username,
+        &main,
+    )
 }
 
 pub fn conversations_page(
@@ -133,7 +179,12 @@ pub fn conversations_page(
         chips = chip_items,
         rows = body,
     );
-    shell("全站会话", &[("/", "返回对话"), ("/admin", "账号管理")], username, &main)
+    shell(
+        "全站会话",
+        &[("/", "返回对话"), ("/admin", "账号管理"), ("/admin/tokens", "设备令牌")],
+        username,
+        &main,
+    )
 }
 
 pub fn account_page(
@@ -151,7 +202,12 @@ pub fn account_page(
         assets = account.asset_count,
         created = escape(&account.created_at_label),
     );
-    let menu = [("/", "返回对话"), ("/admin", "账号管理"), ("/admin/conversations", "全站会话")];
+    let menu = [
+        ("/", "返回对话"),
+        ("/admin", "账号管理"),
+        ("/admin/conversations", "全站会话"),
+        ("/admin/tokens", "设备令牌"),
+    ];
     shell(&account.username, &menu, username, &main)
 }
 
@@ -163,7 +219,12 @@ pub fn delete_page(username: &str, account: &PresentedAccount) -> String {
         assets = account.asset_count,
         id = account.id,
     );
-    shell("删除账号", &[("/", "返回对话"), ("/admin", "账号管理")], username, &main)
+    shell(
+        "删除账号",
+        &[("/", "返回对话"), ("/admin", "账号管理"), ("/admin/tokens", "设备令牌")],
+        username,
+        &main,
+    )
 }
 
 pub fn conversation_page(
@@ -199,7 +260,12 @@ pub fn conversation_page(
     );
     shell(
         title,
-        &[("/", "返回对话"), ("/admin", "账号管理"), ("/admin/conversations", "全站会话")],
+        &[
+            ("/", "返回对话"),
+            ("/admin", "账号管理"),
+            ("/admin/conversations", "全站会话"),
+            ("/admin/tokens", "设备令牌"),
+        ],
         username,
         &main,
     )

@@ -36,6 +36,15 @@ pub struct AccountView {
     pub asset_count: i64,
 }
 
+#[derive(Debug, Clone)]
+pub struct ActiveTokenView {
+    pub owner_id: i64,
+    pub owner_name: String,
+    pub label: String,
+    pub created_at: i64,
+    pub last_seen_at: Option<i64>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum CreateAccountResult {
     Created(i64),
@@ -103,6 +112,29 @@ impl AdminService {
             counts.remove(&id).unwrap_or(0),
             assets.remove(&id).unwrap_or(0),
         )))
+    }
+
+    /// Every active device token, across all accounts. The plaintext is not
+    /// recoverable by design; this page exists so the super admin can see which
+    /// devices are still trusted and whose they are.
+    pub async fn list_active_tokens(&self) -> Result<Vec<ActiveTokenView>, AppError> {
+        let rows = sqlx::query(
+            "SELECT t.id, t.user_id, u.username, t.label, t.created_at, t.last_seen_at \
+             FROM api_tokens t JOIN users u ON u.id = t.user_id \
+             WHERE t.revoked_at IS NULL ORDER BY t.id DESC",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| ActiveTokenView {
+                owner_id: row.try_get("user_id").unwrap_or_default(),
+                owner_name: row.try_get("username").unwrap_or_default(),
+                label: row.try_get("label").unwrap_or_default(),
+                created_at: row.try_get("created_at").unwrap_or_default(),
+                last_seen_at: row.try_get("last_seen_at").unwrap_or(None),
+            })
+            .collect())
     }
 
     /// New accounts are always plain users; promotion is not part of this surface.

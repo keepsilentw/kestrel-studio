@@ -149,7 +149,7 @@ fn header(page: &ChatPage) -> String {
     }
 
     format!(
-        "  <header class=\"topbar\">\n    <a class=\"brand\" href=\"/\">\n      <img class=\"brand-logo\" src=\"/logo.svg\" alt=\"\" width=\"32\" height=\"32\">\n      <span class=\"brand-name\">Kestrel Studio</span>\n    </a>\n\n    <nav class=\"menu\">\n      <button type=\"button\" class=\"menu-button\" id=\"new-conversation\">新会话</button>\n      <a class=\"menu-button\" href=\"/voice\">语音</a>\n{admin}      <details class=\"menu-dropdown\">\n        <summary class=\"menu-button\">历史会话</summary>\n        <ul class=\"conversation-list\">\n{items}        </ul>\n      </details>\n    </nav>\n\n    <div class=\"account\">\n      <div class=\"account-menu\">\n        <span class=\"account-name\">{name}</span>\n        <form action=\"/logout\" method=\"post\" class=\"logout-form\">\n          <button type=\"submit\" class=\"logout-button\">退出登录</button>\n        </form>\n      </div>\n    </div>\n  </header>\n",
+        "  <header class=\"topbar\">\n    <a class=\"brand\" href=\"/\">\n      <img class=\"brand-logo\" src=\"/logo.svg\" alt=\"\" width=\"32\" height=\"32\">\n      <span class=\"brand-name\">Kestrel Studio</span>\n    </a>\n\n    <nav class=\"menu\">\n      <button type=\"button\" class=\"menu-button\" id=\"new-conversation\">新会话</button>\n      <a class=\"menu-button\" href=\"/voice\">语音</a>\n      <a class=\"menu-button\" href=\"/settings/tokens\">令牌</a>\n{admin}      <details class=\"menu-dropdown\">\n        <summary class=\"menu-button\">历史会话</summary>\n        <ul class=\"conversation-list\">\n{items}        </ul>\n      </details>\n    </nav>\n\n    <div class=\"account\">\n      <div class=\"account-menu\">\n        <span class=\"account-name\">{name}</span>\n        <form action=\"/logout\" method=\"post\" class=\"logout-form\">\n          <button type=\"submit\" class=\"logout-button\">退出登录</button>\n        </form>\n      </div>\n    </div>\n  </header>\n",
         admin = admin,
         items = items,
         name = escape(&page.username)
@@ -365,19 +365,92 @@ pub fn voice_page(username: &str, is_super: bool, client: crate::config::ClientB
     } else {
         ""
     };
+    let menu = format!(
+        "      <a class=\"menu-button\" href=\"/\">返回对话</a>\n      <a class=\"menu-button\" href=\"/settings/tokens\">令牌</a>\n{admin}"
+    );
     let main = format!(
         "  <main class=\"voice-stage\">\n    <p class=\"voice-status\" id=\"voice-status\">按住按钮开始说话</p>\n    <ol class=\"voice-log\" id=\"voice-log\"></ol>\n  </main>\n\n  <div class=\"voice-controls\">\n    <button type=\"button\" class=\"voice-button\" id=\"voice-button\">按住说话</button>\n  </div>\n\n{}",
         client_script(client, "/assets/voice.js", "initVoice")
     );
-    shell_voice("语音", admin, username, &main)
+    page_shell("语音", "voice-page", &menu, username, &main)
 }
 
-fn shell_voice(title: &str, admin: &str, username: &str, main: &str) -> String {
+/// The user-facing pages outside the chat shell: `/voice` and `/settings/tokens`.
+fn page_shell(title: &str, body_class: &str, menu: &str, username: &str, main: &str) -> String {
     format!(
-        "<!DOCTYPE html>\n<html lang=\"zh-CN\">\n<head>\n  <meta charset=\"utf-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n  <title>{title} · Kestrel Studio</title>\n  <link rel=\"icon\" type=\"image/svg+xml\" href=\"/logo.svg\">\n  <link rel=\"stylesheet\" href=\"/assets/main.css\">\n</head>\n<body class=\"voice-page\">\n  <header class=\"topbar\">\n    <a class=\"brand\" href=\"/\">\n      <img class=\"brand-logo\" src=\"/logo.svg\" alt=\"\" width=\"32\" height=\"32\">\n      <span class=\"brand-name\">Kestrel Studio</span>\n    </a>\n\n    <nav class=\"menu\">\n      <a class=\"menu-button\" href=\"/\">返回对话</a>\n{admin}    </nav>\n\n    <div class=\"account\">\n      <div class=\"account-menu\">\n        <span class=\"account-name\">{name}</span>\n        <form action=\"/logout\" method=\"post\" class=\"logout-form\">\n          <button type=\"submit\" class=\"logout-button\">退出登录</button>\n        </form>\n      </div>\n    </div>\n  </header>\n\n{main}</body>\n</html>\n",
+        "<!DOCTYPE html>\n<html lang=\"zh-CN\">\n<head>\n  <meta charset=\"utf-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n  <title>{title} · Kestrel Studio</title>\n  <link rel=\"icon\" type=\"image/svg+xml\" href=\"/logo.svg\">\n  <link rel=\"stylesheet\" href=\"/assets/main.css\">\n</head>\n<body class=\"{body_class}\">\n  <header class=\"topbar\">\n    <a class=\"brand\" href=\"/\">\n      <img class=\"brand-logo\" src=\"/logo.svg\" alt=\"\" width=\"32\" height=\"32\">\n      <span class=\"brand-name\">Kestrel Studio</span>\n    </a>\n\n    <nav class=\"menu\">\n{menu}    </nav>\n\n    <div class=\"account\">\n      <div class=\"account-menu\">\n        <span class=\"account-name\">{name}</span>\n        <form action=\"/logout\" method=\"post\" class=\"logout-form\">\n          <button type=\"submit\" class=\"logout-button\">退出登录</button>\n        </form>\n      </div>\n    </div>\n  </header>\n\n{main}</body>\n</html>\n",
         title = escape(title),
-        admin = admin,
+        body_class = escape(body_class),
+        menu = menu,
         name = escape(username),
         main = main,
     )
+}
+
+/// The account's own device tokens. The list is fetched by `/assets/tokens.js`
+/// so the page stays out of both browser bundles; the copy and revoke controls
+/// use the same JSON contract native hosts use.
+pub fn tokens_page(username: &str, is_super: bool) -> String {
+    let admin = if is_super {
+        "      <a class=\"menu-button\" href=\"/admin\">管理</a>\n"
+    } else {
+        ""
+    };
+    let menu = format!(
+        "      <a class=\"menu-button\" href=\"/\">返回对话</a>\n{admin}"
+    );
+    let main = r#"  <main class="admin-main">
+    <section class="admin-card">
+      <h2 class="admin-title">设备令牌</h2>
+      <p class="admin-hint">
+        给 App、小程序这类没有 cookie 的宿主使用。明文只在签发时显示一次，
+        之后只保留摘要；撤销后，下一次请求立即返回 401。
+      </p>
+      <form class="admin-form" id="token-create-form">
+        <label class="admin-field">
+          <span>名称</span>
+          <input id="token-label" name="label" type="text" maxlength="64"
+                 placeholder="例如：我的手机" autocomplete="off">
+        </label>
+        <button type="submit" class="admin-button">签发令牌</button>
+      </form>
+      <p class="admin-notice" id="token-notice" role="status" aria-live="polite" hidden></p>
+      <div class="token-reveal" id="token-reveal" hidden>
+        <p class="token-reveal-title">新令牌（只显示这一次）</p>
+        <code class="token-value" id="token-value"></code>
+        <button type="button" class="admin-button admin-button-quiet" id="token-copy">复制</button>
+      </div>
+    </section>
+
+    <section class="admin-card">
+      <h2 class="admin-title">有效令牌（<span id="token-count">0</span>）</h2>
+      <table class="admin-table">
+        <thead>
+          <tr>
+            <th>名称</th>
+            <th>签发时间</th>
+            <th>最近使用</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="token-list">
+          <tr><td colspan="4" class="admin-empty">加载中…</td></tr>
+        </tbody>
+      </table>
+    </section>
+  </main>
+
+  <dialog class="token-revoke-dialog" id="token-revoke-dialog" aria-labelledby="token-revoke-title">
+    <h2 class="token-revoke-title" id="token-revoke-title">撤销这个令牌？</h2>
+    <p class="token-revoke-target" id="token-revoke-target"></p>
+    <p class="token-revoke-hint">撤销后，正在使用它的设备下一次请求就会返回 401。</p>
+    <div class="token-revoke-actions">
+      <button type="button" class="token-revoke-no" data-token-revoke-choice="cancel">取消</button>
+      <button type="button" class="token-revoke-yes" data-token-revoke-choice="confirm">撤销</button>
+    </div>
+  </dialog>
+
+  <script type="module" src="/assets/tokens.js"></script>
+"#;
+    page_shell("设备令牌", "admin-page token-page", &menu, username, main)
 }

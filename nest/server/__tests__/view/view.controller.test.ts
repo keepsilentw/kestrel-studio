@@ -148,6 +148,23 @@ describe('GET /login', () => {
   });
 });
 
+describe('GET /settings/tokens', () => {
+  it('未登录时重定向到登录页', async () => {
+    const response = await get('/settings/tokens', null);
+    expect(response.status).toBe(302);
+    expect(response.headers.get('location')).toBe('/login');
+  });
+
+  it('渲染令牌页与框架无关脚本', async () => {
+    const html = await (await get('/settings/tokens')).text();
+    expect(html).toContain('设备令牌');
+    expect(html).toContain('id="token-create-form"');
+    expect(html).toContain('id="token-revoke-dialog"');
+    expect(html).toContain('src="/assets/tokens.js"');
+    expect(html).not.toContain('href="/admin"');
+  });
+});
+
 describe('GET / — 会话选择', () => {
   it('未登录重定向到登录页', async () => {
     const response = await get('/', null);

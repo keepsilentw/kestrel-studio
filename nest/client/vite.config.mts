@@ -7,8 +7,8 @@ import { defineConfig } from 'vite';
  * stable names the templates can link to.
  *
  * One entry per page: `assets/main.js` for the chat page, `assets/voice.js` for
- * /voice. Entry names are the rollup input keys, which is why they are spelled
- * out rather than hashed.
+ * /voice, and `assets/tokens.js` for /settings/tokens. Entry names are the
+ * rollup input keys, which is why they are spelled out rather than hashed.
  *
  * The config lives inside the client it builds, so `root` is this directory and
  * every path is anchored at `import.meta.dirname` rather than the shell's working
@@ -28,6 +28,7 @@ export default defineConfig({
       input: {
         main: resolve(import.meta.dirname, 'scripts/main.ts'),
         voice: resolve(import.meta.dirname, 'scripts/voice.ts'),
+        tokens: resolve(import.meta.dirname, 'scripts/tokens.ts'),
       },
       output: {
         entryFileNames: 'assets/[name].js',

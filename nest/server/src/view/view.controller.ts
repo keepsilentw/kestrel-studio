@@ -49,6 +49,22 @@ export class ViewController {
     res.render('voice', { user });
   }
 
+  /**
+   * The account's own device tokens. The frameworkless client script fills the
+   * list and drives the same JSON endpoints native hosts use, so the token UI is
+   * not duplicated in either browser bundle.
+   */
+  @UseGuards(ViewAuthGuard)
+  @Get('settings/tokens')
+  tokens(@Req() req: Request, @Res() res: Response): void {
+    const user = req.user;
+    if (user === undefined) {
+      res.redirect('/login');
+      return;
+    }
+    res.render('tokens', { user });
+  }
+
   @Get('login')
   login(@Query('error') error: string | undefined, @Res() res: Response): void {
     const user = res.req.user;

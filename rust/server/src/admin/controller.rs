@@ -14,8 +14,8 @@ use crate::error::AppError;
 use crate::http::redirect::found;
 use crate::state::AppState;
 use crate::view::admin_templates::{
-    AccountChip, ConversationRow, Notice, PresentedAccount, account_page, accounts_page,
-    conversation_page, conversations_page, delete_page,
+    AccountChip, ConversationRow, Notice, PresentedAccount, TokenRow, account_page, accounts_page,
+    conversation_page, conversations_page, delete_page, tokens_page,
 };
 use crate::view::render::{format_timestamp, render_messages};
 
@@ -86,6 +86,29 @@ pub async fn index(
         &accounts.into_iter().map(present).collect::<Vec<_>>(),
         note.as_ref(),
     )))
+}
+
+/// Every active device token, across all accounts.
+pub async fn tokens_page_handler(
+    SuperAdmin(actor): SuperAdmin,
+    State(state): State<AppState>,
+) -> Result<Response, AppError> {
+    let rows: Vec<TokenRow> = admin(&state)
+        .list_active_tokens()
+        .await?
+        .into_iter()
+        .map(|token| TokenRow {
+            owner_id: token.owner_id,
+            owner_name: token.owner_name,
+            label: token.label,
+            created_at_label: format_timestamp(token.created_at),
+            last_seen_at_label: token
+                .last_seen_at
+                .map(format_timestamp)
+                .unwrap_or_else(|| "从未使用".to_string()),
+        })
+        .collect();
+    Ok(html(tokens_page(&actor.username, &rows)))
 }
 
 /// Site-wide conversation list; `?user=` narrows it to one account.

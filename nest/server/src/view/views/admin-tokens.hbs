@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>设备令牌 · Kestrel Studio</title>
+  <link rel="icon" type="image/svg+xml" href="/logo.svg">
+  <link rel="stylesheet" href="/assets/main.css">
+</head>
+<body class="admin-page">
+  <header class="topbar">
+    <a class="brand" href="/">
+      <img class="brand-logo" src="/logo.svg" alt="" width="32" height="32">
+      <span class="brand-name">Kestrel Studio</span>
+    </a>
+
+    <nav class="menu">
+      <a class="menu-button" href="/">返回对话</a>
+      <a class="menu-button" href="/admin">账号管理</a>
+      <a class="menu-button" href="/admin/conversations">全站会话</a>
+    </nav>
+
+    <div class="account">
+      <div class="account-menu">
+        <span class="account-name">{{user.username}}</span>
+        <form action="/logout" method="post" class="logout-form">
+          <button type="submit" class="logout-button">退出登录</button>
+        </form>
+      </div>
+    </div>
+  </header>
+
+  <main class="admin-main">
+    <section class="admin-card">
+      <h2 class="admin-title">设备令牌（{{tokens.length}}）</h2>
+      <p class="admin-hint">
+        只列有效令牌。明文只在签发时出现一次，超管也看不到；撤销由账号本人完成。
+      </p>
+      <table class="admin-table">
+        <thead>
+          <tr>
+            <th>账号</th>
+            <th>名称</th>
+            <th>签发时间</th>
+            <th>最近使用</th>
+          </tr>
+        </thead>
+        <tbody>
+          {{#each tokens}}
+            <tr>
+              <td><a href="/admin/users/{{ownerId}}">{{ownerName}}</a></td>
+              <td>{{label}}</td>
+              <td>{{createdAtLabel}}</td>
+              <td>{{lastSeenAtLabel}}</td>
+            </tr>
+          {{else}}
+            <tr><td colspan="4" class="admin-empty">没有有效令牌</td></tr>
+          {{/each}}
+        </tbody>
+      </table>
+    </section>
+  </main>
+</body>
+</html>

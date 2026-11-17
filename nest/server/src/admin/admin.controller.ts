@@ -78,6 +78,18 @@ export class AdminController {
     });
   }
 
+  /** Every active device token, across all accounts. */
+  @Get('tokens')
+  tokensPage(@Req() req: Request, @Res() res: Response): void {
+    const tokens = this.admin.listTokens().map((token) => ({
+      ...token,
+      createdAtLabel: formatTimestamp(token.createdAt),
+      lastSeenAtLabel:
+        token.lastSeenAt === null ? '从未使用' : formatTimestamp(token.lastSeenAt),
+    }));
+    res.render('admin-tokens', { user: req.user, tokens });
+  }
+
   /** Site-wide conversation list; `?user=` narrows it to one account. */
   @Get('conversations')
   conversationsPage(

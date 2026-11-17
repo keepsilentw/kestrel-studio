@@ -105,7 +105,7 @@ beforeEach(() => {
   // rebooting it. Children first: foreign keys are on. The fixtures are rebuilt
   // rather than merely kept, since a test deletes one of them on purpose.
   connection.exec(
-    'DELETE FROM generation_tasks; DELETE FROM assets; DELETE FROM messages; DELETE FROM conversations; DELETE FROM users;',
+    'DELETE FROM generation_tasks; DELETE FROM assets; DELETE FROM messages; DELETE FROM conversations; DELETE FROM api_tokens; DELETE FROM users;',
   );
   seedFixtureUsers();
 });
@@ -134,7 +134,13 @@ function post(
 }
 
 describe('SuperAdminGuard', () => {
-  it.each([['/admin'], ['/admin/conversations'], ['/admin/users/1'], ['/admin/users/1/delete']])(
+  it.each([
+    ['/admin'],
+    ['/admin/tokens'],
+    ['/admin/conversations'],
+    ['/admin/users/1'],
+    ['/admin/users/1/delete'],
+  ])(
     '未登录访问 %s 时重定向到登录页',
     async (path) => {
       const response = await get(path, null);
@@ -180,6 +186,27 @@ describe('GET /admin', () => {
   it('未知 notice 码不渲染提示', async () => {
     const html = await (await get('/admin?notice=nonsense')).text();
     expect(html).not.toContain('admin-notice');
+  });
+});
+
+describe('GET /admin/tokens', () => {
+  it('列出有效令牌与归属，撤销的不出现', async () => {
+    connection
+      .prepare(
+        'INSERT INTO api_tokens (user_id, label, token_hash, created_at, last_seen_at) VALUES (?, ?, ?, ?, ?)',
+      )
+      .run(ALICE, 'phone', 'hash-active', Date.now(), null);
+    connection
+      .prepare(
+        'INSERT INTO api_tokens (user_id, label, token_hash, created_at, revoked_at) VALUES (?, ?, ?, ?, ?)',
+      )
+      .run(ALICE, 'old-laptop', 'hash-revoked', Date.now(), Date.now());
+
+    const html = await (await get('/admin/tokens')).text();
+    expect(html).toContain('user1');
+    expect(html).toContain('phone');
+    expect(html).toContain('从未使用');
+    expect(html).not.toContain('old-laptop');
   });
 });
 

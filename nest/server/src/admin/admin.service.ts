@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { hash } from 'bcryptjs';
-import { asc, count, eq } from 'drizzle-orm';
+import { asc, count, desc, eq, isNull } from 'drizzle-orm';
 import { ROLE_LABEL, parseRole, type Role, type Viewer } from '@/auth/roles';
 import { ConversationService } from '@/conversation/conversation.service';
 import { DRIZZLE_INSTANCE, type DrizzleDb } from '@/database/database.module';
@@ -19,6 +19,14 @@ export interface AccountView {
   createdAt: number;
   conversationCount: number;
   assetCount: number;
+}
+
+export interface AdminTokenView {
+  ownerId: number;
+  ownerName: string;
+  label: string;
+  createdAt: number;
+  lastSeenAt: number | null;
 }
 
 export type CreateAccountResult =
@@ -85,6 +93,34 @@ export class AdminService {
       this.groupedConversationCounts().get(id) ?? 0,
       this.groupedAssetCounts().get(id) ?? 0,
     );
+  }
+
+  /**
+   * Every active device token, across all accounts. The plaintext is not
+   * recoverable by design; this list exists so the super admin can see which
+   * devices are still trusted and whose they are.
+   */
+  listTokens(): AdminTokenView[] {
+    return this.db
+      .select({
+        ownerId: apiTokens.userId,
+        ownerName: users.username,
+        label: apiTokens.label,
+        createdAt: apiTokens.createdAt,
+        lastSeenAt: apiTokens.lastSeenAt,
+      })
+      .from(apiTokens)
+      .innerJoin(users, eq(apiTokens.userId, users.id))
+      .where(isNull(apiTokens.revokedAt))
+      .orderBy(desc(apiTokens.id))
+      .all()
+      .map((row) => ({
+        ownerId: row.ownerId,
+        ownerName: row.ownerName,
+        label: row.label,
+        createdAt: row.createdAt.getTime(),
+        lastSeenAt: row.lastSeenAt === null ? null : row.lastSeenAt.getTime(),
+      }));
   }
 
   /** New accounts are always plain users; promotion is not part of this surface. */
