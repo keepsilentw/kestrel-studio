@@ -94,6 +94,12 @@ fn readable_args(viewer: &Principal) -> (i64, i64) {
 const READABLE_SQL: &str =
     "((c.user_id = ?1 AND c.deleted_at IS NULL) OR (?2 = 1 AND u.role = 'user'))";
 
+/// One window of a conversation, plus whether anything older is left.
+pub struct MessagePage {
+    pub views: Vec<MessageView>,
+    pub has_more: bool,
+}
+
 pub struct ConversationService {
     pool: SqlitePool,
     /// Rows hold a bare file name; this is what resolves it. Injected rather than
@@ -265,20 +271,112 @@ impl ConversationService {
     }
 
     pub async fn views(&self, conversation_id: i64) -> Result<Vec<MessageView>, AppError> {
-        let rows = sqlx::query(
-            "SELECT id, role, content, reasoning, tool_calls, mode, created_at FROM messages WHERE conversation_id = ?1 ORDER BY id ASC",
-        )
-        .bind(conversation_id)
-        .fetch_all(&self.pool)
-        .await?;
-        let grouped = self.assets_by_message(conversation_id).await?;
-        Ok(rows
+        Ok(self.views_page(conversation_id, None, None).await?.views)
+    }
+
+    /// One window of the conversation, oldest-first. `before` is the id of the
+    /// oldest row the caller already has; `limit = None` is the old unbounded read.
+    ///
+    /// When the newest window starts on an assistant row, the message just before
+    /// it is pulled in too: that is normally the user prompt the answer belongs to,
+    /// and starting a window with an orphaned answer reads as missing history.
+    pub async fn views_page(
+        &self,
+        conversation_id: i64,
+        before: Option<i64>,
+        limit: Option<i64>,
+    ) -> Result<MessagePage, AppError> {
+        let Some(limit) = limit else {
+            let rows = sqlx::query(
+                "SELECT id, role, content, reasoning, tool_calls, mode, created_at FROM messages WHERE conversation_id = ?1 ORDER BY id ASC",
+            )
+            .bind(conversation_id)
+            .fetch_all(&self.pool)
+            .await?;
+            let grouped = self.assets_by_message(conversation_id).await?;
+            let views = rows
+                .iter()
+                .map(|row| {
+                    let id: i64 = row.try_get("id").expect("id");
+                    to_message_view(row, grouped.get(&id).map(Vec::as_slice).unwrap_or(&[]))
+                })
+                .collect();
+            return Ok(MessagePage {
+                views,
+                has_more: false,
+            });
+        };
+
+        let limit = limit.max(1);
+        let mut rows = if let Some(before) = before {
+            sqlx::query(
+                "SELECT id, role, content, reasoning, tool_calls, mode, created_at FROM messages
+                 WHERE conversation_id = ?1 AND id < ?2 ORDER BY id DESC LIMIT ?3",
+            )
+            .bind(conversation_id)
+            .bind(before)
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query(
+                "SELECT id, role, content, reasoning, tool_calls, mode, created_at FROM messages
+                 WHERE conversation_id = ?1 ORDER BY id DESC LIMIT ?2",
+            )
+            .bind(conversation_id)
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await?
+        };
+
+        if rows.last().is_some_and(|row| {
+            row.try_get::<String, _>("role").ok().as_deref() == Some("assistant")
+        }) {
+            let oldest: i64 = rows
+                .last()
+                .expect("checked above")
+                .try_get("id")
+                .expect("id");
+            let prior = sqlx::query(
+                "SELECT id, role, content, reasoning, tool_calls, mode, created_at FROM messages
+                 WHERE conversation_id = ?1 AND id < ?2 ORDER BY id DESC LIMIT 1",
+            )
+            .bind(conversation_id)
+            .bind(oldest)
+            .fetch_optional(&self.pool)
+            .await?;
+            if let Some(prior) = prior {
+                rows.push(prior);
+            }
+        }
+
+        let has_more = match rows.last() {
+            Some(oldest) => {
+                let oldest_id: i64 = oldest.try_get("id").expect("id");
+                sqlx::query("SELECT 1 AS value FROM messages WHERE conversation_id = ?1 AND id < ?2 LIMIT 1")
+                    .bind(conversation_id)
+                    .bind(oldest_id)
+                    .fetch_optional(&self.pool)
+                    .await?
+                    .is_some()
+            }
+            None => false,
+        };
+
+        rows.reverse();
+        let ids: Vec<i64> = rows
+            .iter()
+            .map(|row| row.try_get("id").expect("id"))
+            .collect();
+        let grouped = self.assets_for_message_ids(&ids).await?;
+        let views = rows
             .iter()
             .map(|row| {
                 let id: i64 = row.try_get("id").expect("id");
                 to_message_view(row, grouped.get(&id).map(Vec::as_slice).unwrap_or(&[]))
             })
-            .collect())
+            .collect();
+        Ok(MessagePage { views, has_more })
     }
 
     /// One conversation summary owned by `user_id`, or `None` when it is hidden,
@@ -760,6 +858,34 @@ impl ConversationService {
         }
         Ok(grouped)
     }
+
+    /// Assets for one message window. Kept separate from `assets_by_message` so a
+    /// bounded read does not scan every asset in a long conversation.
+    async fn assets_for_message_ids(
+        &self,
+        ids: &[i64],
+    ) -> Result<HashMap<i64, Vec<AssetView>>, AppError> {
+        if ids.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let marks = placeholders(ids.len(), 1);
+        let rows = sqlx::query(&format!(
+            "SELECT a.id AS id, a.message_id AS message_id, a.kind AS kind, a.mime AS mime, a.bytes AS bytes, a.width AS width, a.height AS height
+             FROM assets a WHERE a.message_id IN ({marks}) ORDER BY a.id ASC"
+        ))
+        .bind_many(ids)
+        .fetch_all(&self.pool)
+        .await?;
+        let mut grouped: HashMap<i64, Vec<AssetView>> = HashMap::new();
+        for row in &rows {
+            let message_id: i64 = row.try_get("message_id").expect("message_id");
+            grouped
+                .entry(message_id)
+                .or_default()
+                .push(to_asset_view(row));
+        }
+        Ok(grouped)
+    }
 }
 
 /// Shared by the site-wide list and the single-conversation lookup. The list adds
@@ -1084,6 +1210,47 @@ mod tests {
             .await
             .expect("foreign cursor");
         assert!(foreign.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_message_window_keeps_the_newest_rows_and_reports_older_ones() {
+        let (service, _) = seeded().await;
+        let first_user = service
+            .append_user_message(10, "问一", None)
+            .await
+            .expect("first user");
+        let first_answer = service
+            .append_assistant_message(10, "答一", None)
+            .await
+            .expect("first answer");
+        let second_user = service
+            .append_user_message(10, "问二", None)
+            .await
+            .expect("second user");
+        let second_answer = service
+            .append_assistant_message(10, "答二", None)
+            .await
+            .expect("second answer");
+
+        let newest = service
+            .views_page(10, None, Some(2))
+            .await
+            .expect("newest window");
+        assert_eq!(
+            newest.views.iter().map(|view| view.id).collect::<Vec<_>>(),
+            [second_user, second_answer]
+        );
+        assert!(newest.has_more);
+
+        let older = service
+            .views_page(10, Some(second_user), Some(2))
+            .await
+            .expect("older window");
+        assert_eq!(
+            older.views.iter().map(|view| view.id).collect::<Vec<_>>(),
+            [first_user, first_answer]
+        );
+        assert!(!older.has_more);
     }
 
     #[tokio::test]

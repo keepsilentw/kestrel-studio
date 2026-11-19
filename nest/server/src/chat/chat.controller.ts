@@ -172,7 +172,12 @@ export class ChatController {
   }
 
   @Get('conversations/:id/messages')
-  async messages(@Req() req: Request, @Param('id') id: string): Promise<MessageView[]> {
+  async messages(
+    @Req() req: Request,
+    @Param('id') id: string,
+    @Query('limit') limitRaw?: string,
+    @Query('before') beforeRaw?: string,
+  ): Promise<MessageView[]> {
     const user = req.user;
     const conversationId = readPositiveInt(id);
     if (user === undefined || conversationId === null) {
@@ -181,7 +186,16 @@ export class ChatController {
     if (!this.conversations.canRead(conversationId, user)) {
       return [];
     }
-    return this.conversations.views(conversationId);
+    const limit = readPositiveInt(limitRaw);
+    const before = readPositiveInt(beforeRaw);
+    const options: { before?: number; limit?: number } = {};
+    if (before !== null) {
+      options.before = before;
+    }
+    if (limit !== null) {
+      options.limit = Math.min(limit, 200);
+    }
+    return this.conversations.viewsPage(conversationId, options).views;
   }
 
   @Get('conversations/:id/tasks')

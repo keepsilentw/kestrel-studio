@@ -37,6 +37,8 @@ pub struct ChatPage {
     /// server decides where to catch up.
     pub start_seq: Option<i64>,
     pub messages: Vec<RenderedMessage>,
+    /// Present when older messages exist; `messages` is already one window.
+    pub older_href: Option<String>,
     pub pending_tasks: Vec<PendingTask>,
     pub turn_anchors: Vec<TurnAnchor>,
     pub can_delete_conversations: bool,
@@ -84,6 +86,12 @@ pub fn chat_page(page: &ChatPage) -> String {
 
     out.push_str(&header(page));
     out.push_str("<main class=\"stream\" id=\"stream\">\n");
+    if let Some(href) = &page.older_href {
+        out.push_str(&format!(
+            "    <div class=\"load-older\"><a class=\"load-older-link\" href=\"{}\">加载更早的消息</a></div>\n",
+            escape(href)
+        ));
+    }
     for message in &page.messages {
         out.push_str(&turn(message));
     }

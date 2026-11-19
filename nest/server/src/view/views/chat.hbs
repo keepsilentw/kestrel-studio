@@ -58,6 +58,11 @@
   </header>
 
   <main class="stream" id="stream">
+    {{#if olderHref}}
+      <div class="load-older">
+        <a class="load-older-link" href="{{olderHref}}">加载更早的消息</a>
+      </div>
+    {{/if}}
     {{#each messages}}
       {{> turn}}
     {{/each}}

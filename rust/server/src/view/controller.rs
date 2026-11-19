@@ -20,6 +20,9 @@ use super::templates::{ChatPage, ConversationEntry};
 const HTML: &str = "text/html; charset=utf-8";
 /// The sidebar's first paint. The client can append older pages from here.
 const HISTORY_PAGE_SIZE: i64 = 50;
+/// The main column's first paint and its growth step.
+const MESSAGE_PAGE_DEFAULT: i64 = 50;
+const MESSAGE_PAGE_MAX: i64 = 1000;
 
 fn html(body: String) -> Response {
     (
@@ -111,9 +114,18 @@ pub async fn chat(
             .collect(),
     };
 
-    let raw_views = match active {
-        None => Vec::new(),
-        Some(id) => state.conversations.views(id).await?,
+    let message_limit = read_positive_int(params.get("messages").map(String::as_str))
+        .map(|value| value.clamp(MESSAGE_PAGE_DEFAULT, MESSAGE_PAGE_MAX))
+        .unwrap_or(MESSAGE_PAGE_DEFAULT);
+    let (raw_views, has_older) = match active {
+        None => (Vec::new(), false),
+        Some(id) => {
+            let page = state
+                .conversations
+                .views_page(id, None, Some(message_limit))
+                .await?;
+            (page.views, page.has_more)
+        }
     };
     // An assistant placeholder of a still-running turn is not painted: the stream
     // replays that turn from its first event (startSeq is set to before it), and a
@@ -124,6 +136,10 @@ pub async fn chat(
         .collect();
     let messages = render_messages(painted);
     let turn_anchors = build_turn_anchors(&messages);
+    let older_href = active.and_then(|id| {
+        let next = (message_limit + MESSAGE_PAGE_DEFAULT).min(MESSAGE_PAGE_MAX);
+        (has_older && next > message_limit).then(|| format!("/?c={id}&messages={next}"))
+    });
 
     let start_seq = match active {
         None => None,
@@ -143,6 +159,7 @@ pub async fn chat(
         active_conversation_id: active,
         start_seq,
         messages,
+        older_href,
         pending_tasks,
         turn_anchors,
         can_delete_conversations: !crate::auth::roles::is_super_admin(Some(&user)),

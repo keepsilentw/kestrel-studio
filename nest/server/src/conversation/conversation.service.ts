@@ -448,16 +448,86 @@ export class ConversationService implements OnApplicationBootstrap {
   }
 
   views(conversationId: number): MessageView[] {
+    return this.viewsPage(conversationId).views;
+  }
+
+  /**
+   * One window of the conversation, oldest-first. `before` is the id of the
+   * oldest row the caller already has; `limit` omitted is the old unbounded read.
+   * An assistant row at the window's start pulls in its preceding message so the
+   * window does not begin with an orphaned answer.
+   */
+  viewsPage(
+    conversationId: number,
+    options: { before?: number; limit?: number } = {},
+  ): { views: MessageView[]; hasMore: boolean } {
+    if (options.limit === undefined) {
+      const rows = this.db
+        .select()
+        .from(messages)
+        .where(eq(messages.conversationId, conversationId))
+        .orderBy(asc(messages.id))
+        .all();
+
+      const assetsByMessage = this.assetsByMessage(conversationId);
+      return { views: rows.map((row) => this.toMessageView(row, assetsByMessage)), hasMore: false };
+    }
+
+    const limit = Math.max(1, options.limit);
     const rows = this.db
       .select()
       .from(messages)
-      .where(eq(messages.conversationId, conversationId))
-      .orderBy(asc(messages.id))
+      .where(
+        and(
+          eq(messages.conversationId, conversationId),
+          options.before === undefined ? undefined : lt(messages.id, options.before),
+        ),
+      )
+      .orderBy(desc(messages.id))
+      .limit(limit)
       .all();
 
-    const assetsByMessage = this.assetsByMessage(conversationId);
+    if (rows.length > 0 && rows[rows.length - 1].role === 'assistant') {
+      const oldest = rows[rows.length - 1].id;
+      const prior = this.db
+        .select()
+        .from(messages)
+        .where(and(eq(messages.conversationId, conversationId), lt(messages.id, oldest)))
+        .orderBy(desc(messages.id))
+        .limit(1)
+        .get();
+      if (prior !== undefined) {
+        rows.push(prior);
+      }
+    }
 
-    return rows.map((row) => ({
+    const hasMore =
+      rows.length > 0 &&
+      this.db
+        .select({ id: messages.id })
+        .from(messages)
+        .where(
+          and(
+            eq(messages.conversationId, conversationId),
+            lt(messages.id, rows[rows.length - 1].id),
+          ),
+        )
+        .limit(1)
+        .get() !== undefined;
+
+    rows.reverse();
+    const assetsByMessage = this.assetsByMessage(
+      conversationId,
+      rows.map((row) => row.id),
+    );
+    return { views: rows.map((row) => this.toMessageView(row, assetsByMessage)), hasMore };
+  }
+
+  private toMessageView(
+    row: typeof messages.$inferSelect,
+    assetsByMessage: Map<number, AssetView[]>,
+  ): MessageView {
+    return {
       id: row.id,
       role: row.role,
       content: row.content,
@@ -466,7 +536,7 @@ export class ConversationService implements OnApplicationBootstrap {
       mode: (row.mode as Mode | null) ?? null,
       createdAt: row.createdAt.getTime(),
       assets: assetsByMessage.get(row.id) ?? [],
-    }));
+    };
   }
 
   /**
@@ -841,7 +911,13 @@ export class ConversationService implements OnApplicationBootstrap {
       .map(toAssetView);
   }
 
-  private assetsByMessage(conversationId: number): Map<number, AssetView[]> {
+  private assetsByMessage(
+    conversationId: number,
+    messageIds?: number[],
+  ): Map<number, AssetView[]> {
+    if (messageIds !== undefined && messageIds.length === 0) {
+      return new Map();
+    }
     const rows = this.db
       .select({
         id: assets.id,
@@ -854,7 +930,14 @@ export class ConversationService implements OnApplicationBootstrap {
       })
       .from(assets)
       .innerJoin(messages, eq(assets.messageId, messages.id))
-      .where(eq(messages.conversationId, conversationId))
+      .where(
+        messageIds === undefined
+          ? eq(messages.conversationId, conversationId)
+          : and(
+              eq(messages.conversationId, conversationId),
+              inArray(assets.messageId, messageIds),
+            ),
+      )
       .orderBy(asc(assets.id))
       .all();
 

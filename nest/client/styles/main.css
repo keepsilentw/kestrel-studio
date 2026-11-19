@@ -222,6 +222,27 @@ body {
   margin-inline: auto;
 }
 
+.load-older {
+  padding: 4px 0 18px;
+  text-align: center;
+}
+
+.load-older-link {
+  display: inline-block;
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--muted);
+  font-size: 13px;
+  text-decoration: none;
+}
+
+.load-older-link:hover,
+.load-older-link:focus-visible {
+  color: var(--text);
+}
+
 .turn {
   margin-bottom: 24px;
   /* Breathing room above a turn when the sidebar scrolls to it. */

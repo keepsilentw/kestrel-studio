@@ -30,6 +30,9 @@ const TASK_STATUS_LABEL: Record<string, string> = {
 
 /** The sidebar's first paint; the client appends older pages on demand. */
 const HISTORY_PAGE_SIZE = 50;
+/** The main column's first paint and its growth step. */
+const MESSAGE_PAGE_DEFAULT = 50;
+const MESSAGE_PAGE_MAX = 1000;
 
 @Controller()
 export class ViewController {
@@ -89,6 +92,7 @@ export class ViewController {
     @Res() res: Response,
     @Query('c') c: string | undefined,
     @Query('new') fresh: string | undefined,
+    @Query('messages') messagesRaw: string | undefined,
   ): void {
     const user = req.user;
     if (user === undefined) {
@@ -131,15 +135,30 @@ export class ViewController {
             statusLabel: TASK_STATUS_LABEL[task.status] ?? task.status,
           }));
 
-    const rawViews = active === null ? [] : this.conversations.views(active);
+    const messageLimit = Math.min(
+      Math.max(
+        readPositiveInt(messagesRaw) ?? MESSAGE_PAGE_DEFAULT,
+        MESSAGE_PAGE_DEFAULT,
+      ),
+      MESSAGE_PAGE_MAX,
+    );
+    const page =
+      active === null
+        ? { views: [], hasMore: false }
+        : this.conversations.viewsPage(active, { limit: messageLimit });
     // An assistant placeholder of a still-running turn is not painted: the
     // stream replays that turn from its first event (startSeq is set to
     // before it), and a half-drawn row would only double or contradict it.
-    const views = rawViews.filter(
+    const views = page.views.filter(
       (view) => !(view.role === 'assistant' && view.content.length === 0),
     );
     const turnAnchors: TurnAnchor[] = buildTurnAnchors(views);
     const startSeq = active === null ? null : this.runner.catchUpCursor(active);
+    const nextLimit = Math.min(messageLimit + MESSAGE_PAGE_DEFAULT, MESSAGE_PAGE_MAX);
+    const olderHref =
+      active !== null && page.hasMore && nextLimit > messageLimit
+        ? `/?c=${active}&messages=${nextLimit}`
+        : null;
 
     res.render('chat', {
       user,
@@ -147,6 +166,7 @@ export class ViewController {
       activeConversationId: active,
       startSeq,
       messages: renderMessages(views),
+      olderHref,
       pendingTasks,
       turnAnchors,
       // Deleting from the history list is a normal account's affordance: a super

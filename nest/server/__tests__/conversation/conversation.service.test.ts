@@ -314,6 +314,38 @@ describe('ConversationService 消息回放容错', () => {
   });
 });
 
+describe('ConversationService 消息分页', () => {
+  it('取最新窗口、before 往前翻，并正确报告 hasMore', () => {
+    const userId = harness.seedUser('u1');
+    const conversationId = harness.service.create(userId, 'q');
+    const q1 = harness.service.appendUserMessage(conversationId, '问一', 'chat');
+    const a1 = harness.service.createAssistantPlaceholder(conversationId, 'chat');
+    harness.service.finalizeAssistant(a1, {
+      content: '答一',
+      reasoning: null,
+      toolCalls: null,
+    });
+    const q2 = harness.service.appendUserMessage(conversationId, '问二', 'chat');
+    const a2 = harness.service.createAssistantPlaceholder(conversationId, 'chat');
+    harness.service.finalizeAssistant(a2, {
+      content: '答二',
+      reasoning: null,
+      toolCalls: null,
+    });
+
+    const newest = harness.service.viewsPage(conversationId, { limit: 2 });
+    expect(newest.views.map((view) => view.id)).toEqual([q2, a2]);
+    expect(newest.hasMore).toBe(true);
+
+    const older = harness.service.viewsPage(conversationId, {
+      limit: 2,
+      before: q2,
+    });
+    expect(older.views.map((view) => view.id)).toEqual([q1, a1]);
+    expect(older.hasMore).toBe(false);
+  });
+});
+
 describe('ConversationService 资产', () => {
   const storedImage = {
     kind: 'image' as const,

@@ -152,10 +152,18 @@ pub async fn conversation_messages(
     Authed(user): Authed,
     State(state): State<AppState>,
     UrlPath(id): UrlPath<String>,
+    Query(params): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
+    let before = read_positive_int(params.get("before").map(String::as_str));
+    let limit =
+        read_positive_int(params.get("limit").map(String::as_str)).map(|value| value.min(200));
     let views = match read_positive_int(Some(&id)) {
         Some(conversation_id) if state.conversations.can_read(conversation_id, &user).await? => {
-            state.conversations.views(conversation_id).await?
+            state
+                .conversations
+                .views_page(conversation_id, before, limit)
+                .await?
+                .views
         }
         _ => Vec::new(),
     };

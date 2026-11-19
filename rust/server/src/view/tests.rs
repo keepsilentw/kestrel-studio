@@ -75,6 +75,7 @@ fn page_fixture(
         active_conversation_id: active,
         start_seq,
         messages: rendered,
+        older_href: None,
         pending_tasks: vec![],
         turn_anchors: anchors,
         can_delete_conversations: !is_super,
@@ -124,6 +125,18 @@ fn stored_message() -> MessageView {
 }
 
 #[test]
+fn an_older_message_window_renders_a_link_before_the_turns() {
+    let mut page = page_fixture(&[], &[], Some(1), Some(3), false);
+    page.older_href = Some("/?c=1&messages=100".to_string());
+    let html = super::templates::chat_page(&page);
+    assert!(html.contains("class=\"load-older\""), "{html}");
+    assert!(
+        html.contains("href=\"/?c=1&amp;messages=100\""),
+        "the query string is escaped for HTML: {html}"
+    );
+}
+
+#[test]
 fn the_chat_page_carries_every_element_the_client_script_requires() {
     let page = ChatPage {
         username: "walker".to_string(),
@@ -136,6 +149,7 @@ fn the_chat_page_carries_every_element_the_client_script_requires() {
         active_conversation_id: Some(1),
         start_seq: Some(3),
         messages: render_messages(vec![stored_message()]),
+        older_href: None,
         pending_tasks: vec![PendingTask {
             id: 9,
             kind: TaskKind::Video,
