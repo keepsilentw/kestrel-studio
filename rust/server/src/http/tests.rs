@@ -1067,6 +1067,10 @@ async fn every_response_carries_the_security_headers() {
         assert!(policy.contains("frame-ancestors 'none'"), "{policy}");
         assert!(policy.contains("connect-src 'self'"), "{policy}");
         assert!(
+            policy.contains("'wasm-unsafe-eval'"),
+            "WebAssembly needs this narrow script exception: {policy}"
+        );
+        assert!(
             !policy.contains("unsafe-inline"),
             "the external loader removed the inline exception: {policy}"
         );

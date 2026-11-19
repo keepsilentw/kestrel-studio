@@ -16,7 +16,7 @@ export const CONTENT_SECURITY_POLICY =
   "img-src 'self' data: blob:; " +
   "media-src 'self' blob:; " +
   "connect-src 'self'; " +
-  "script-src 'self'; " +
+  "script-src 'self' 'wasm-unsafe-eval'; " +
   "style-src 'self'";
 
 export function securityHeaders(): (

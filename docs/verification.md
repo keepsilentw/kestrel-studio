@@ -3683,7 +3683,9 @@ WASM 的启动代码从页面内联 `<script type="module">` 移到
 
 因此两套后端的 CSP 都去掉了 `unsafe-inline`：
 
-- `script-src 'self'`
+- `script-src 'self' 'wasm-unsafe-eval'`（第一次部署时只有 `'self'`，浏览器报
+  `WebAssembly.instantiateStreaming` 违反 CSP；`wasm-unsafe-eval` 是 WebAssembly 编译的窄例外，
+  不开放 JS `eval`）
 - `style-src 'self'`
 
 ### 62.1 质量门

@@ -16,7 +16,7 @@ object-src 'none'; \
 img-src 'self' data: blob:; \
 media-src 'self' blob:; \
 connect-src 'self'; \
-script-src 'self'; \
+script-src 'self' 'wasm-unsafe-eval'; \
 style-src 'self'";
 
 /// Adds headers to every response, including the WebSocket upgrade. Only headers
