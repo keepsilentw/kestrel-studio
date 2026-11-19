@@ -35,6 +35,7 @@ pub struct AccountView {
     pub created_at: i64,
     pub conversation_count: i64,
     pub asset_count: i64,
+    pub asset_bytes: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -85,6 +86,7 @@ impl AdminService {
     pub async fn list(&self) -> Result<Vec<AccountView>, AppError> {
         let conversation_counts = self.grouped_conversation_counts().await?;
         let asset_counts = self.grouped_asset_counts().await?;
+        let asset_bytes = self.grouped_asset_bytes().await?;
         let rows = sqlx::query("SELECT id, username, role, created_at FROM users ORDER BY id ASC")
             .fetch_all(&self.pool)
             .await?;
@@ -97,6 +99,7 @@ impl AdminService {
                     id,
                     conversation_counts.get(&id).copied().unwrap_or(0),
                     asset_counts.get(&id).copied().unwrap_or(0),
+                    asset_bytes.get(&id).copied().unwrap_or(0),
                 )
             })
             .collect())
@@ -110,11 +113,13 @@ impl AdminService {
         let Some(row) = row else { return Ok(None) };
         let mut counts = self.grouped_conversation_counts().await?;
         let mut assets = self.grouped_asset_counts().await?;
+        let mut bytes = self.grouped_asset_bytes().await?;
         Ok(Some(to_account(
             &row,
             id,
             counts.remove(&id).unwrap_or(0),
             assets.remove(&id).unwrap_or(0),
+            bytes.remove(&id).unwrap_or(0),
         )))
     }
 
@@ -278,6 +283,15 @@ impl AdminService {
         Ok(grouped(&rows))
     }
 
+    async fn grouped_asset_bytes(&self) -> Result<std::collections::HashMap<i64, i64>, AppError> {
+        let rows = sqlx::query(
+            "SELECT c.user_id AS user_id, COALESCE(SUM(a.bytes), 0) AS total FROM assets a JOIN messages m ON m.id = a.message_id JOIN conversations c ON c.id = m.conversation_id GROUP BY c.user_id",
+        )
+        .fetch_all(&self.pool)
+        .await?;
+        Ok(grouped(&rows))
+    }
+
     async fn super_admin_count(&self) -> Result<i64, AppError> {
         let row = sqlx::query("SELECT COUNT(*) AS total FROM users WHERE role = 'super'")
             .fetch_one(&self.pool)
@@ -302,6 +316,7 @@ fn to_account(
     id: i64,
     conversation_count: i64,
     asset_count: i64,
+    asset_bytes: i64,
 ) -> AccountView {
     let role = parse_role(row.try_get("role").ok());
     AccountView {
@@ -311,6 +326,7 @@ fn to_account(
         created_at: row.try_get("created_at").unwrap_or(0),
         conversation_count,
         asset_count,
+        asset_bytes,
     }
 }
 

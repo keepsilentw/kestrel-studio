@@ -716,6 +716,7 @@ WebSocket 的 upgrade 不经过 Express，所以 `AuthenticatedGuard` 对它无�
   一次也不会腾出空间。
 - 检查发生在文件落盘之前，所以被拒绝的生成不会留下孤儿文件。
 - 查属主或用量失败时放行并打 WARN：数据库抖动不应该把所有生成都变成拒绝。
+- `/admin` 的账号表与账号页展示每个账号的资产字节数（KB/MB/GB），与配额使用同一汇总口径。
 
 ## 13. Rust 实现（`rust/server/`）
 

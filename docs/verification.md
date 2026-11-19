@@ -3587,6 +3587,26 @@ Nest 的同一套解析测试。
 - 未部署；`ASSET_QUOTA_BYTES` 在线上仍是 compose 默认 2 GiB。
 - 没有做按天/按月的历史用量报表，也没有在管理面展示用量。
 
+## 58. 管理面显示账号用量（2026-11-19）
+
+`/admin` 的账号表新增「存储」列，账号详情页的「资产」一行同时显示字节数；摘要来自
+`SUM(assets.bytes)`，与配额检查同一口径。格式化在服务端完成（KB/MB/GB），管理页仍然不加载
+任何客户端脚本。
+
+### 58.1 质量门
+
+| 命令 | 读数 |
+|---|---|
+| `make check` | 通过（含 fmt、clippy、wasm target check） |
+| `make test` | Nest server **521 passed**；Nest client **72 passed**；Rust server **218 passed + 2 ignored**；Rust client **51 passed** |
+
+新增断言：Nest `AdminService.list()` 的 `assetBytes` 等于种入资产的字节数。
+
+### 58.2 没证的
+
+- 没有登录 `/admin` 在浏览器里看这两列的实际排版；只做了服务层与模板层编译/断言。
+- 未部署。
+
 ## 56. wasm 预压缩上线（2026-11-19 10:05）
 
 | 项 | 读数 |

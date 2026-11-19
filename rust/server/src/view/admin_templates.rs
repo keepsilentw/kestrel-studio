@@ -18,6 +18,7 @@ pub struct PresentedAccount {
     pub created_at_label: String,
     pub conversation_count: i64,
     pub asset_count: i64,
+    pub asset_bytes_label: String,
 }
 
 pub struct ConversationRow {
@@ -42,6 +43,19 @@ pub struct AccountChip {
     pub id: i64,
     pub username: String,
     pub is_active: bool,
+}
+
+pub fn byte_label(bytes: i64) -> String {
+    const MIB: f64 = 1_048_576.0;
+    const GIB: f64 = 1_073_741_824.0;
+    let value = bytes.max(0) as f64;
+    if value >= GIB {
+        format!("{:.1} GB", value / GIB)
+    } else if value >= MIB {
+        format!("{:.1} MB", value / MIB)
+    } else {
+        format!("{:.0} KB", value / 1024.0)
+    }
 }
 
 fn shell(title: &str, menu: &[(&str, &str)], username: &str, main: &str) -> String {
@@ -85,18 +99,19 @@ pub fn accounts_page(
     let mut rows = String::new();
     for account in accounts {
         rows.push_str(&format!(
-            "          <tr>\n            <td class=\"admin-account-name\">{name}</td>\n            <td>{role}</td>\n            <td><a href=\"/admin/conversations?user={id}\">{conversations}</a></td>\n            <td>{assets}</td>\n            <td>{created}</td>\n            <td><a href=\"/admin/users/{id}\">管理</a></td>\n          </tr>\n",
+            "          <tr>\n            <td class=\"admin-account-name\">{name}</td>\n            <td>{role}</td>\n            <td><a href=\"/admin/conversations?user={id}\">{conversations}</a></td>\n            <td>{assets}</td>\n            <td>{bytes}</td>\n            <td>{created}</td>\n            <td><a href=\"/admin/users/{id}\">管理</a></td>\n          </tr>\n",
             name = escape(&account.username),
             role = escape(&account.role_label),
             id = account.id,
             conversations = account.conversation_count,
             assets = account.asset_count,
+            bytes = escape(&account.asset_bytes_label),
             created = escape(&account.created_at_label),
         ));
     }
 
     let main = format!(
-        "  <main class=\"admin-main\">\n{note}    <section class=\"admin-card\">\n      <h2 class=\"admin-title\">新建账号</h2>\n      <p class=\"admin-hint\">\n        新账号一律是普通用户，只能看到自己的会话。用户名 3-32 位字母、数字、下划线或短横线，密码至少 6 位。\n      </p>\n      <form class=\"admin-form\" action=\"/admin/users\" method=\"post\">\n        <label class=\"admin-field\">\n          <span>用户名</span>\n          <input name=\"username\" type=\"text\" required autocomplete=\"username\">\n        </label>\n        <label class=\"admin-field\">\n          <span>密码</span>\n          <input name=\"password\" type=\"password\" required autocomplete=\"new-password\">\n        </label>\n        <button type=\"submit\" class=\"admin-button\">创建</button>\n      </form>\n    </section>\n\n    <section class=\"admin-card\">\n      <h2 class=\"admin-title\">账号（{count}）</h2>\n      <table class=\"admin-table\">\n        <thead>\n          <tr>\n            <th>账号</th>\n            <th>角色</th>\n            <th>会话</th>\n            <th>资产</th>\n            <th>创建时间</th>\n            <th></th>\n          </tr>\n        </thead>\n        <tbody>\n{rows}        </tbody>\n      </table>\n    </section>\n  </main>\n",
+        "  <main class=\"admin-main\">\n{note}    <section class=\"admin-card\">\n      <h2 class=\"admin-title\">新建账号</h2>\n      <p class=\"admin-hint\">\n        新账号一律是普通用户，只能看到自己的会话。用户名 3-32 位字母、数字、下划线或短横线，密码至少 6 位。\n      </p>\n      <form class=\"admin-form\" action=\"/admin/users\" method=\"post\">\n        <label class=\"admin-field\">\n          <span>用户名</span>\n          <input name=\"username\" type=\"text\" required autocomplete=\"username\">\n        </label>\n        <label class=\"admin-field\">\n          <span>密码</span>\n          <input name=\"password\" type=\"password\" required autocomplete=\"new-password\">\n        </label>\n        <button type=\"submit\" class=\"admin-button\">创建</button>\n      </form>\n    </section>\n\n    <section class=\"admin-card\">\n      <h2 class=\"admin-title\">账号（{count}）</h2>\n      <table class=\"admin-table\">\n        <thead>\n          <tr>\n            <th>账号</th>\n            <th>角色</th>\n            <th>会话</th>\n            <th>资产</th>\n            <th>存储</th>\n            <th>创建时间</th>\n            <th></th>\n          </tr>\n        </thead>\n        <tbody>\n{rows}        </tbody>\n      </table>\n    </section>\n  </main>\n",
         note = notice_html(notice),
         count = accounts.len(),
         rows = rows,
@@ -218,13 +233,14 @@ pub fn conversations_page(
 
 pub fn account_page(username: &str, account: &PresentedAccount, notice: Option<&Notice>) -> String {
     let main = format!(
-        "  <main class=\"admin-main\">\n{note}    <section class=\"admin-card\">\n      <h2 class=\"admin-title\">{name}</h2>\n      <dl class=\"admin-facts\">\n        <dt>角色</dt><dd>{role}</dd>\n        <dt>会话</dt><dd><a href=\"/admin/conversations?user={id}\">{conversations} 个</a></dd>\n        <dt>资产</dt><dd>{assets} 个</dd>\n        <dt>创建时间</dt><dd>{created}</dd>\n      </dl>\n    </section>\n\n    <section class=\"admin-card\">\n      <h2 class=\"admin-title\">重置密码</h2>\n      <p class=\"admin-hint\">账号名只作显示，实际按本页地址里的账号重置。</p>\n\n      <form class=\"admin-form\" action=\"/admin/users/{id}/password\" method=\"post\">\n        <label class=\"admin-field\">\n          <span>账号</span>\n          <input name=\"username\" type=\"text\" value=\"{name}\" readonly autocomplete=\"username\">\n        </label>\n        <label class=\"admin-field\">\n          <span>新密码</span>\n          <input name=\"password\" type=\"password\" required autocomplete=\"new-password\">\n        </label>\n        <button type=\"submit\" class=\"admin-button\">重置密码</button>\n      </form>\n    </section>\n\n    <section class=\"admin-card admin-card-danger\">\n      <h2 class=\"admin-title\">删除账号</h2>\n      <p class=\"admin-hint\">\n        将一并删除该账号名下 {conversations} 个会话、{assets} 个资产文件，\n        以及这些会话的全部消息与任务记录。此操作不可撤销。\n      </p>\n      <a class=\"admin-button admin-button-danger\" href=\"/admin/users/{id}/delete\">删除账号</a>\n    </section>\n  </main>\n",
+        "  <main class=\"admin-main\">\n{note}    <section class=\"admin-card\">\n      <h2 class=\"admin-title\">{name}</h2>\n      <dl class=\"admin-facts\">\n        <dt>角色</dt><dd>{role}</dd>\n        <dt>会话</dt><dd><a href=\"/admin/conversations?user={id}\">{conversations} 个</a></dd>\n        <dt>资产</dt><dd>{assets} 个 · {bytes}</dd>\n        <dt>创建时间</dt><dd>{created}</dd>\n      </dl>\n    </section>\n\n    <section class=\"admin-card\">\n      <h2 class=\"admin-title\">重置密码</h2>\n      <p class=\"admin-hint\">账号名只作显示，实际按本页地址里的账号重置。</p>\n\n      <form class=\"admin-form\" action=\"/admin/users/{id}/password\" method=\"post\">\n        <label class=\"admin-field\">\n          <span>账号</span>\n          <input name=\"username\" type=\"text\" value=\"{name}\" readonly autocomplete=\"username\">\n        </label>\n        <label class=\"admin-field\">\n          <span>新密码</span>\n          <input name=\"password\" type=\"password\" required autocomplete=\"new-password\">\n        </label>\n        <button type=\"submit\" class=\"admin-button\">重置密码</button>\n      </form>\n    </section>\n\n    <section class=\"admin-card admin-card-danger\">\n      <h2 class=\"admin-title\">删除账号</h2>\n      <p class=\"admin-hint\">\n        将一并删除该账号名下 {conversations} 个会话、{assets} 个资产文件，\n        以及这些会话的全部消息与任务记录。此操作不可撤销。\n      </p>\n      <a class=\"admin-button admin-button-danger\" href=\"/admin/users/{id}/delete\">删除账号</a>\n    </section>\n  </main>\n",
         note = notice_html(notice),
         name = escape(&account.username),
         role = escape(&account.role_label),
         id = account.id,
         conversations = account.conversation_count,
         assets = account.asset_count,
+        bytes = escape(&account.asset_bytes_label),
         created = escape(&account.created_at_label),
     );
     let menu = [

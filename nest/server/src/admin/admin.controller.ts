@@ -20,6 +20,7 @@ interface Notice {
 
 interface PresentedAccount extends AccountView {
   createdAtLabel: string;
+  assetBytesLabel: string;
 }
 
 interface AccountChip {
@@ -44,7 +45,24 @@ function readNotice(code: string | undefined): Notice | null {
 }
 
 function presentAccount(account: AccountView): PresentedAccount {
-  return { ...account, createdAtLabel: formatTimestamp(account.createdAt) };
+  return {
+    ...account,
+    createdAtLabel: formatTimestamp(account.createdAt),
+    assetBytesLabel: byteLabel(account.assetBytes),
+  };
+}
+
+function byteLabel(bytes: number): string {
+  const mib = 1_048_576;
+  const gib = 1_073_741_824;
+  const value = Math.max(0, bytes);
+  if (value >= gib) {
+    return `${(value / gib).toFixed(1)} GB`;
+  }
+  if (value >= mib) {
+    return `${(value / mib).toFixed(1)} MB`;
+  }
+  return `${Math.round(value / 1024)} KB`;
 }
 
 /** Passwords are hashed as typed: trimming one would silently change it. */

@@ -63,6 +63,7 @@
             <th>角色</th>
             <th>会话</th>
             <th>资产</th>
+            <th>存储</th>
             <th>创建时间</th>
             <th></th>
           </tr>
@@ -74,6 +75,7 @@
               <td>{{this.roleLabel}}</td>
               <td><a href="/admin/conversations?user={{this.id}}">{{this.conversationCount}}</a></td>
               <td>{{this.assetCount}}</td>
+              <td>{{this.assetBytesLabel}}</td>
               <td>{{this.createdAtLabel}}</td>
               <td><a href="/admin/users/{{this.id}}">管理</a></td>
             </tr>

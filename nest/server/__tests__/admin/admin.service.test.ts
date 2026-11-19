@@ -300,7 +300,7 @@ describe('AdminService.remove', () => {
 });
 
 describe('AdminService.list / find', () => {
-  it('列出全部账号，带上会话与资产数', async () => {
+  it('列出全部账号，带上会话、资产数与字节', async () => {
     const alice = harness.seedUser('alice');
     const root = harness.seedUser('root', 'super');
     harness.conversations.create(alice, '一');
@@ -316,6 +316,7 @@ describe('AdminService.list / find', () => {
       roleLabel: '普通用户',
       conversationCount: 3,
       assetCount: 1,
+      assetBytes: 5,
     });
     expect(accounts[1]).toMatchObject({ id: root, role: 'super', conversationCount: 0 });
   });

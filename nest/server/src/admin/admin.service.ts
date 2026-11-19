@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { hash } from 'bcryptjs';
-import { asc, count, desc, eq, isNull } from 'drizzle-orm';
+import { asc, count, desc, eq, isNull, sum } from 'drizzle-orm';
 import { ROLE_LABEL, parseRole, type Role, type Viewer } from '@/auth/roles';
 import { ConversationService } from '@/conversation/conversation.service';
 import { DRIZZLE_INSTANCE, type DrizzleDb } from '@/database/database.module';
@@ -19,6 +19,7 @@ export interface AccountView {
   createdAt: number;
   conversationCount: number;
   assetCount: number;
+  assetBytes: number;
 }
 
 export interface AdminTokenView {
@@ -50,6 +51,7 @@ function toAccountView(
   row: User,
   conversationCount: number,
   assetCount: number,
+  assetBytes: number,
 ): AccountView {
   const role = parseRole(row.role);
   return {
@@ -60,6 +62,7 @@ function toAccountView(
     createdAt: row.createdAt.getTime(),
     conversationCount,
     assetCount,
+    assetBytes,
   };
 }
 
@@ -73,13 +76,19 @@ export class AdminService {
   list(): AccountView[] {
     const conversationCounts = this.groupedConversationCounts();
     const assetCounts = this.groupedAssetCounts();
+    const assetBytes = this.groupedAssetBytes();
     return this.db
       .select()
       .from(users)
       .orderBy(asc(users.id))
       .all()
       .map((row) =>
-        toAccountView(row, conversationCounts.get(row.id) ?? 0, assetCounts.get(row.id) ?? 0),
+        toAccountView(
+          row,
+          conversationCounts.get(row.id) ?? 0,
+          assetCounts.get(row.id) ?? 0,
+          assetBytes.get(row.id) ?? 0,
+        ),
       );
   }
 
@@ -92,6 +101,7 @@ export class AdminService {
       row,
       this.groupedConversationCounts().get(id) ?? 0,
       this.groupedAssetCounts().get(id) ?? 0,
+      this.groupedAssetBytes().get(id) ?? 0,
     );
   }
 
@@ -219,6 +229,17 @@ export class AdminService {
       .groupBy(conversations.userId)
       .all();
     return new Map(rows.map((row) => [row.userId, row.total]));
+  }
+
+  private groupedAssetBytes(): Map<number, number> {
+    const rows = this.db
+      .select({ userId: conversations.userId, total: sum(assets.bytes) })
+      .from(assets)
+      .innerJoin(messages, eq(assets.messageId, messages.id))
+      .innerJoin(conversations, eq(messages.conversationId, conversations.id))
+      .groupBy(conversations.userId)
+      .all();
+    return new Map(rows.map((row) => [row.userId, Number(row.total ?? 0)]));
   }
 
   private superAdminCount(): number {

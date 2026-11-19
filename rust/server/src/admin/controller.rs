@@ -48,6 +48,7 @@ fn present(account: AccountView) -> PresentedAccount {
         created_at_label: format_timestamp(account.created_at),
         conversation_count: account.conversation_count,
         asset_count: account.asset_count,
+        asset_bytes_label: crate::view::admin_templates::byte_label(account.asset_bytes),
     }
 }
 
