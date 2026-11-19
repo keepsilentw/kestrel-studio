@@ -3607,6 +3607,56 @@ Nest 的同一套解析测试。
 - 没有登录 `/admin` 在浏览器里看这两列的实际排版；只做了服务层与模板层编译/断言。
 - 未部署。
 
+## 59. 热备份与存储报表实测（2026-11-19 10:58）
+
+在 lavo-test 上执行 `make backup`：
+
+| 项 | 读数 |
+|---|---|
+| 数据库快照 | 852 KB，`PRAGMA integrity_check` = `ok` |
+| 快照内容 | `messages` 76 行、`assets` 23 行 |
+| storage 包 | 68 MB，24 个条目 |
+| 备份目录 | 69 MB |
+
+同一时刻的 `storage-report` SQL 读数：
+
+| id | username | assets | bytes |
+|---|---|---|---|
+| 1 | admin | 13 | 17,646,086 |
+| 2 | tww316 | 10 | 53,073,573 |
+
+### 59.1 没证的
+
+- 每日 cron 已于 11-19 安装（`/etc/cron.d/kestrel-backup`，`crond` active），但第一次
+  03:30 自动执行尚未发生。
+- 没有把快照拷回一台临时实例并登录验证；只做了数据层恢复演练：
+  解包 `storage-20261119-105816.tar.gz` 后逐行核对 23 个 `assets`，文件 23 个、
+  缺失 0、字节数不一致 0。
+- 宿主机 `make storage-report` 还是直接跑的 SQL；新 Makefile 目标要等下一次部署才落到宿主机。
+
+## 60. 图片下载的 ETag 重验证（2026-11-19）
+
+`download` 的缓存头改为 `private, max-age=0, must-revalidate`，并按文件
+`mtime + size` 发弱 ETag；带相同 `If-None-Match` 的第二次请求返回 304，不重新传输文件。
+签名帧端点共用 Rust 的 `serve_file`，也获得同样行为。
+
+Nest 侧 `sendFile` 自带的 freshness 判断把 `max-age=0` 当作 stale，因此这条路径改为在
+控制器里显式比较 `If-None-Match`，与 Rust 形状一致。
+
+### 60.1 质量门
+
+| 命令 | 读数 |
+|---|---|
+| `make check` | 通过（含 fmt、clippy、wasm target check） |
+| `make test` | Nest server **521 passed**；Nest client **72 passed**；Rust server **218 passed + 2 ignored**；Rust client **51 passed** |
+
+新增断言：Rust 与 Nest 的下载端点首次 200 带 ETag，第二次带 `If-None-Match` 返回 304。
+
+### 60.2 没证的
+
+- 没在真实浏览器里看 DevTools 的 304 与传输字节数；只在进程内测试了协议行为。
+- 未部署。
+
 ## 56. wasm 预压缩上线（2026-11-19 10:05）
 
 | 项 | 读数 |

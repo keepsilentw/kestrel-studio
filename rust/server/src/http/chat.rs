@@ -3,7 +3,8 @@ use std::path::Path;
 
 use axum::extract::{Path as UrlPath, Query, State};
 use axum::http::header::{
-    HeaderMap, HeaderValue, CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE,
+    HeaderMap, HeaderValue, CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE, ETAG,
+    IF_NONE_MATCH, LAST_MODIFIED,
 };
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -336,6 +337,7 @@ pub async fn download(
     Authed(user): Authed,
     State(state): State<AppState>,
     UrlPath(id): UrlPath<String>,
+    headers: HeaderMap,
 ) -> Result<Response, AppError> {
     let Some(asset_id) = read_positive_int(Some(&id)) else {
         return Err(AppError::not_found("not found"));
@@ -347,13 +349,15 @@ pub async fn download(
     else {
         return Err(AppError::not_found("not found"));
     };
-    // The answer is scoped to the session guard above, so a shared cache must
-    // never store it. The bytes are local and cheap to re-read.
+    // Scoped to the session guard above: a shared cache must never store it, but
+    // the browser may keep it and revalidate. The ETag below turns a page reload
+    // into a 304 instead of re-downloading several megabytes per image.
     serve_file(
         &file_path,
         &asset.mime,
         disposition(&file_path),
-        "private, no-store",
+        "private, max-age=0, must-revalidate",
+        &headers,
     )
     .await
 }
@@ -365,12 +369,37 @@ pub(crate) async fn serve_file(
     mime: &str,
     disposition: Option<String>,
     cache: &str,
+    request_headers: &HeaderMap,
 ) -> Result<Response, AppError> {
     let meta = tokio::fs::metadata(path)
         .await
         .map_err(|_| AppError::not_found("not found"))?;
     if !meta.is_file() {
         return Err(AppError::not_found("not found"));
+    }
+    let modified = meta
+        .modified()
+        .ok()
+        .map(httpdate)
+        .unwrap_or_else(|| "Thu, 01 Jan 1970 00:00:00 GMT".to_string());
+    let etag = format!(
+        "W/\"{}-{}\"",
+        meta.modified()
+            .ok()
+            .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|since| since.as_millis())
+            .unwrap_or(0),
+        meta.len()
+    );
+    if request_headers
+        .get(IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value == etag || value == "*")
+    {
+        let mut headers = HeaderMap::new();
+        headers.insert(ETAG, header_value(&etag));
+        headers.insert(CACHE_CONTROL, header_value(cache));
+        return Ok((StatusCode::NOT_MODIFIED, headers).into_response());
     }
     let file = tokio::fs::File::open(path)
         .await
@@ -387,6 +416,8 @@ pub(crate) async fn serve_file(
         HeaderValue::from_str(cache).unwrap_or_else(|_| HeaderValue::from_static("no-cache")),
     );
     headers.insert(CONTENT_LENGTH, HeaderValue::from(meta.len()));
+    headers.insert(ETAG, header_value(&etag));
+    headers.insert(LAST_MODIFIED, header_value(&modified));
     if let Some(value) = disposition {
         headers.insert(
             CONTENT_DISPOSITION,
@@ -400,6 +431,16 @@ pub(crate) async fn serve_file(
         axum::body::Body::from_stream(ReaderStream::new(file)),
     )
         .into_response())
+}
+
+fn header_value(value: &str) -> HeaderValue {
+    HeaderValue::from_str(value).unwrap_or_else(|_| HeaderValue::from_static(""))
+}
+
+fn httpdate(time: std::time::SystemTime) -> String {
+    chrono::DateTime::<chrono::Utc>::from(time)
+        .format("%a, %d %b %Y %H:%M:%S GMT")
+        .to_string()
 }
 
 fn disposition(path: &Path) -> Option<String> {

@@ -306,6 +306,18 @@ ssh lavo-test "cd /opt/kestrel-studio && ACCESS_LOG=1 docker compose up -d"
 `PRAGMA integrity_check`，行数与源库一致。**未验证**：`make backup` 本身没有在宿主机
 跑过，也没有配置 cron；建议先手工跑一次，再加每日任务。
 
+2026-11-19 10:58 已在宿主机手工跑过一次：数据库快照 852 KB，`PRAGMA integrity_check`
+为 `ok`（76 条消息、23 个资产），`storage` 包 68 MB（24 个条目），备份目录合计 69 MB。
+每日任务已于 11-19 安装并确认 `crond` 为 `active`：
+
+```cron
+SHELL=/bin/bash
+PATH=/usr/bin:/bin
+30 3 * * * root cd /opt/kestrel-studio && /usr/bin/make backup >> /opt/kestrel-backups/backup.log 2>&1
+```
+
+第一次自动执行要等 03:30，尚未观察到；日志追加到 `/opt/kestrel-backups/backup.log`。
+
 ## 2.6 wasm 预压缩（2026-11-19）
 
 线上 openresty 已对 JS/CSS 开 gzip（2026-11-19 只读 HEAD：`/assets/main.js` 返回
@@ -333,6 +345,9 @@ ASSET_QUOTA_BYTES=1073741824 docker compose up -d   # 改成 1 GiB
 
 它按 `assets.bytes` 汇总到会话属主，硬删除会话会释放。图片生成在落盘前检查；视频任务在
 镜像前检查，配额不足直接失败、不重试。当前线上用量约 20 MB，距默认上限很远。
+
+宿主机上可用 `make storage-report` 查看按账号的资产数与字节数（只读，普通 `GROUP BY`，
+兼容宿主自带的 sqlite3 3.7.17）。
 
 ## 3. 对外暴露：openresty 反代
 

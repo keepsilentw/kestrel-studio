@@ -112,6 +112,7 @@ help:
 	@echo "    make deploy-nest            打包并构建 Nest 那套的镜像（不启动，见目标注释）"
 	@echo "    make nest-up / nest-down / nest-logs   第二后端的启停与日志（共用同一个库，先读 §13.2）"
 	@echo "    make backup                 热备份数据库与 storage/（在宿主机执行；保留 $(BACKUP_KEEP_DAYS) 天）"
+	@echo "    make storage-report         按账号汇总资产字节数（只读）"
 	@echo ""
 	@echo "  单个包的 check/test 直接调 pnpm --dir 或 cargo（这里只保留跨包编排）。"
 
@@ -346,3 +347,13 @@ backup:
 			\( -name 'kestrel-studio-*.db' -o -name 'storage-*.tar.gz' \) \
 			-mtime +$(BACKUP_KEEP_DAYS) -delete \
 		&& echo "backup: $(BACKUP_DIR)/kestrel-studio-$$STAMP.db"
+
+# Read-only. Works with the host's old sqlite3 because it uses plain GROUP BY.
+storage-report:
+	@sqlite3 -header -column data/kestrel-studio.db \
+		"SELECT u.id AS id, u.username AS username, COUNT(a.id) AS assets, COALESCE(SUM(a.bytes), 0) AS bytes \
+		 FROM users u \
+		 LEFT JOIN conversations c ON c.user_id = u.id \
+		 LEFT JOIN messages m ON m.conversation_id = c.id \
+		 LEFT JOIN assets a ON a.message_id = m.id \
+		 GROUP BY u.id ORDER BY u.id"

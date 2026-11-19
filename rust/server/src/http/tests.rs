@@ -734,13 +734,31 @@ async fn assets_follow_ownership_and_the_signature_is_the_only_authority() {
     assert_eq!(owned.status(), StatusCode::OK);
     assert_eq!(owned.headers()["content-type"], "image/png");
     assert_eq!(owned.headers()["content-length"], "4");
-    assert_eq!(owned.headers()["cache-control"], "private, no-store");
+    assert_eq!(
+        owned.headers()["cache-control"],
+        "private, max-age=0, must-revalidate"
+    );
+    let etag = owned.headers()["etag"].to_str().expect("etag").to_string();
     assert!(owned.headers()["content-disposition"]
         .to_str()
         .expect("cd")
         .contains("frame.png"));
     let bytes = to_bytes(owned.into_body(), LIMIT).await.expect("bytes");
     assert_eq!(&bytes[..], b"1234");
+
+    // A reload revalidates instead of pulling the (possibly multi-megabyte) file
+    // again: the same ETag must answer 304 with no body.
+    let conditional = axum::http::Request::builder()
+        .method("GET")
+        .uri(format!("/api/v1/assets/{asset_id}/download"))
+        .header("host", "localhost")
+        .header("cookie", &cookie)
+        .header("if-none-match", &etag)
+        .body(axum::body::Body::empty())
+        .expect("conditional request");
+    let revalidated = app.clone().oneshot(conditional).await.expect("conditional");
+    assert_eq!(revalidated.status(), StatusCode::NOT_MODIFIED);
+    assert_eq!(revalidated.headers()["etag"], etag.as_str());
 
     // A row whose bytes are gone is a 404, not a truncated 200.
     let ghost = state

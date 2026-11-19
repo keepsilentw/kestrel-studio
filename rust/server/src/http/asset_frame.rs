@@ -1,4 +1,5 @@
 use axum::extract::{Path as UrlPath, Query, State};
+use axum::http::HeaderMap;
 use axum::response::Response;
 use std::collections::HashMap;
 
@@ -18,6 +19,7 @@ use crate::state::AppState;
 pub async fn frame(
     State(state): State<AppState>,
     UrlPath(id): UrlPath<String>,
+    headers: HeaderMap,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
     let Some(asset_id) = read_positive_int(Some(&id)) else {
@@ -38,5 +40,5 @@ pub async fn frame(
     // The provider is the only consumer and it fetches once: six hundred seconds
     // of private caching is enough, and the frame is not readable again after the
     // signature has expired anyway.
-    serve_file(&file_path, &mime, None, "private, max-age=600").await
+    serve_file(&file_path, &mime, None, "private, max-age=600", &headers).await
 }

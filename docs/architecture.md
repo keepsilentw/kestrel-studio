@@ -701,6 +701,10 @@ WebSocket 的 upgrade 不经过 Express，所以 `AuthenticatedGuard` 对它无�
   本地登录不受影响。
 - **私有资产**：`/api/v1/assets/:id/download` 的 `Cache-Control` 从
   `public, max-age=0` 改为 `private, no-store`，避免共享缓存保存会话内内容。
+- **图片重载走 304（2026-11-19）**：`download` 现在发 `private, max-age=0,
+  must-revalidate`，并按文件 mtime+size 发弱 ETag；浏览器重载页面时带
+  `If-None-Match`，服务端回 304，不重新下载几 MB 的原图。签名帧端点共用同一个
+  `serve_file`，因此也带 ETag。
 
 **边界**：本轮只跑了 `tsc --noEmit` 与 `cargo check --tests`，没有启动服务、没有跑单元测试，
 也**没有部署**；上表是代码形状，不是运行时读数。

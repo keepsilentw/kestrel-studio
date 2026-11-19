@@ -10,6 +10,7 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import type { Request, Response } from 'express';
+import { statSync } from 'node:fs';
 import { basename } from 'node:path';
 import { parseMode } from '@/agent/mode';
 import { TurnRunner } from '@/agent/turn-runner.service';
@@ -306,10 +307,31 @@ export class ChatController {
       return;
     }
 
+    // `sendFile`'s own freshness check treats `max-age=0` as stale, so the
+    // validator is applied here. Same shape as the Rust `serve_file`.
+    let stat;
+    try {
+      stat = statSync(asset.filePath);
+    } catch {
+      res.status(404).json({ message: 'not found' });
+      return;
+    }
+    const etag = `W/"${Math.floor(stat.mtimeMs)}-${stat.size}"`;
+    res.setHeader('ETag', etag);
+    res.setHeader('Last-Modified', stat.mtime.toUTCString());
+    const requestedBy = req.headers['if-none-match'];
+    const unchanged = Array.isArray(requestedBy)
+      ? requestedBy.includes(etag) || requestedBy.includes('*')
+      : requestedBy === etag || requestedBy === '*';
+    if (unchanged) {
+      res.status(304).end();
+      return;
+    }
+
     res.setHeader('Content-Type', asset.mime);
     res.setHeader('Content-Disposition', `inline; filename="${basename(asset.filePath)}"`);
-    // Scoped by the session guard above, so a shared cache must never keep it.
-    res.setHeader('Cache-Control', 'private, no-store');
+    // Scoped by the session guard above: a shared cache must never keep it.
+    res.setHeader('Cache-Control', 'private, max-age=0, must-revalidate');
     res.sendFile(asset.filePath, (error?: Error) => {
       if (error !== undefined && !res.headersSent) {
         res.status(404).json({ message: 'not found' });

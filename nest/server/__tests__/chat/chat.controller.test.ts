@@ -656,8 +656,17 @@ describe('GET /api/v1/assets/:id/download', () => {
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toContain('image/png');
     expect(response.headers.get('content-disposition')).toContain('inline');
-    expect(response.headers.get('cache-control')).toBe('private, no-store');
+    expect(response.headers.get('cache-control')).toBe(
+      'private, max-age=0, must-revalidate',
+    );
+    const etag = response.headers.get('etag');
+    expect(etag).not.toBeNull();
     await expect(response.text()).resolves.toBe('fake-png-bytes');
+
+    const revalidated = await get(`/api/v1/assets/${assetId}/download`, ALICE, {
+      'if-none-match': etag ?? '',
+    });
+    expect(revalidated.status).toBe(304);
   });
 
   it('非属主得到 404', async () => {
