@@ -163,6 +163,10 @@ fn the_chat_page_carries_every_element_the_client_script_requires() {
         client: crate::config::ClientBundle::Nest,
     };
     let rendered = super::templates::chat_page(&page);
+    assert!(
+        rendered.contains("class=\"conversation-search\""),
+        "the sidebar filter must be present: {rendered}"
+    );
 
     for id in required_ids() {
         assert!(

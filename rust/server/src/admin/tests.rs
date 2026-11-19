@@ -467,6 +467,19 @@ async fn the_site_wide_conversation_view_is_read_only() {
         "the row links to its owner: {list}"
     );
 
+    let filtered = text_body(
+        app.clone()
+            .oneshot(get("/admin/conversations?q=红隼", Some(&admin_cookie)))
+            .await
+            .expect("filtered"),
+    )
+    .await;
+    assert!(filtered.contains("红隼俯冲"), "{filtered}");
+    assert!(
+        !filtered.contains("另一条"),
+        "the title filter is applied: {filtered}"
+    );
+
     // Narrowed to one account, and the chip that selects it reads as active.
     let scoped = text_body(
         app.clone()

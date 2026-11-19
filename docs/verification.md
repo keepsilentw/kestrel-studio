@@ -3724,6 +3724,46 @@ loader 文件同时含 `initChat` / `initVoice`；CSP 不含 `unsafe-inline`。
 - `/` 那条 lazy-image issue 仍在（count=2）；它与布局偏移无关的既有结论见 §42，本轮没有重测。
 - 没有真人按住 `/voice` 验证真实麦克风采集；本轮只确认页面初始化与控制台干净。
 
+## 64. 管理面会话搜索（2026-11-19）
+
+`/admin/conversations` 增加 `?q=`，按会话标题或账号名做大小写不敏感的包含匹配；已有
+`?user=` 账号筛选仍然生效，搜索表单用隐藏字段把当前账号带过去。页面提示改成
+「共 N 个会话 … 匹配 M 条」。
+
+### 64.1 质量门
+
+| 命令 | 读数 |
+|---|---|
+| `make check` | 通过（含 fmt、clippy、wasm target check） |
+| `make test` | Nest server **523 passed**；Nest client **72 passed**；Rust server **218 passed + 2 ignored**；Rust client **51 passed** |
+
+新增断言：Rust 与 Nest 的 `/admin/conversations?q=红隼` 只留下标题匹配的会话。
+
+### 64.2 没证的
+
+- 没有登录 `/admin` 在浏览器里看搜索框排版与「匹配 M 条」的实际位置。
+- 未部署。
+
+## 65. 历史侧栏搜索（2026-11-19）
+
+历史会话下拉顶部增加 `.conversation-search`，两个客户端都在本地按标题做大小写不敏感的包含
+过滤，不发额外请求；刷新列表后重新套用当前输入。它只过滤已加载的行，「加载更多」仍保留。
+
+### 65.1 质量门
+
+| 命令 | 读数 |
+|---|---|
+| `make check` | 通过（含 fmt、clippy、wasm target check） |
+| `make test` | Nest server **523 passed**；Nest client **73 passed**；Rust server **218 passed + 2 ignored**；Rust client **52 passed** |
+
+新增断言：Rust `history_matches` 的大小写/空查询；Nest DOM 测试输入「红隼」后第二行被隐藏；
+Rust 模板包含 `.conversation-search`。
+
+### 65.2 没证的
+
+- 没在真实浏览器里看新的下拉面板排版（输入框在面板顶部，列表单独滚动）。
+- 未部署。
+
 ## 56. wasm 预压缩上线（2026-11-19 10:05）
 
 | 项 | 读数 |

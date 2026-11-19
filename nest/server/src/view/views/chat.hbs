@@ -23,7 +23,9 @@
       {{/if}}
       <details class="menu-dropdown">
         <summary class="menu-button">历史会话</summary>
-        <ul class="conversation-list">
+        <div class="conversation-panel">
+          <input type="search" class="conversation-search" placeholder="搜索会话" aria-label="搜索会话">
+          <ul class="conversation-list">
           {{#each conversations}}
             {{! The delete control is rebuilt by refreshConversationList() in
                 nest/client/scripts/main.ts — keep the two in step. It is only rendered
@@ -43,7 +45,8 @@
           {{else}}
             <li class="conversation-empty">暂无会话</li>
           {{/each}}
-        </ul>
+          </ul>
+        </div>
       </details>
     </nav>
 

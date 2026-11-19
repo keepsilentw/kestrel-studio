@@ -114,15 +114,24 @@ export class AdminController {
     @Req() req: Request,
     @Res() res: Response,
     @Query('user') user: string | undefined,
+    @Query('q') q: string | undefined,
     @Query('notice') notice: string | undefined,
   ): void {
     const accounts = this.admin.list();
     const filter = readPositiveInt(user);
     const owner = filter === null ? null : (accounts.find((item) => item.id === filter) ?? null);
+    const query = q?.trim() ?? '';
+    const needle = query.toLowerCase();
 
     const all = this.conversations.listAll();
     const rows = all
       .filter((item) => owner === null || item.ownerId === owner.id)
+      .filter(
+        (item) =>
+          needle.length === 0 ||
+          item.title.toLowerCase().includes(needle) ||
+          item.ownerName.toLowerCase().includes(needle),
+      )
       .map((item) => ({
         ...item,
         updatedAtLabel: formatTimestamp(item.updatedAt),
@@ -141,6 +150,9 @@ export class AdminController {
       conversations: rows,
       chips,
       ownerName: owner?.username ?? null,
+      ownerId: owner?.id ?? null,
+      query,
+      matched: rows.length,
       siteTotal: all.length,
       notice: readNotice(notice),
     });

@@ -168,6 +168,7 @@ pub fn conversations_page(
     rows: &[ConversationRow],
     chips: &[AccountChip],
     owner_name: Option<&str>,
+    query: Option<&str>,
     site_total: usize,
     notice: Option<&Notice>,
 ) -> String {
@@ -211,11 +212,25 @@ pub fn conversations_page(
         None => String::new(),
         Some(name) => format!("，当前只看 {} 的", escape(name)),
     };
+    let query_value = query.map(escape).unwrap_or_default();
+    let owner_filter = chips
+        .iter()
+        .find(|chip| chip.is_active)
+        .map(|chip| {
+            format!(
+                "<input type=\"hidden\" name=\"user\" value=\"{}\">\n",
+                chip.id
+            )
+        })
+        .unwrap_or_default();
     let main = format!(
-        "  <main class=\"admin-main\">\n{note}    <section class=\"admin-card\">\n      <h2 class=\"admin-title\">全站会话</h2>\n      <p class=\"admin-hint\">\n        共 {total} 个会话{scoped}。查看他人会话是只读的。\n      </p>\n\n      <ul class=\"admin-chips\">\n{chips}      </ul>\n\n      <table class=\"admin-table\">\n        <thead>\n          <tr>\n            <th>会话</th>\n            <th>归属</th>\n            <th>更新时间</th>\n            <th></th>\n          </tr>\n        </thead>\n        <tbody>\n{rows}        </tbody>\n      </table>\n    </section>\n  </main>\n",
+        "  <main class=\"admin-main\">\n{note}    <section class=\"admin-card\">\n      <h2 class=\"admin-title\">全站会话</h2>\n      <p class=\"admin-hint\">\n        共 {total} 个会话{scoped}，匹配 {matched} 条。查看他人会话是只读的。\n      </p>\n\n      <form class=\"admin-search\" action=\"/admin/conversations\" method=\"get\">\n        {owner_filter}<input name=\"q\" type=\"search\" value=\"{query}\" placeholder=\"按会话标题或账号筛选\">\n        <button type=\"submit\" class=\"admin-button\">筛选</button>\n      </form>\n\n      <ul class=\"admin-chips\">\n{chips}      </ul>\n\n      <table class=\"admin-table\">\n        <thead>\n          <tr>\n            <th>会话</th>\n            <th>归属</th>\n            <th>更新时间</th>\n            <th></th>\n          </tr>\n        </thead>\n        <tbody>\n{rows}        </tbody>\n      </table>\n    </section>\n  </main>\n",
         note = notice_html(notice),
         total = site_total,
+        matched = rows.len(),
         scoped = scoped,
+        query = query_value,
+        owner_filter = owner_filter,
         chips = chip_items,
         rows = body,
     );

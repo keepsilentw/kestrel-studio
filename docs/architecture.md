@@ -300,6 +300,10 @@ sequenceDiagram
 | `nest/client/__tests__/test-setup.ts` | — | 测试用，补 jsdom 缺失的 `scrollIntoView` 与 `<dialog>` 的 `showModal`/`close` |
 | （无） | `/admin` 各页 | 管理页刻意不引客户端脚本：纯表单 + 302，见 §12 |
 
+**历史侧栏搜索**：下拉顶部有 `.conversation-search`，两个客户端在本地按标题做大小写不敏感的
+包含过滤，不额外请求服务端。它只过滤**已加载**的行；「加载更多」仍保留，用来把更早的会话拉进
+当前过滤范围。
+
 **助手**的最终文本用 `marked` 渲染成 HTML；用户自己那句话是**纯文本**——服务端转义后直接输出，
 客户端用 `textContent` 追加，两条通路必须一致。把用户输入也喂给 `marked` 会多出一个 `<p>`
 连同它的段间距，于是重载后的一轮比实时那轮高一截。思考过程按纯文本流式追加，不解析。模板只负责
@@ -643,6 +647,9 @@ WebSocket 的 upgrade 不经过 Express，所以 `AuthenticatedGuard` 对它无�
 | `nest/server/src/admin/admin.service.ts` | 账号列表与 CRUD、级联删除、密码哈希与形状校验 |
 | `nest/server/src/admin/admin.controller.ts` | 页面与表单端点，服务端渲染 POST + 302 + `?notice=` 提示 |
 | `nest/server/src/conversation/conversation.service.ts` | 可见性规则本身：`canRead()` / `isOwnedBy()`（共用私有的 `readableBy()`）、`softDeleteConversations()`、硬级联 `deleteConversations()` |
+
+- `/admin/conversations` 支持 `?q=` 按会话标题或账号名筛选；选择某个账号后再筛选，会把 `user`
+  作为隐藏字段保留，范围不会悄悄放大到全站。
 
 - **两个账号**：`admin`（普通用户，凭据代码内置但**生产环境不建号**）与超管（凭据只来自
   `SUPER_ADMIN_USERNAME` / `SUPER_ADMIN_PASSWORD`，**仓库里不内置超管口令**，缺省即不建号），启动时按需建出，

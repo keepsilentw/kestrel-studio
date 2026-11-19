@@ -38,8 +38,14 @@
     <section class="admin-card">
       <h2 class="admin-title">全站会话</h2>
       <p class="admin-hint">
-        共 {{siteTotal}} 个会话{{#if ownerName}}，当前只看 {{ownerName}} 的{{/if}}。查看他人会话是只读的。
+        共 {{siteTotal}} 个会话{{#if ownerName}}，当前只看 {{ownerName}} 的{{/if}}，匹配 {{matched}} 条。查看他人会话是只读的。
       </p>
+
+      <form class="admin-search" action="/admin/conversations" method="get">
+        {{#if ownerId}}<input type="hidden" name="user" value="{{ownerId}}">{{/if}}
+        <input name="q" type="search" value="{{query}}" placeholder="按会话标题或账号筛选">
+        <button type="submit" class="admin-button">筛选</button>
+      </form>
 
       <ul class="admin-chips">
         <li><a class="admin-chip{{#unless ownerName}} is-active{{/unless}}" href="/admin/conversations">全部</a></li>

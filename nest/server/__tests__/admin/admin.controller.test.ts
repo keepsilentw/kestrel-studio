@@ -363,6 +363,15 @@ describe('GET /admin/conversations', () => {
     expect(html).not.toContain('超管的问题');
   });
 
+  it('?q= 按标题或账号筛选', async () => {
+    conversations.create(ALICE, 'alice 的问题');
+    conversations.create(ROOT, '超管的问题');
+
+    const html = await (await get('/admin/conversations?q=alice')).text();
+    expect(html).toContain('alice 的问题');
+    expect(html).not.toContain('超管的问题');
+  });
+
   it('没有会话时给出空态', async () => {
     const html = await (await get('/admin/conversations')).text();
     expect(html).toContain('没有会话');

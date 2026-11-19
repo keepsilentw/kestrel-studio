@@ -13,6 +13,7 @@ const FIXTURE = `
     <nav class="menu-dropdown">
       <details>
         <summary>历史会话</summary>
+        <input class="conversation-search" type="search">
         <ul class="conversation-list">
           <li class="conversation-item">
             <a class="conversation-link is-active" href="/?c=5">画一只红隼</a>
@@ -726,6 +727,22 @@ describe('会话事件流', () => {
     await vi.waitFor(() => {
       expect(document.querySelector('.task-pending[data-task-id="13"]')).toBeNull();
     });
+  });
+});
+
+describe('历史会话搜索', () => {
+  it('按标题大小写不敏感地隐藏不匹配的行', async () => {
+    await boot();
+    const input = document.querySelector<HTMLInputElement>('.conversation-search');
+    if (input === null) {
+      throw new Error('the fixture lost .conversation-search');
+    }
+    input.value = '红隼';
+    input.dispatchEvent(new Event('input'));
+
+    const items = document.querySelectorAll<HTMLLIElement>('.conversation-item');
+    expect(items[0]?.hidden).toBe(false);
+    expect(items[1]?.hidden).toBe(true);
   });
 });
 

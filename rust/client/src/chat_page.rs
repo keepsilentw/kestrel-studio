@@ -1632,6 +1632,17 @@ fn bind_history(page: &Handle, dom: &Dom) {
         .add_event_listener_with_callback("toggle", on_toggle.as_ref().unchecked_ref())
         .ok();
     on_toggle.forget();
+
+    let scoped = Rc::clone(page);
+    let on_search = Closure::<dyn FnMut()>::new(move || apply_history_filter(&scoped));
+    if let Some(document) = dom.body.owner_document() {
+        if let Ok(Some(input)) = document.query_selector(".conversation-search") {
+            input
+                .add_event_listener_with_callback("input", on_search.as_ref().unchecked_ref())
+                .ok();
+        }
+    }
+    on_search.forget();
 }
 
 /// Replace the dropdown's rows with what the server says they should be.
@@ -1766,6 +1777,45 @@ fn repaint_history(page: &Handle) {
         &history_rows(&rows, active, can_delete),
         has_more,
     );
+    apply_history_filter(page);
+}
+
+/// Hides rows whose title does not contain the search box's text. The list is
+/// rebuilt on every refresh; this runs after each rebuild so the filter survives.
+fn apply_history_filter(page: &Handle) {
+    let dom = { page.borrow().dom.clone() };
+    let Some(document) = dom.body.owner_document() else {
+        return;
+    };
+    let query = document
+        .query_selector(".conversation-search")
+        .ok()
+        .flatten()
+        .and_then(|node| node.dyn_into::<HtmlInputElement>().ok())
+        .map(|input| input.value())
+        .unwrap_or_default();
+    let Ok(items) = document.query_selector_all(".conversation-item") else {
+        return;
+    };
+    for index in 0..items.length() {
+        let Some(node) = items.item(index) else {
+            continue;
+        };
+        let Some(item) = node.dyn_into::<HtmlElement>().ok() else {
+            continue;
+        };
+        let title = item
+            .query_selector(".conversation-link")
+            .ok()
+            .flatten()
+            .and_then(|link| link.text_content())
+            .unwrap_or_default();
+        if crate::chat_core::history_matches(&title, &query) {
+            item.remove_attribute("hidden").ok();
+        } else {
+            item.set_attribute("hidden", "").ok();
+        }
+    }
 }
 
 /// Rebuild `.conversation-list` to match the shell's markup for it, element for

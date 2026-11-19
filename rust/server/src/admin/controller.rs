@@ -124,12 +124,23 @@ pub async fn conversations_page_handler(
     let accounts = service.list().await?;
     let filter = read_positive_int(params.get("user").map(String::as_str));
     let owner = filter.and_then(|id| accounts.iter().find(|item| item.id == id).cloned());
+    let query = params
+        .get("q")
+        .map(|raw| raw.trim().to_string())
+        .filter(|value| !value.is_empty());
 
     let note = notice(params.get("notice").map(String::as_str));
     let all = state.conversations.list_all().await?;
     let rows: Vec<ConversationRow> = all
         .iter()
         .filter(|item| owner.as_ref().is_none_or(|owned| item.owner_id == owned.id))
+        .filter(|item| {
+            query.as_ref().is_none_or(|needle| {
+                let needle = needle.to_lowercase();
+                item.title.to_lowercase().contains(&needle)
+                    || item.owner_name.to_lowercase().contains(&needle)
+            })
+        })
         .map(|item| ConversationRow {
             id: item.id,
             title: item.title.clone(),
@@ -152,6 +163,7 @@ pub async fn conversations_page_handler(
         &rows,
         &chips,
         owner.as_ref().map(|item| item.username.as_str()),
+        query.as_deref(),
         all.len(),
         note.as_ref(),
     )))

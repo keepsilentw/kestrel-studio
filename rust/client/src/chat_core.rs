@@ -411,6 +411,13 @@ pub fn append_history_page(
     }
 }
 
+/// Sidebar filter: case-insensitive substring over the title. An empty query
+/// matches everything, so the same function drives both "clear" and "type".
+pub fn history_matches(title: &str, query: &str) -> bool {
+    let needle = query.trim().to_lowercase();
+    needle.is_empty() || title.to_lowercase().contains(&needle)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -796,5 +803,13 @@ mod tests {
             [7, 3],
             "a duplicate from an overlapping page stays out"
         );
+    }
+
+    #[test]
+    fn history_filter_is_case_insensitive_and_treats_empty_as_all() {
+        assert!(history_matches("雨夜红隼", ""));
+        assert!(history_matches("雨夜红隼", "红隼"));
+        assert!(history_matches("Rainy Kestrel", "kestrel"));
+        assert!(!history_matches("雨夜红隼", "猫"));
     }
 }

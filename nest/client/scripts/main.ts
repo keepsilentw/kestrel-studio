@@ -887,6 +887,20 @@ function paintConversationList(): void {
     row.append(more);
     list.append(row);
   }
+  filterConversationList();
+}
+
+/** Case-insensitive title filter over the rows currently painted. */
+function filterConversationList(): void {
+  const input = document.querySelector<HTMLInputElement>('.conversation-search');
+  if (input === null) {
+    return;
+  }
+  const needle = input.value.trim().toLowerCase();
+  for (const item of document.querySelectorAll<HTMLLIElement>('.conversation-item')) {
+    const title = item.querySelector('.conversation-link')?.textContent?.toLowerCase() ?? '';
+    item.hidden = needle.length > 0 && !title.includes(needle);
+  }
 }
 
 async function refreshConversationList(): Promise<void> {
@@ -1140,6 +1154,10 @@ document.addEventListener('click', (event) => {
  * the list refreshes — and it does not follow the script onto a page without one.
  */
 const historyDropdown = document.querySelector<HTMLElement>('.menu-dropdown');
+document
+  .querySelector<HTMLInputElement>('.conversation-search')
+  ?.addEventListener('input', filterConversationList);
+
 historyDropdown?.addEventListener('click', (event) => {
   const target = event.target;
   if (!(target instanceof Element)) {
