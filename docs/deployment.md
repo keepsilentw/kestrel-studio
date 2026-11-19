@@ -320,8 +320,8 @@ ssh lavo-test "cd /opt/kestrel-studio && ACCESS_LOG=1 docker compose up -d"
 - Nest：`common/wasm-gzip.ts` 在静态中间件之前接管 `/wasm/*.wasm`。
 - `.gz` 不存在时退回原文件；URL 与 WASM loader 不变。
 
-本地实测：391,780 B → **140,687 B**（约 64% 更小）。**未验证**：没有部署，线上还没有这份
-`.gz` 的响应头读数。
+2026-11-19 10:05 已部署并核对：公网 wasm 原始 **395,686 B**，gzip 后 **142,377 B**，
+响应带 `content-encoding: gzip` 与 `vary: Accept-Encoding`；容器 `healthy`，`/healthz` 200。
 
 ## 3. 对外暴露：openresty 反代
 

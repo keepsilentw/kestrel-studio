@@ -3563,5 +3563,20 @@ Nest 的同一套解析测试。
 
 ### 55.2 没证的
 
-- 部署后线上实际是否返回 `Content-Encoding: gzip`、`Content-Length` 是否等于 `.gz` 大小：未部署。
+- 2026-11-19 10:05 已部署并核对，读数见 §56。
 - 浏览器首次加载 wasm 的耗时变化：没有跑真实浏览器测量。
+
+## 56. wasm 预压缩上线（2026-11-19 10:05）
+
+| 项 | 读数 |
+|---|---|
+| `make deploy` | 最终镜像 `sha256:abc45ea6…`，archive 6.1 MB |
+| 档位 | 部署后按 §2.2 重拨 `CLIENT_BUNDLE=wasm`；启动日志 `client="wasm"` |
+| 容器 | `Up 55 seconds (healthy)`；`/healthz` 本地 200、公网 200 |
+| 公网 wasm（未声明 gzip） | `content-length: 395686`，`vary: Accept-Encoding` |
+| 公网 wasm（声明 gzip） | `content-length: 142377`，`content-encoding: gzip` |
+| `/login` | `x-content-type-options: nosniff`、`x-frame-options: DENY`、`referrer-policy: no-referrer`、CSP 在位 |
+| 启动日志 | 重拨后近 3 分钟 `ERROR` / `WARN` 0 行 |
+
+第一次 `make deploy` 的 release 构建报了一条 `list_by_user` 从未使用的 warning（它只剩测试
+在用）。已改为 `#[cfg(test)]`（提交 `c15790c`）并重新部署；最终镜像的构建没有再出现 warning。
