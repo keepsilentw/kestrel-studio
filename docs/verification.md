@@ -3761,8 +3761,31 @@ Rust 模板包含 `.conversation-search`。
 
 ### 65.2 没证的
 
-- 没在真实浏览器里看新的下拉面板排版（输入框在面板顶部，列表单独滚动）。
-- 未部署。
+- 已于 2026-11-19 11:16 部署并在真实浏览器复验，见 §66。
+
+## 66. 搜索功能上线与浏览器复验（2026-11-19 11:16）
+
+| 项 | 读数 |
+|---|---|
+| 提交 | `3c3ea93`（两处搜索）+ `771dbf7`（hidden 修复）+ `ad5418c`（input id） |
+| 镜像 | `sha256:1f069d53…` |
+| 容器 | `healthy`，日志 `client="wasm"` |
+| 侧栏搜索 | 输入「红隼」后列表只剩 3 条匹配会话 |
+| 管理面搜索 | `/admin/conversations?q=红隼` 显示「共 16 个会话，匹配 4 条」，4 行结果 |
+| `/` 控制台 | 只有既有 lazy-image issue（count=2），无 error |
+| `/admin/conversations` 控制台 | **no console messages** |
+
+浏览器复验抓到并修掉了两个问题：
+
+1. `.conversation-item { display: flex }` 覆盖了 `hidden` 属性的 UA `display: none`，过滤看起来
+   没生效。补 `.conversation-item[hidden] { display: none }` 后通过。
+2. 搜索框没有 `id` / `name`，Chrome 报「A form field element should have an id or name
+   attribute」。补 `id="conversation-search"` 后该 issue 消失。
+
+### 66.1 没证的
+
+- 侧栏搜索仍是**已加载行**的本地过滤，不会去服务端搜索未加载的会话。
+- lazy-image issue count=2 仍在，与 §42 的既有结论一致，本轮未重测布局偏移。
 
 ## 56. wasm 预压缩上线（2026-11-19 10:05）
 
