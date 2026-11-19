@@ -3657,6 +3657,24 @@ Nest 侧 `sendFile` 自带的 freshness 判断把 `max-age=0` 当作 stale，因
 - 没在真实浏览器里看 DevTools 的 304 与传输字节数；只在进程内测试了协议行为。
 - 未部署。
 
+## 61. ETag 与备份运维上线（2026-11-19 11:15）
+
+| 项 | 读数 |
+|---|---|
+| 提交 | `447747b feat: revalidate assets and schedule backups` |
+| 镜像 | `sha256:7bedb586…` |
+| 容器 | `healthy` |
+| 档位 | 重拨 `CLIENT_BUNDLE=wasm`；日志 `client="wasm"` |
+| 启动日志 | 近 3 分钟 `ERROR` / `WARN` 0 行 |
+| `/healthz` | 200 |
+| wasm gzip | `content-encoding: gzip`、`content-length: 142377`、`vary: Accept-Encoding` |
+| 宿主机 `make storage-report` | 目标已随 Makefile 上线，输出 admin 13 个 / 17,646,086 B、tww316 10 个 / 53,073,573 B |
+
+### 61.1 没证的
+
+- 没有用真实登录会话请求 `/api/v1/assets/:id/download` 观察 304；该行为仍只有进程内测试。
+- 每日 03:30 的自动备份还没有实际触发过。
+
 ## 56. wasm 预压缩上线（2026-11-19 10:05）
 
 | 项 | 读数 |
