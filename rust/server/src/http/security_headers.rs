@@ -5,10 +5,9 @@ use axum::response::Response;
 
 /// Defence in depth for pages whose assistant text is model output.
 ///
-/// `script-src` still allows inline code because the WASM loader is emitted
-/// inline in the page shell (it must know which bundle `CLIENT_BUNDLE` selected).
-/// The rest of the policy is what buys the protection: no external script or
-/// connection target, no framing, no plugins, and forms may only post here.
+/// The WASM loader is an external file, so `script-src` needs no inline exception.
+/// The policy is what buys the protection: no external script or connection
+/// target, no framing, no plugins, and forms may only post here.
 const CONTENT_SECURITY_POLICY: &str = "default-src 'self'; \
 base-uri 'self'; \
 form-action 'self'; \
@@ -17,8 +16,8 @@ object-src 'none'; \
 img-src 'self' data: blob:; \
 media-src 'self' blob:; \
 connect-src 'self'; \
-script-src 'self' 'unsafe-inline'; \
-style-src 'self' 'unsafe-inline'";
+script-src 'self'; \
+style-src 'self'";
 
 /// Adds headers to every response, including the WebSocket upgrade. Only headers
 /// are touched, so this is safe in front of the one route that hijacks the

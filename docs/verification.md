@@ -3675,6 +3675,32 @@ Nest 侧 `sendFile` 自带的 freshness 判断把 `max-age=0` 当作 stale，因
 - 没有用真实登录会话请求 `/api/v1/assets/:id/download` 观察 304；该行为仍只有进程内测试。
 - 每日 03:30 的自动备份还没有实际触发过。
 
+## 62. WASM loader 外置与 CSP 去 inline（2026-11-19）
+
+WASM 的启动代码从页面内联 `<script type="module">` 移到
+`/assets/wasm-loader.js`；`make build-wasm` 从 `rust/client/public/wasm-loader.js` 复制。
+入口与旧客户端名走 script 标签的 `data-entry` / `data-legacy`，两页共用一份 loader。
+
+因此两套后端的 CSP 都去掉了 `unsafe-inline`：
+
+- `script-src 'self'`
+- `style-src 'self'`
+
+### 62.1 质量门
+
+| 命令 | 读数 |
+|---|---|
+| `make check` | 通过（含 fmt、clippy、wasm target check） |
+| `make test` | Nest server **522 passed**（36 个文件）；Nest client **72 passed**；Rust server **218 passed + 2 ignored**；Rust client **51 passed** |
+
+新增断言：模板只引用 `/assets/wasm-loader.js` 并带 `data-entry` / `data-legacy`；
+loader 文件同时含 `initChat` / `initVoice`；CSP 不含 `unsafe-inline`。
+
+### 62.2 没证的
+
+- 没有在真实浏览器里加载这版页面确认控制台零报错；只有模板与静态检查。
+- 未部署；当前线上仍是内联 loader 的旧前端包。
+
 ## 56. wasm 预压缩上线（2026-11-19 10:05）
 
 | 项 | 读数 |

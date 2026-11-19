@@ -348,31 +348,11 @@ fn client_script(client: crate::config::ClientBundle, legacy: &str, entry: &str)
         crate::config::ClientBundle::Nest => {
             format!("  <script type=\"module\" src=\"{legacy}\"></script>\n")
         }
-        crate::config::ClientBundle::Wasm => WASM_LOADER
-            .replace("@ENTRY@", entry)
-            .replace("@LEGACY@", legacy),
+        crate::config::ClientBundle::Wasm => format!(
+            "  <script type=\"module\" src=\"/assets/wasm-loader.js\" data-entry=\"{entry}\" data-legacy=\"{legacy}\"></script>\n"
+        ),
     }
 }
-
-/// The WASM bootstrap. `@LEGACY@` is named in the failure note because that is the
-/// one sentence an operator needs: which client this page meant to run.
-const WASM_LOADER: &str = r#"  <script type="module">
-    // Inline on purpose. The loader is these lines; a cached JS file that no longer
-    // matches the .wasm beside it is exactly the failure an inline module cannot make.
-    try {
-      const client = await import("/wasm/kestrel_client.js");
-      await client.default();
-      client.@ENTRY@();
-    } catch (error) {
-      console.error("kestrel: the WASM client did not start", error);
-      const note = document.createElement("p");
-      note.className = "client-error";
-      note.textContent = "WASM 客户端加载失败（@LEGACY@ 是这个页面的旧客户端）。刷新页面重试。";
-      const stream = document.querySelector(".stream");
-      (stream === null ? document.body : stream).append(note);
-    }
-  </script>
-"#;
 
 /// `GET /voice` - the second entrance. The server renders the shell only: a call
 /// has no history to replay, so everything below the header is appended by

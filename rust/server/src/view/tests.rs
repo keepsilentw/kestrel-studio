@@ -853,18 +853,20 @@ fn the_client_switch_hands_each_page_exactly_one_client() {
         client: ClientBundle::Wasm,
         ..page_fixture(&[], &[], None, None, false)
     });
-    assert!(
-        wasm.contains("import(\"/wasm/kestrel_client.js\")"),
-        "{wasm}"
-    );
-    assert!(wasm.contains("client.initChat()"), "{wasm}");
+    assert!(wasm.contains("src=\"/assets/wasm-loader.js\""), "{wasm}");
+    assert!(wasm.contains("data-entry=\"initChat\""), "{wasm}");
+    assert!(wasm.contains("data-legacy=\"/assets/main.js\""), "{wasm}");
     assert!(
         !wasm.contains("src=\"/assets/main.js\""),
         "one client per page: {wasm}"
     );
 
     let voice = super::templates::voice_page("tww316", false, ClientBundle::Wasm);
-    assert!(voice.contains("client.initVoice()"), "{voice}");
+    assert!(voice.contains("data-entry=\"initVoice\""), "{voice}");
+    assert!(
+        voice.contains("data-legacy=\"/assets/voice.js\""),
+        "{voice}"
+    );
     // Tag-shaped on purpose: the loader's own failure note names the legacy bundle, so
     // a bare path in the page is not evidence of a second client.
     assert!(
@@ -872,9 +874,14 @@ fn the_client_switch_hands_each_page_exactly_one_client() {
         "no TS client tag on the voice page: {voice}"
     );
     assert!(
-        voice.contains("import(\"/wasm/kestrel_client.js\")"),
+        voice.contains("src=\"/assets/wasm-loader.js\""),
         "both pages must resolve the same module, or one of them is broken by a typo: {voice}"
     );
+
+    let loader = std::fs::read_to_string("../client/public/wasm-loader.js")
+        .expect("the external WASM loader must be readable");
+    assert!(loader.contains("initVoice"), "{loader}");
+    assert!(loader.contains("initChat"), "{loader}");
 
     // The worklet is still JS at that exact path — `rust/client/src/audio.rs` asks for
     // `/capture.js` and no amount of WASM changes that (docs/roadmap.md §4.1, the JS floor).

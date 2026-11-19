@@ -692,9 +692,10 @@ WebSocket 的 upgrade 不经过 Express，所以 `AuthenticatedGuard` 对它无�
   的部署形态一致。位置：`rust/server/src/auth/login_limit.rs`、
   `nest/server/src/auth/login-limiter.service.ts`。
 - **响应头**：所有响应统一带 `X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、
-  `Referrer-Policy: no-referrer`、`Permissions-Policy` 与 CSP。CSP 仍允许内联脚本，因为
-  WASM loader 必须知道 `CLIENT_BUNDLE` 选了哪份包；其余指令收窄到同源连接、同源表单与
-  `object-src 'none'`。位置：`rust/server/src/http/security_headers.rs`、
+  `Referrer-Policy: no-referrer`、`Permissions-Policy` 与 CSP。CSP **没有** inline 例外：
+  WASM loader 已移到外部的 `/assets/wasm-loader.js`，入口与旧包名通过 script 标签的
+  `data-entry` / `data-legacy` 传递；`script-src` 与 `style-src` 都是 `'self'`，其余指令
+  收窄到同源连接、同源表单与 `object-src 'none'`。位置：`rust/server/src/http/security_headers.rs`、
   `nest/server/src/common/security-headers.ts`。
 - **Cookie**：生产环境的 `connect.sid` 加 `Secure`。Nest 侧同时设 `trust proxy = 1`，
   依赖 openresty 传来的 `X-Forwarded-Proto`；本地 `NODE_ENV` 非 production 时不加，http
