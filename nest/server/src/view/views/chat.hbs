@@ -24,7 +24,7 @@
       <details class="menu-dropdown">
         <summary class="menu-button">历史会话</summary>
         <div class="conversation-panel">
-          <input type="search" class="conversation-search" placeholder="搜索会话" aria-label="搜索会话">
+          <input type="search" class="conversation-search" id="conversation-search" placeholder="搜索会话" aria-label="搜索会话">
           <ul class="conversation-list">
           {{#each conversations}}
             {{! The delete control is rebuilt by refreshConversationList() in
