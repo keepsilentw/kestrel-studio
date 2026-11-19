@@ -241,7 +241,7 @@ async fn generate_image(
     state: &AppState,
     api_key: &str,
     args: &Value,
-    _context: ToolContext,
+    context: ToolContext,
 ) -> ToolOutcome {
     let prompt = read_string(args, "prompt", "");
     if prompt.is_empty() {
@@ -260,9 +260,18 @@ async fn generate_image(
     };
 
     let mut assets: Vec<StoredAsset> = Vec::new();
+    let mut remaining = remaining_media_quota(state, context.conversation_id).await;
     for url in urls {
-        match state.media.store(TaskKind::Image, &url).await {
-            Ok(stored) => assets.push(stored),
+        match state.media.store(TaskKind::Image, &url, remaining).await {
+            Ok(stored) => {
+                if let Some(left) = remaining.as_mut() {
+                    *left = (*left - stored.bytes).max(0);
+                }
+                assets.push(stored);
+            }
+            Err(crate::error::AppError::StorageFull(message)) => {
+                return ToolOutcome::failure(message)
+            }
             Err(error) => {
                 return ToolOutcome::failure(format!("Tool failed: {}", error.describe()))
             }
@@ -276,6 +285,31 @@ async fn generate_image(
             assets.len()
         ),
         assets,
+    }
+}
+
+/// Remaining media budget for the conversation's owner. `None` means the quota is
+/// disabled or the lookup failed: a database hiccup should not turn every
+/// generation into a refusal.
+async fn remaining_media_quota(state: &AppState, conversation_id: i64) -> Option<i64> {
+    let quota = state.config.asset_quota_bytes;
+    if quota <= 0 {
+        return None;
+    }
+    let user_id = match state.conversations.owner_of(conversation_id).await {
+        Ok(Some(id)) => id,
+        Ok(None) => return None,
+        Err(error) => {
+            tracing::warn!(%error, "media quota: owner lookup failed");
+            return None;
+        }
+    };
+    match state.conversations.asset_usage(user_id).await {
+        Ok(used) => Some((quota - used).max(0)),
+        Err(error) => {
+            tracing::warn!(%error, "media quota: usage lookup failed");
+            None
+        }
     }
 }
 

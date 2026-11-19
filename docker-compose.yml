@@ -36,6 +36,10 @@ services:
       - PORT=${HOST_PORT:-8848}
       - RUST_LOG=${RUST_LOG:-info}
       - CLIENT_BUNDLE=${CLIENT_BUNDLE:-nest}
+      # Per-account media budget. Deployment config, not a secret, so it follows
+      # PORT/RUST_LOG into compose instead of the never-rewritten `.env`; `0`
+      # disables the check. Default 2 GiB.
+      - ASSET_QUOTA_BYTES=${ASSET_QUOTA_BYTES:-2147483648}
     # Cap the json-file log. Without these keys the driver keeps `Config: {}` —
     # no size limit and no rotation — and one forgotten `RUST_LOG=debug` forensics
     # run grew the file to 16 MB in 2.8 days (docs/verification.md §21, and the
@@ -90,6 +94,7 @@ services:
       # Same rule as the Rust service's PORT: injected by compose, never read from
       # the never-rewritten `.env`.
       - PORT=${NEST_HOST_PORT:-8849}
+      - ASSET_QUOTA_BYTES=${ASSET_QUOTA_BYTES:-2147483648}
       # The Nest counterpart of RUST_LOG (deployment.md §2.3, architecture.md §13.3).
       # Empty means off; only `1` / `true` turn the per-request line on, and like
       # RUST_LOG it must never be baked into `.env`.

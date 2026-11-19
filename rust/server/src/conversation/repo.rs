@@ -261,14 +261,29 @@ impl ConversationService {
         Ok(rows.as_ref().map(to_admin_summary))
     }
 
-    /// Owner of a conversation, for endpoints that push events rather than read.
-    #[cfg(test)]
+    /// Owner of a conversation, for endpoints/workers that push events rather than read.
     pub async fn owner_of(&self, conversation_id: i64) -> Result<Option<i64>, AppError> {
         let row = sqlx::query("SELECT user_id FROM conversations WHERE id = ?1")
             .bind(conversation_id)
             .fetch_optional(&self.pool)
             .await?;
         Ok(row.map(|row| row.try_get("user_id").expect("user_id")))
+    }
+
+    /// Total bytes of mirrored media owned by one account. Deleting a conversation
+    /// removes its asset rows, so this number is also what a hard delete frees.
+    pub async fn asset_usage(&self, user_id: i64) -> Result<i64, AppError> {
+        let row = sqlx::query(
+            "SELECT COALESCE(SUM(a.bytes), 0) AS used
+             FROM assets a
+             JOIN messages m ON m.id = a.message_id
+             JOIN conversations c ON c.id = m.conversation_id
+             WHERE c.user_id = ?1",
+        )
+        .bind(user_id)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row.try_get("used").unwrap_or(0))
     }
 
     pub async fn views(&self, conversation_id: i64) -> Result<Vec<MessageView>, AppError> {
@@ -1211,6 +1226,26 @@ mod tests {
             .await
             .expect("foreign cursor");
         assert!(foreign.is_empty());
+    }
+
+    #[tokio::test]
+    async fn media_usage_counts_only_the_accounts_rows() {
+        let (service, pool) = seeded().await;
+        sqlx::query(
+            "INSERT INTO messages (id, conversation_id, role, content, created_at) VALUES (100, 10, 'assistant', 'x', 1)",
+        )
+        .execute(&pool)
+        .await
+        .expect("message");
+        sqlx::query(
+            "INSERT INTO assets (message_id, kind, file_path, mime, bytes, created_at) VALUES (100, 'image', 'a.png', 'image/png', 1234, 1)",
+        )
+        .execute(&pool)
+        .await
+        .expect("asset");
+
+        assert_eq!(service.asset_usage(1).await.expect("owner usage"), 1234);
+        assert_eq!(service.asset_usage(2).await.expect("other usage"), 0);
     }
 
     #[tokio::test]

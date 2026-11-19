@@ -162,7 +162,10 @@ const TASK_STATUS_TEXT: Record<string, string> = {
   failed: '失败',
 };
 
-function createGenerateImageTool(media: MediaService): AgentTool {
+function createGenerateImageTool(
+  media: MediaService,
+  conversations: ConversationService,
+): AgentTool {
   return {
     spec: GENERATE_IMAGE_SPEC,
     async execute(args, context): Promise<ToolOutcome> {
@@ -181,9 +184,22 @@ function createGenerateImageTool(media: MediaService): AgentTool {
         ...(context.signal !== undefined ? { signal: context.signal } : {}),
       });
 
+      const quota = loadConfig().assetQuotaBytes;
+      let remaining: number | undefined;
+      if (quota > 0) {
+        const owner = conversations.ownerOf(context.conversationId);
+        if (owner !== null) {
+          remaining = Math.max(0, quota - conversations.assetUsage(owner));
+        }
+      }
+
       const assets: StoredAsset[] = [];
       for (const url of urls) {
-        assets.push(await media.store('image', url));
+        const stored = await media.store('image', url, remaining);
+        if (remaining !== undefined) {
+          remaining = Math.max(0, remaining - stored.bytes);
+        }
+        assets.push(stored);
       }
 
       return {
@@ -318,7 +334,7 @@ export class ToolRegistry {
     conversations: ConversationService,
   ) {
     for (const tool of [
-      createGenerateImageTool(media),
+      createGenerateImageTool(media, conversations),
       createGenerateVideoTool(media, tasks, conversations),
       createGetVideoTaskTool(tasks),
     ]) {

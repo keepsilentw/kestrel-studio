@@ -26,6 +26,14 @@ const DEFAULT_EXTENSION: Record<AssetKind, string> = {
 
 export type AssetKind = 'image' | 'video';
 
+/** A quota refusal is terminal: retrying the same render cannot free space. */
+export class StorageFullError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'StorageFullError';
+  }
+}
+
 export interface StoredAsset {
   kind: AssetKind;
   /**
@@ -258,13 +266,27 @@ export class MediaService {
     };
   }
 
-  /** Downloads a generated asset into the storage directory. */
-  async store(kind: AssetKind, sourceUrl: string): Promise<StoredAsset> {
+  /**
+   * Downloads a generated asset into the storage directory. `maxBytes` is the
+   * account's remaining quota at this write (`undefined` disables the check); it
+   * is applied before anything lands on disk.
+   */
+  async store(
+    kind: AssetKind,
+    sourceUrl: string,
+    maxBytes?: number,
+  ): Promise<StoredAsset> {
     const response = await fetch(sourceUrl);
     if (!response.ok) {
       throw new Error(`Failed to download generated ${kind} (HTTP ${response.status}).`);
     }
     const bytes = Buffer.from(await response.arrayBuffer());
+    if (maxBytes !== undefined && bytes.byteLength > maxBytes) {
+      throw new StorageFullError(
+        `存储空间不足：本次生成需要 ${(bytes.byteLength / 1_048_576).toFixed(1)} MB，` +
+          `剩余 ${(Math.max(0, maxBytes) / 1_048_576).toFixed(1)} MB。删除旧会话后可释放空间。`,
+      );
+    }
     const directory = resolve(loadConfig().storageDir);
     await mkdir(directory, { recursive: true });
 

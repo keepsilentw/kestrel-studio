@@ -13,6 +13,7 @@ pub enum AppError {
     NotFound(String),
     Conflict(String),
     TooManyRequests(String),
+    StorageFull(String),
     Unavailable(String),
     Internal(anyhow::Error),
 }
@@ -26,6 +27,7 @@ impl AppError {
             Self::NotFound(_) => StatusCode::NOT_FOUND,
             Self::Conflict(_) => StatusCode::CONFLICT,
             Self::TooManyRequests(_) => StatusCode::TOO_MANY_REQUESTS,
+            Self::StorageFull(_) => StatusCode::INSUFFICIENT_STORAGE,
             Self::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -39,6 +41,7 @@ impl AppError {
             | Self::NotFound(message)
             | Self::Conflict(message)
             | Self::TooManyRequests(message)
+            | Self::StorageFull(message)
             | Self::Unavailable(message) => message.clone(),
             // Never the provider's own text: the client gets a sentence, while
             // `describe` keeps the detail for logs, tool results and task rows.
@@ -72,6 +75,9 @@ impl AppError {
     }
     pub fn too_many_requests(message: impl Into<String>) -> Self {
         Self::TooManyRequests(message.into())
+    }
+    pub fn storage_full(message: impl Into<String>) -> Self {
+        Self::StorageFull(message.into())
     }
     pub fn unavailable(message: impl Into<String>) -> Self {
         Self::Unavailable(message.into())

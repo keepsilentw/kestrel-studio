@@ -159,8 +159,40 @@ impl TaskWorker {
     /// Downloads the render at the moment the provider reports success. This is
     /// the only window in which the URL works — it is not a durable reference.
     async fn mirror(&self, task: &GenerationTask, video_url: &str) -> Result<(), AppError> {
-        let stored = match self.state.media.store(TaskKind::Video, video_url).await {
+        let quota = self.state.config.asset_quota_bytes;
+        let remaining = if quota > 0 {
+            match self
+                .state
+                .conversations
+                .owner_of(task.conversation_id)
+                .await
+            {
+                Ok(Some(user_id)) => match self.state.conversations.asset_usage(user_id).await {
+                    Ok(used) => Some((quota - used).max(0)),
+                    Err(error) => {
+                        tracing::warn!(%error, "media quota: usage lookup failed");
+                        None
+                    }
+                },
+                Ok(None) => None,
+                Err(error) => {
+                    tracing::warn!(%error, "media quota: owner lookup failed");
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
+        let stored = match self
+            .state
+            .media
+            .store(TaskKind::Video, video_url, remaining)
+            .await
+        {
             Ok(stored) => stored,
+            // The quota will not recover by retrying the same URL; fail the task now.
+            Err(AppError::StorageFull(message)) => return self.fail(task, &message).await,
             Err(error) => {
                 let attempts = task.attempts + 1;
                 let reason = describe_error(&error);

@@ -3566,6 +3566,27 @@ Nest 的同一套解析测试。
 - 2026-11-19 10:05 已部署并核对，读数见 §56。
 - 浏览器首次加载 wasm 的耗时变化：没有跑真实浏览器测量。
 
+## 57. 每账号媒体配额（2026-11-19）
+
+`ASSET_QUOTA_BYTES` 默认 2 GiB，`0` 关闭。用量是 `SUM(assets.bytes)` 按会话属主汇总；
+图片工具在同一轮多张图之间逐张扣减，视频 worker 在镜像前检查并把配额拒绝当作终态。
+
+### 57.1 质量门
+
+| 命令 | 读数 |
+|---|---|
+| `make check` | 通过（含 fmt、clippy、wasm target check） |
+| `make test` | Nest server **521 passed**；Nest client **72 passed**；Rust server **218 passed + 2 ignored**；Rust client **51 passed** |
+
+新增测试：Rust `asset_usage` 只统计本账号；Nest `assetUsage` 同一口径；视频 worker 的
+`store` 调用带上剩余额度。
+
+### 57.2 没证的
+
+- 没有构造「用量已接近上限」的真实生成来观察拒绝文案；只做了单元层的用量与签名断言。
+- 未部署；`ASSET_QUOTA_BYTES` 在线上仍是 compose 默认 2 GiB。
+- 没有做按天/按月的历史用量报表，也没有在管理面展示用量。
+
 ## 56. wasm 预压缩上线（2026-11-19 10:05）
 
 | 项 | 读数 |

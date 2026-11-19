@@ -16,6 +16,8 @@ const DEFAULT_PUBLIC_BASE_URL = 'https://try.kestrel.justwork.link';
 const REASONING_EFFORTS = ['minimal', 'low', 'medium', 'high'] as const;
 export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
 const DEFAULT_REASONING_EFFORT: ReasoningEffort = 'high';
+/** Per-account media budget; `0` disables the check. */
+const DEFAULT_ASSET_QUOTA_BYTES = 2 * 1024 * 1024 * 1024;
 
 export interface BailianConfig {
   baseUrl: string;
@@ -53,6 +55,7 @@ export interface AppConfig {
   databaseFile: string;
   storageDir: string;
   publicBaseUrl: string;
+  assetQuotaBytes: number;
   /**
    * One access line per request (`common/access-log.ts`). Off unless asked for, so
    * nobody turns production log volume up by accident — the Rust server gates the
@@ -77,6 +80,15 @@ function readPort(): number {
   }
   const parsed = Number(raw);
   return Number.isInteger(parsed) && parsed > 0 ? parsed : 9949;
+}
+
+function readAssetQuota(): number {
+  const raw = readEnv('ASSET_QUOTA_BYTES');
+  if (raw === null) {
+    return DEFAULT_ASSET_QUOTA_BYTES;
+  }
+  const parsed = Number(raw);
+  return Number.isInteger(parsed) && parsed >= 0 ? parsed : DEFAULT_ASSET_QUOTA_BYTES;
 }
 
 /**
@@ -154,6 +166,7 @@ export function loadConfig(): AppConfig {
     databaseFile: readEnv('DATABASE_FILE') ?? join('data', 'kestrel-studio.db'),
     storageDir: readEnv('STORAGE_DIR') ?? 'storage',
     publicBaseUrl: (readEnv('PUBLIC_BASE_URL') ?? DEFAULT_PUBLIC_BASE_URL).replace(/\/+$/, ''),
+    assetQuotaBytes: readAssetQuota(),
     accessLog: readAccessLog(),
     superAdmin: readSuperAdmin(),
     bailian: {

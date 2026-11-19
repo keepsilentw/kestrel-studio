@@ -1,8 +1,13 @@
 import { Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from '@nestjs/common';
 import { ConversationEventsService, type ConversationEvent } from '@/conversation/conversation-events.service';
 import { ConversationService } from '@/conversation/conversation.service';
+import { loadConfig } from '@/config/configuration';
 import type { GenerationTask } from '@/database/schema';
-import { MediaService, type VideoTaskSnapshot } from '@/media/media.service';
+import {
+  MediaService,
+  StorageFullError,
+  type VideoTaskSnapshot,
+} from '@/media/media.service';
 import { TaskService, type TaskStatus } from './task.service';
 
 /** Provider renders are minutes long; polling faster only burns quota. */
@@ -136,10 +141,23 @@ export class TaskWorker implements OnModuleInit, OnModuleDestroy {
    * only window in which the URL works — it is not a durable reference.
    */
   private async mirror(task: GenerationTask, videoUrl: string): Promise<void> {
+    const quota = loadConfig().assetQuotaBytes;
+    let remaining: number | undefined;
+    if (quota > 0) {
+      const owner = this.conversations.ownerOf(task.conversationId);
+      if (owner !== null) {
+        remaining = Math.max(0, quota - this.conversations.assetUsage(owner));
+      }
+    }
+
     let stored;
     try {
-      stored = await this.media.store('video', videoUrl);
+      stored = await this.media.store('video', videoUrl, remaining);
     } catch (error) {
+      if (error instanceof StorageFullError) {
+        await this.fail(task, error.message);
+        return;
+      }
       const attempts = task.attempts + 1;
       const reason = describe(error);
       if (attempts < MAX_MIRROR_ATTEMPTS) {

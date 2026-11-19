@@ -7,6 +7,9 @@ const DEFAULT_CHAT_MODEL: &str = "deepseek-v4.1-flash";
 const DEFAULT_VIDEO_MODEL: &str = "wan3.0-video";
 const DEFAULT_VOICE_MODEL: &str = "qwen-audio-3.0-realtime-plus";
 const DEFAULT_PUBLIC_BASE_URL: &str = "https://try.kestrel.justwork.link";
+/// Per-account media budget. `0` disables the check; the default is a guard rail,
+/// not a product limit, and can be overridden with `ASSET_QUOTA_BYTES`.
+const DEFAULT_ASSET_QUOTA_BYTES: i64 = 2 * 1024 * 1024 * 1024;
 const DEFAULT_REASONING_EFFORT: ReasoningEffort = ReasoningEffort::High;
 const REASONING_EFFORTS: [ReasoningEffort; 4] = [
     ReasoningEffort::Minimal,
@@ -71,6 +74,7 @@ pub struct AppConfig {
     pub database_file: String,
     pub storage_dir: String,
     pub public_base_url: String,
+    pub asset_quota_bytes: i64,
     /// See [`ClientBundle`]: which client the chat and voice pages load.
     pub client_bundle: ClientBundle,
     /// None when either `SUPER_ADMIN_*` variable is absent — then no super admin is seeded.
@@ -93,6 +97,13 @@ fn read_port() -> u16 {
         .and_then(|raw| raw.parse::<u16>().ok())
         .filter(|port| *port > 0)
         .unwrap_or(9949)
+}
+
+fn read_asset_quota() -> i64 {
+    read_env("ASSET_QUOTA_BYTES")
+        .and_then(|raw| raw.parse::<i64>().ok())
+        .filter(|value| *value >= 0)
+        .unwrap_or(DEFAULT_ASSET_QUOTA_BYTES)
 }
 
 fn read_reasoning_effort() -> ReasoningEffort {
@@ -195,6 +206,7 @@ impl AppConfig {
             public_base_url: trim_trailing_slashes(
                 &read_env("PUBLIC_BASE_URL").unwrap_or_else(|| DEFAULT_PUBLIC_BASE_URL.to_string()),
             ),
+            asset_quota_bytes: read_asset_quota(),
             super_admin: read_super_admin(),
             bailian: BailianConfig {
                 base_url: trim_trailing_slashes(
@@ -258,6 +270,7 @@ impl AppConfig {
             database_file: String::new(),
             storage_dir: storage_dir.to_string(),
             public_base_url: public_base_url.to_string(),
+            asset_quota_bytes: 0,
             super_admin: None,
             bailian: BailianConfig {
                 base_url: "https://bailian.invalid".to_string(),

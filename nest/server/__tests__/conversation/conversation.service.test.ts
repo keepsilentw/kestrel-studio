@@ -372,6 +372,13 @@ describe('ConversationService 资产', () => {
     return { userId, conversationId, messageId, assetId };
   }
 
+  it('assetUsage 只累加本账号的字节数', () => {
+    const { userId } = withImage();
+    const other = harness.seedUser('u2');
+    expect(harness.service.assetUsage(userId)).toBe(2048);
+    expect(harness.service.assetUsage(other)).toBe(0);
+  });
+
   it('回放时资产挂在对应消息上，url 指向下载端点', () => {
     const { conversationId, assetId } = withImage();
     const view = harness.service.views(conversationId).find((m) => m.assets.length > 0);

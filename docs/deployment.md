@@ -323,6 +323,17 @@ ssh lavo-test "cd /opt/kestrel-studio && ACCESS_LOG=1 docker compose up -d"
 2026-11-19 10:05 已部署并核对：公网 wasm 原始 **395,686 B**，gzip 后 **142,377 B**，
 响应带 `content-encoding: gzip` 与 `vary: Accept-Encoding`；容器 `healthy`，`/healthz` 200。
 
+## 2.7 每账号媒体配额（2026-11-19）
+
+`docker-compose.yml` 通过 `ASSET_QUOTA_BYTES` 注入，默认 `2147483648`（2 GiB），`0` 关闭：
+
+```bash
+ASSET_QUOTA_BYTES=1073741824 docker compose up -d   # 改成 1 GiB
+```
+
+它按 `assets.bytes` 汇总到会话属主，硬删除会话会释放。图片生成在落盘前检查；视频任务在
+镜像前检查，配额不足直接失败、不重试。当前线上用量约 20 MB，距默认上限很远。
+
 ## 3. 对外暴露：openresty 反代
 
 服务器的对外入口是 1Panel 管理的 openresty（容器名形如 `1Panel-openresty-*`，监听 80/443）。

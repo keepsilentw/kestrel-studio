@@ -1,5 +1,5 @@
 import { Inject, Injectable, Logger, type OnApplicationBootstrap } from '@nestjs/common';
-import { and, asc, count, desc, eq, inArray, isNull, lt, or, type SQL } from 'drizzle-orm';
+import { and, asc, count, desc, eq, inArray, isNull, lt, or, sum, type SQL } from 'drizzle-orm';
 import { closeSync, openSync, readSync, statSync } from 'node:fs';
 import type { ResponsesInputItem } from '@/bailian/responses-client';
 import type { Mode } from '@/agent/mode';
@@ -445,6 +445,18 @@ export class ConversationService implements OnApplicationBootstrap {
       .where(eq(conversations.id, conversationId))
       .get();
     return row?.userId ?? null;
+  }
+
+  /** Total bytes of mirrored media owned by one account. */
+  assetUsage(userId: number): number {
+    const row = this.db
+      .select({ used: sum(assets.bytes) })
+      .from(assets)
+      .innerJoin(messages, eq(assets.messageId, messages.id))
+      .innerJoin(conversations, eq(messages.conversationId, conversations.id))
+      .where(eq(conversations.userId, userId))
+      .get();
+    return Number(row?.used ?? 0);
   }
 
   views(conversationId: number): MessageView[] {

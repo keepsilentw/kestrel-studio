@@ -204,7 +204,11 @@ describe('TaskWorker.sweep — 成功与镜像', () => {
     await harness.worker.sweep();
 
     // The URL is only valid in the instant success is reported.
-    expect(harness.store).toHaveBeenCalledWith('video', 'https://provider/v.mp4');
+    expect(harness.store).toHaveBeenCalledWith(
+      'video',
+      'https://provider/v.mp4',
+      expect.any(Number),
+    );
 
     const row = taskRow(taskId);
     expect(row.status).toBe('succeeded');
