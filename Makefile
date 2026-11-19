@@ -153,6 +153,9 @@ build-wasm: build-web
 	mkdir -p $(CURDIR)/public/wasm
 	cp -R $(RUST_CLIENT_DIR)/pkg/. $(CURDIR)/public/wasm/
 	cp $(RUST_CLIENT_DIR)/public/capture.js $(CURDIR)/public/capture.js
+	# Pre-compress the one asset openresty does not gzip (`application/wasm` is
+	# not in its gzip_types). `-n` keeps the bytes reproducible across builds.
+	gzip -9 -n -c $(CURDIR)/public/wasm/kestrel_client_bg.wasm > $(CURDIR)/public/wasm/kestrel_client_bg.wasm.gz
 	@echo "    WASM          $(CURDIR)/public/wasm/kestrel_client_bg.wasm"
 
 # ===== 运行（pm2 守护） =====

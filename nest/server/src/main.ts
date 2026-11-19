@@ -13,6 +13,7 @@ import { createBearerMiddleware } from '@/auth/bearer.middleware';
 import { TokenService } from '@/auth/token.service';
 import { createAccessLogMiddleware } from '@/common/access-log';
 import { securityHeaders } from '@/common/security-headers';
+import { wasmGzip } from '@/common/wasm-gzip';
 import { loadConfig } from '@/config/configuration';
 import { loadEnvFile } from '@/config/env-file';
 import { SQLITE_CONNECTION } from '@/database/database.module';
@@ -42,7 +43,10 @@ async function bootstrap(): Promise<void> {
   // three levels under the repo root. `public/` is the asset directory both
   // servers serve (the Rust binary reads the same one through `STATIC_DIR`), and
   // it is a repo-root artifact rather than part of either stack.
-  app.useStaticAssets(join(__dirname, '..', '..', '..', 'public'), { index: false });
+  const publicDir = join(__dirname, '..', '..', '..', 'public');
+  // Before the static handler: same URL, pre-compressed body where available.
+  app.use(wasmGzip(publicDir));
+  app.useStaticAssets(publicDir, { index: false });
   app.setBaseViewsDir(join(__dirname, 'view', 'views'));
   app.setViewEngine('hbs');
   hbs.registerPartials(join(__dirname, 'view', 'views', 'partials'));

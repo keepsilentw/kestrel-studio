@@ -306,6 +306,23 @@ ssh lavo-test "cd /opt/kestrel-studio && ACCESS_LOG=1 docker compose up -d"
 `PRAGMA integrity_check`，行数与源库一致。**未验证**：`make backup` 本身没有在宿主机
 跑过，也没有配置 cron；建议先手工跑一次，再加每日任务。
 
+## 2.6 wasm 预压缩（2026-11-19）
+
+线上 openresty 已对 JS/CSS 开 gzip（2026-11-19 只读 HEAD：`/assets/main.js` 返回
+`content-encoding: gzip`），但 **`application/wasm` 不在它的 `gzip_types` 里**：同一个 HEAD
+对 `/wasm/kestrel_client_bg.wasm` 返回 `content-length: 391780`，没有 `content-encoding`。
+
+`make build-wasm` 现在同时写出 `public/wasm/kestrel_client_bg.wasm.gz`（`gzip -9 -n`），
+两套静态服务在请求带 `Accept-Encoding: gzip` 时用同一 URL 发这份压缩体：
+
+- Rust：`http/static_files.rs` 读同目录的 `.gz`，带 `Content-Encoding: gzip`、
+  `Content-Type: application/wasm` 与 `Vary: Accept-Encoding`。
+- Nest：`common/wasm-gzip.ts` 在静态中间件之前接管 `/wasm/*.wasm`。
+- `.gz` 不存在时退回原文件；URL 与 WASM loader 不变。
+
+本地实测：391,780 B → **140,687 B**（约 64% 更小）。**未验证**：没有部署，线上还没有这份
+`.gz` 的响应头读数。
+
 ## 3. 对外暴露：openresty 反代
 
 服务器的对外入口是 1Panel 管理的 openresty（容器名形如 `1Panel-openresty-*`，监听 80/443）。

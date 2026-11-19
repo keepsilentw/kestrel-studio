@@ -25,11 +25,25 @@ async fn serve_at(
     headers: &HeaderMap,
 ) -> Result<Response, AppError> {
     let root = state.public_dir();
-    let path = resolve_under(&root, requested)?;
-
-    let meta = match tokio::fs::metadata(&path).await {
+    let raw_path = resolve_under(&root, requested)?;
+    let raw_meta = match tokio::fs::metadata(&raw_path).await {
         Ok(meta) if meta.is_file() => meta,
         _ => return Ok(not_found()),
+    };
+
+    // openresty gzips JS/CSS but not `application/wasm`, so `make build-wasm`
+    // leaves a `.gz` next to the wasm. Serve that copy when the client accepts it;
+    // the URL and the loader stay unchanged.
+    let compressed = requested.ends_with(".wasm") && accepts_gzip(headers);
+    let gzip_path = compressed.then(|| gzip_variant(&raw_path));
+    let (path, meta, mime, encoding) = match gzip_path {
+        Some(gzip) => match tokio::fs::metadata(&gzip).await {
+            Ok(meta) if meta.is_file() => {
+                (gzip, meta, "application/wasm".to_string(), Some("gzip"))
+            }
+            _ => (raw_path.clone(), raw_meta, mime_of(&raw_path), None),
+        },
+        None => (raw_path.clone(), raw_meta, mime_of(&raw_path), None),
     };
 
     let modified = meta
@@ -52,28 +66,70 @@ async fn serve_at(
         .and_then(|value| value.to_str().ok())
         .is_some_and(|value| value == etag)
     {
-        return Ok((StatusCode::NOT_MODIFIED, [(ETAG, etag)]).into_response());
+        let mut response = HeaderMap::new();
+        response.insert(ETAG, header_value(&etag));
+        if requested.ends_with(".wasm") {
+            response.insert(header::VARY, header_value("Accept-Encoding"));
+        }
+        return Ok((StatusCode::NOT_MODIFIED, response).into_response());
     }
 
     let bytes = tokio::fs::read(&path).await.map_err(|error| {
         AppError::internal(anyhow::anyhow!("reading {}: {error}", path.display()))
     })?;
-    let mime = mime_guess::from_path(&path)
+    let mut response = HeaderMap::new();
+    response.insert(header::CONTENT_TYPE, header_value(&mime));
+    response.insert(header::CACHE_CONTROL, header_value("no-cache"));
+    response.insert(LAST_MODIFIED, header_value(&modified));
+    response.insert(ETAG, header_value(&etag));
+    if let Some(encoding) = encoding {
+        response.insert(header::CONTENT_ENCODING, header_value(encoding));
+    }
+    if requested.ends_with(".wasm") {
+        response.insert(header::VARY, header_value("Accept-Encoding"));
+    }
+
+    Ok((StatusCode::OK, response, bytes).into_response())
+}
+
+fn mime_of(path: &Path) -> String {
+    mime_guess::from_path(path)
         .first_raw()
         .unwrap_or("application/octet-stream")
-        .to_string();
+        .to_string()
+}
 
-    Ok((
-        StatusCode::OK,
-        [
-            (header::CONTENT_TYPE, mime),
-            (header::CACHE_CONTROL, "no-cache".to_string()),
-            (LAST_MODIFIED, modified),
-            (ETAG, etag),
-        ],
-        bytes,
-    )
-        .into_response())
+fn gzip_variant(path: &Path) -> PathBuf {
+    let mut name = path.as_os_str().to_os_string();
+    name.push(".gz");
+    PathBuf::from(name)
+}
+
+/// `Accept-Encoding` is only consulted for the wasm file. A token with `q=0` is a
+/// refusal, not an acceptance.
+fn accepts_gzip(headers: &HeaderMap) -> bool {
+    let Some(raw) = headers
+        .get(header::ACCEPT_ENCODING)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return false;
+    };
+    raw.split(',').any(|part| {
+        let mut pieces = part.split(';');
+        let token = pieces.next().unwrap_or("").trim();
+        if !token.eq_ignore_ascii_case("gzip") {
+            return false;
+        }
+        !pieces.any(|piece| {
+            let piece = piece.trim();
+            piece.eq_ignore_ascii_case("q=0") || piece.eq_ignore_ascii_case("q=0.0")
+        })
+    })
+}
+
+fn header_value(value: &str) -> axum::http::HeaderValue {
+    axum::http::HeaderValue::from_str(value)
+        .unwrap_or_else(|_| axum::http::HeaderValue::from_static(""))
 }
 
 /// Joins a URL path under `root`, refusing anything that escapes it.
@@ -142,5 +198,31 @@ mod tests {
         ] {
             assert!(resolve_under(root, evil).is_err(), "{evil}");
         }
+    }
+
+    #[test]
+    fn gzip_is_only_accepted_when_asked_for() {
+        let mut headers = HeaderMap::new();
+        assert!(!accepts_gzip(&headers));
+
+        headers.insert(
+            header::ACCEPT_ENCODING,
+            axum::http::HeaderValue::from_static("gzip, deflate"),
+        );
+        assert!(accepts_gzip(&headers));
+
+        headers.insert(
+            header::ACCEPT_ENCODING,
+            axum::http::HeaderValue::from_static("gzip;q=0"),
+        );
+        assert!(!accepts_gzip(&headers));
+    }
+
+    #[test]
+    fn the_gzip_variant_keeps_the_dot_in_the_name() {
+        assert_eq!(
+            gzip_variant(Path::new("/srv/public/wasm/a.wasm")),
+            PathBuf::from("/srv/public/wasm/a.wasm.gz")
+        );
     }
 }

@@ -3534,3 +3534,34 @@ Rust 模板的「加载更早」链接与 HTML 转义。
 - 浏览器里点击「加载更早」后的滚动位置：整页重载会回到浏览器默认位置，没有做「保持原阅读位置」的补偿；未起服务，未验。
 - 1000 条上限以上的会话没有入口继续往前翻；当前线上最长会话 82 条事件，远未触及。
 - 未部署。
+
+## 55. wasm 预压缩（2026-11-19）
+
+先量线上再改：
+
+| 请求（`Accept-Encoding: gzip, br`） | 读数 |
+|---|---|
+| `HEAD /assets/main.js` | `content-encoding: gzip`，`vary: Accept-Encoding` |
+| `HEAD /wasm/kestrel_client_bg.wasm` | `content-length: 391780`，**无** `content-encoding` |
+
+`application/wasm` 不在 openresty 的 gzip 类型里，所以压缩放在构建与静态服务这一层：
+
+- `make build-wasm` 生成 `public/wasm/kestrel_client_bg.wasm.gz`。
+- Rust `static_files` 与 Nest `wasm-gzip` 中间件在客户端接受 gzip 时返回 `.gz`，
+  原 URL 不变，并带 `Vary: Accept-Encoding`。
+- 本地 `gzip -9 -n` 读数：**391,780 B → 140,687 B**。
+
+### 55.1 质量门
+
+| 命令 | 读数 |
+|---|---|
+| `make check` | 通过（含 fmt、clippy、wasm target check） |
+| `make test` | Nest server **520 passed**（35 个文件）；Nest client **72 passed**；Rust server **217 passed + 2 ignored**；Rust client **51 passed** |
+
+新增测试：Rust 的 `Accept-Encoding` 解析（含 `q=0`）与 `.gz` 文件名构造；
+Nest 的同一套解析测试。
+
+### 55.2 没证的
+
+- 部署后线上实际是否返回 `Content-Encoding: gzip`、`Content-Length` 是否等于 `.gz` 大小：未部署。
+- 浏览器首次加载 wasm 的耗时变化：没有跑真实浏览器测量。
