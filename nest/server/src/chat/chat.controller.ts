@@ -278,6 +278,8 @@ export class ChatController {
 
     res.setHeader('Content-Type', asset.mime);
     res.setHeader('Content-Disposition', `inline; filename="${basename(asset.filePath)}"`);
+    // Scoped by the session guard above, so a shared cache must never keep it.
+    res.setHeader('Cache-Control', 'private, no-store');
     res.sendFile(asset.filePath, (error?: Error) => {
       if (error !== undefined && !res.headersSent) {
         res.status(404).json({ message: 'not found' });

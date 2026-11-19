@@ -8,7 +8,7 @@
 //! 2. the page is rendered from real rows, so escaping, the placeholder filter and
 //!    the role-dependent chrome are checked as the browser will receive them.
 
-use super::render::{TurnAnchor, build_turn_anchors, render_messages};
+use super::render::{build_turn_anchors, render_messages, TurnAnchor};
 use crate::agent::mode::Mode;
 use crate::conversation::MessageView;
 use crate::task::TaskKind;
@@ -21,11 +21,18 @@ use super::templates::{ChatPage, ConversationEntry, PendingTask};
 /// throws before it wires anything up.
 fn required_ids() -> Vec<String> {
     let path = std::path::Path::new("../../nest/client/scripts/main.ts");
-    let source = std::fs::read_to_string(path)
-        .unwrap_or_else(|error| panic!("{} must be readable for the contract test: {error}", path.display()));
+    let source = std::fs::read_to_string(path).unwrap_or_else(|error| {
+        panic!(
+            "{} must be readable for the contract test: {error}",
+            path.display()
+        )
+    });
 
     let mut ids = Vec::new();
-    for line in source.lines().filter(|line| line.contains("requireElement")) {
+    for line in source
+        .lines()
+        .filter(|line| line.contains("requireElement"))
+    {
         // requireElement<HTMLElement>('#stream')
         let Some(hash) = line.find("#") else { continue };
         let after = &line[hash + 1..];
@@ -37,7 +44,10 @@ fn required_ids() -> Vec<String> {
             ids.push(id.to_string());
         }
     }
-    assert!(ids.len() >= 15, "only found {ids:?} — the parser is out of date");
+    assert!(
+        ids.len() >= 15,
+        "only found {ids:?} — the parser is out of date"
+    );
     ids
 }
 
@@ -51,7 +61,10 @@ fn page_fixture(
     let rendered = render_messages(messages.to_vec());
     let anchors = build_turn_anchors(&rendered);
     let anchors = if anchors.is_empty() {
-        vec![TurnAnchor { message_id: 1, label: "画一只红隼".to_string() }]
+        vec![TurnAnchor {
+            message_id: 1,
+            label: "画一只红隼".to_string(),
+        }]
     } else {
         anchors
     };
@@ -115,12 +128,23 @@ fn the_chat_page_carries_every_element_the_client_script_requires() {
     let page = ChatPage {
         username: "walker".to_string(),
         is_super: false,
-        conversations: vec![ConversationEntry { id: 1, title: "一只红隼".to_string(), is_active: true }],
+        conversations: vec![ConversationEntry {
+            id: 1,
+            title: "一只红隼".to_string(),
+            is_active: true,
+        }],
         active_conversation_id: Some(1),
         start_seq: Some(3),
         messages: render_messages(vec![stored_message()]),
-        pending_tasks: vec![PendingTask { id: 9, kind: TaskKind::Video, status_label: "渲染中".to_string() }],
-        turn_anchors: vec![TurnAnchor { message_id: 1, label: "画一只红隼".to_string() }],
+        pending_tasks: vec![PendingTask {
+            id: 9,
+            kind: TaskKind::Video,
+            status_label: "渲染中".to_string(),
+        }],
+        turn_anchors: vec![TurnAnchor {
+            message_id: 1,
+            label: "画一只红隼".to_string(),
+        }],
         can_delete_conversations: true,
         client: crate::config::ClientBundle::Nest,
     };
@@ -145,20 +169,40 @@ fn the_shortcut_hint_sits_inside_the_input_box() {
     let rendered = super::templates::chat_page(&page_fixture(&[], &[], Some(4), Some(12), false));
     // The logout form in the header also closes a <form>, so measure from the
     // composer's own opening tag.
-    let composer = rendered.find("id=\"composer-form\"").expect("the composer is rendered");
-    let field = rendered[composer..].find("class=\"composer-field\"").expect("the field wraps the textarea") + composer;
-    let hint = rendered[composer..].find("class=\"composer-hint\"").expect("the hint is rendered") + composer;
-    let form_end = rendered[composer..].find("</form>").expect("the composer form closes") + composer;
+    let composer = rendered
+        .find("id=\"composer-form\"")
+        .expect("the composer is rendered");
+    let field = rendered[composer..]
+        .find("class=\"composer-field\"")
+        .expect("the field wraps the textarea")
+        + composer;
+    let hint = rendered[composer..]
+        .find("class=\"composer-hint\"")
+        .expect("the hint is rendered")
+        + composer;
+    let form_end = rendered[composer..]
+        .find("</form>")
+        .expect("the composer form closes")
+        + composer;
 
-    assert!(field < hint, "the hint must be inside .composer-field, not below it: {rendered}");
-    assert!(hint < form_end, "the hint must be inside the form: {rendered}");
+    assert!(
+        field < hint,
+        "the hint must be inside .composer-field, not below it: {rendered}"
+    );
+    assert!(
+        hint < form_end,
+        "the hint must be inside the form: {rendered}"
+    );
 }
 
 #[test]
 fn the_body_cursor_attributes_match_what_the_stream_endpoint_expects() {
     let with_conversation = page_fixture(&[], &[], Some(4), Some(12), false);
     let rendered = super::templates::chat_page(&with_conversation);
-    assert!(rendered.contains("data-conversation-id=\"4\""), "{rendered}");
+    assert!(
+        rendered.contains("data-conversation-id=\"4\""),
+        "{rendered}"
+    );
     assert!(rendered.contains("data-start-seq=\"12\""));
     assert!(rendered.contains("data-can-delete-conversations=\"true\""));
 
@@ -181,9 +225,15 @@ fn role_changes_the_chrome_and_the_delete_affordance() {
 
     let normal =
         super::templates::chat_page(&page_fixture(&[], &conversations, Some(1), Some(0), false));
-    assert!(!normal.contains("href=\"/admin\""), "no admin entry for a normal account");
+    assert!(
+        !normal.contains("href=\"/admin\""),
+        "no admin entry for a normal account"
+    );
     assert!(normal.contains("data-can-delete-conversations=\"true\""));
-    assert!(normal.contains("data-delete-conversation=\"1\""), "{normal}");
+    assert!(
+        normal.contains("data-delete-conversation=\"1\""),
+        "{normal}"
+    );
     assert!(normal.contains("<span class=\"account-name\">walker</span>"));
 
     let admin =
@@ -218,9 +268,18 @@ fn user_text_is_escaped_and_assistant_html_is_not_double_escaped() {
         None,
         false,
     ));
-    assert!(rendered.contains("&lt;script&gt;alert(1)&lt;/script&gt;"), "{rendered}");
-    assert!(!rendered.contains("<script>alert"), "no executable script from user text");
-    assert!(rendered.contains("A &amp; B &lt;b&gt;"), "the sidebar title is escaped too");
+    assert!(
+        rendered.contains("&lt;script&gt;alert(1)&lt;/script&gt;"),
+        "{rendered}"
+    );
+    assert!(
+        !rendered.contains("<script>alert"),
+        "no executable script from user text"
+    );
+    assert!(
+        rendered.contains("A &amp; B &lt;b&gt;"),
+        "the sidebar title is escaped too"
+    );
 }
 
 #[test]
@@ -231,10 +290,14 @@ fn a_turn_renders_the_trail_the_live_stream_built() {
     assert!(rendered.contains("<details class=\"reasoning\">"));
     assert!(rendered.contains("先想一下构图"));
     assert!(rendered.contains("<li class=\"tool-call\">generate_image — Generated 1 image(s)</li>"));
-    assert!(rendered.contains("<div class=\"content\"><p>好的，<strong>已生成</strong>。</p></div>"));
+    assert!(
+        rendered.contains("<div class=\"content\"><p>好的，<strong>已生成</strong>。</p></div>")
+    );
     assert!(rendered.contains("<img src=\"/api/v1/assets/7/download\" alt=\"生成的图片\" loading=\"lazy\" class=\"asset-image\">"));
     assert!(rendered.contains("<video src=\"/api/v1/assets/8/download\" controls preload=\"metadata\" class=\"asset-video\"></video>"));
-    assert!(rendered.contains("href=\"/api/v1/assets/8/download\" download class=\"asset-download\">"));
+    assert!(
+        rendered.contains("href=\"/api/v1/assets/8/download\" download class=\"asset-download\">")
+    );
 }
 
 #[test]
@@ -286,12 +349,18 @@ fn the_markdown_subset_matches_what_the_assistant_actually_writes() {
         "a soft break stays inside the paragraph, as marked does"
     );
     assert_eq!(markdown("## 标题"), "<h2>标题</h2>");
-    assert_eq!(markdown("`code` 与 **粗** 和 *斜*"), "<p><code>code</code> 与 <strong>粗</strong> 和 <em>斜</em></p>");
+    assert_eq!(
+        markdown("`code` 与 **粗** 和 *斜*"),
+        "<p><code>code</code> 与 <strong>粗</strong> 和 <em>斜</em></p>"
+    );
     assert_eq!(
         markdown("- 甲\n- 乙"),
         "<ul>\n<li>甲</li>\n<li>乙</li>\n</ul>"
     );
-    assert_eq!(markdown("1. 甲\n2. 乙"), "<ol>\n<li>甲</li>\n<li>乙</li>\n</ol>");
+    assert_eq!(
+        markdown("1. 甲\n2. 乙"),
+        "<ol>\n<li>甲</li>\n<li>乙</li>\n</ol>"
+    );
     assert_eq!(
         markdown("```rust\nlet x = 1;\n```"),
         "<pre><code class=\"language-rust\">let x = 1;</code></pre>"
@@ -345,7 +414,11 @@ fn the_table_rules_that_keep_prose_from_turning_into_a_table() {
     );
 
     // One column is only a table when fenced on both sides (GFM's own rule).
-    assert_eq!(markdown("a\n| - |"), "<p>a\n| - |</p>", "a lone delimiter row is not a table either");
+    assert_eq!(
+        markdown("a\n| - |"),
+        "<p>a\n| - |</p>",
+        "a lone delimiter row is not a table either"
+    );
     assert_eq!(
         markdown("| a |\n| - |\n| **b** |"),
         "<table>\n<thead>\n<tr><th>a</th></tr>\n</thead>\n<tbody>\n<tr><td><strong>b</strong></td></tr>\n</tbody>\n</table>"
@@ -507,8 +580,14 @@ fn what_the_subset_keeps_out_and_shows_as_source() {
 /// the reason those readings are pinned rather than described.
 #[test]
 fn the_marker_spellings_and_the_lazy_continuation_line() {
-    assert_eq!(markdown("+ 甲\n+ 乙"), "<ul>\n<li>甲</li>\n<li>乙</li>\n</ul>");
-    assert_eq!(markdown("1) 甲\n2) 乙"), "<ol>\n<li>甲</li>\n<li>乙</li>\n</ol>");
+    assert_eq!(
+        markdown("+ 甲\n+ 乙"),
+        "<ul>\n<li>甲</li>\n<li>乙</li>\n</ul>"
+    );
+    assert_eq!(
+        markdown("1) 甲\n2) 乙"),
+        "<ol>\n<li>甲</li>\n<li>乙</li>\n</ol>"
+    );
     assert_eq!(
         markdown("- 甲\n  + 乙"),
         "<ul>\n<li>甲<ul>\n<li>乙</li>\n</ul>\n</li>\n</ul>",
@@ -536,7 +615,10 @@ fn the_marker_spellings_and_the_lazy_continuation_line() {
     );
     // …and prose that needs no indent at all still continues a list item (CommonMark's rule,
     // which `marked` follows): without this the list broke in half.
-    assert_eq!(markdown("- 甲\n后面一段"), "<ul>\n<li>甲\n后面一段</li>\n</ul>");
+    assert_eq!(
+        markdown("- 甲\n后面一段"),
+        "<ul>\n<li>甲\n后面一段</li>\n</ul>"
+    );
 }
 
 /// The list identity rules, each one taken from the same run of both engines over the same
@@ -645,14 +727,26 @@ fn nesting_stops_at_thirty_two_levels() {
     let deep = markdown(&source);
 
     assert_eq!(deep.matches("<blockquote>").count(), 32, "{deep}");
-    assert!(deep.contains("&gt;"), "the markers past the cap stay the text they were typed as");
+    assert!(
+        deep.contains("&gt;"),
+        "the markers past the cap stay the text they were typed as"
+    );
 
-    let lines: String =
-        (1..=400usize).map(|level| format!("{}- 层{level}\n", " ".repeat(level * 2))).collect();
+    let lines: String = (1..=400usize)
+        .map(|level| format!("{}- 层{level}\n", " ".repeat(level * 2)))
+        .collect();
     let lists = markdown(&lines);
 
-    assert!(lists.matches("<ul>").count() <= 33, "{}", lists.matches("<ul>").count());
-    assert_eq!(lists.matches("<li>").count(), 400, "the work stays linear once nesting stops");
+    assert!(
+        lists.matches("<ul>").count() <= 33,
+        "{}",
+        lists.matches("<ul>").count()
+    );
+    assert_eq!(
+        lists.matches("<li>").count(),
+        400,
+        "the work stays linear once nesting stops"
+    );
 }
 
 /// The document that closes the gap, pinned in **three** places: here,
@@ -705,7 +799,11 @@ fn voice_required_ids() -> Vec<String> {
     // The voice shell is exactly these three. A smaller count means the extractor
     // stopped matching how the page looks elements up, which is the failure this
     // function exists to catch.
-    assert_eq!(ids.len(), 3, "expected the page's three elements, found {ids:?}");
+    assert_eq!(
+        ids.len(),
+        3,
+        "expected the page's three elements, found {ids:?}"
+    );
     ids
 }
 
@@ -720,7 +818,6 @@ fn the_voice_page_carries_every_element_the_wasm_client_requires() {
     }
 }
 
-
 /// `CLIENT_BUNDLE` is the whole switch, so it is asserted where it takes effect: the
 /// rendered tag. `/` and `/voice` are the only two pages that load a client at all
 /// (`/admin` deliberately loads none), and one page never carries both clients.
@@ -729,22 +826,37 @@ fn the_client_switch_hands_each_page_exactly_one_client() {
     use crate::config::ClientBundle;
 
     let nest = super::templates::chat_page(&page_fixture(&[], &[], None, None, false));
-    assert!(nest.contains("<script type=\"module\" src=\"/assets/main.js\"></script>"), "{nest}");
-    assert!(!nest.contains("kestrel_client.js"), "the default must not load WASM");
+    assert!(
+        nest.contains("<script type=\"module\" src=\"/assets/main.js\"></script>"),
+        "{nest}"
+    );
+    assert!(
+        !nest.contains("kestrel_client.js"),
+        "the default must not load WASM"
+    );
 
     let wasm = super::templates::chat_page(&ChatPage {
         client: ClientBundle::Wasm,
         ..page_fixture(&[], &[], None, None, false)
     });
-    assert!(wasm.contains("import(\"/wasm/kestrel_client.js\")"), "{wasm}");
+    assert!(
+        wasm.contains("import(\"/wasm/kestrel_client.js\")"),
+        "{wasm}"
+    );
     assert!(wasm.contains("client.initChat()"), "{wasm}");
-    assert!(!wasm.contains("src=\"/assets/main.js\""), "one client per page: {wasm}");
+    assert!(
+        !wasm.contains("src=\"/assets/main.js\""),
+        "one client per page: {wasm}"
+    );
 
     let voice = super::templates::voice_page("tww316", false, ClientBundle::Wasm);
     assert!(voice.contains("client.initVoice()"), "{voice}");
     // Tag-shaped on purpose: the loader's own failure note names the legacy bundle, so
     // a bare path in the page is not evidence of a second client.
-    assert!(!voice.contains("src=\"/assets/voice.js\""), "no TS client tag on the voice page: {voice}");
+    assert!(
+        !voice.contains("src=\"/assets/voice.js\""),
+        "no TS client tag on the voice page: {voice}"
+    );
     assert!(
         voice.contains("import(\"/wasm/kestrel_client.js\")"),
         "both pages must resolve the same module, or one of them is broken by a typo: {voice}"
@@ -771,20 +883,29 @@ fn wasm_chat_ids() -> Vec<String> {
     // Only the three fetch helpers count. Matching on `&document, "` alone also
     // caught `build(&document, "li", …)`, which creates an element rather than
     // looking one up — the contract is about what the page requires to exist.
-    for needle in ["element(&document, \"", "button(&document, \"", "dialog(&document, \""] {
+    for needle in [
+        "element(&document, \"",
+        "button(&document, \"",
+        "dialog(&document, \"",
+    ] {
         let mut pieces = source.split(needle);
         pieces.next();
         for after in pieces {
             let Some(end) = after.find('"') else { continue };
             let id = &after[..end];
             let shaped = !id.is_empty()
-                && id.chars().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
+                && id
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-');
             if shaped && !ids.iter().any(|existing| existing == id) {
                 ids.push(id.to_string());
             }
         }
     }
-    assert!(ids.len() >= 6, "only found {ids:?} — the extractor is out of date");
+    assert!(
+        ids.len() >= 6,
+        "only found {ids:?} — the extractor is out of date"
+    );
     ids
 }
 
@@ -792,7 +913,11 @@ fn wasm_chat_ids() -> Vec<String> {
 fn the_chat_page_carries_every_element_the_wasm_client_requires() {
     let rendered = super::templates::chat_page(&page_fixture(
         &[stored_message()],
-        &[ConversationEntry { id: 1, title: "一只红隼".to_string(), is_active: true }],
+        &[ConversationEntry {
+            id: 1,
+            title: "一只红隼".to_string(),
+            is_active: true,
+        }],
         Some(1),
         Some(3),
         false,
@@ -814,7 +939,10 @@ fn the_tokens_page_carries_its_script_and_revoke_dialog() {
     assert!(page.contains("id=\"token-revoke-dialog\""), "{page}");
     assert!(page.contains("src=\"/assets/tokens.js\""), "{page}");
     assert!(page.contains("class=\"admin-page token-page\""), "{page}");
-    assert!(!page.contains("href=\"/admin\""), "a normal account gets no admin link: {page}");
+    assert!(
+        !page.contains("href=\"/admin\""),
+        "a normal account gets no admin link: {page}"
+    );
 
     let privileged = super::templates::tokens_page("boss", true);
     assert!(privileged.contains("href=\"/admin\""), "{privileged}");
@@ -824,7 +952,11 @@ fn the_tokens_page_carries_its_script_and_revoke_dialog() {
 fn the_chat_header_links_to_the_token_page() {
     let rendered = super::templates::chat_page(&page_fixture(
         &[stored_message()],
-        &[ConversationEntry { id: 1, title: "一只红隼".to_string(), is_active: true }],
+        &[ConversationEntry {
+            id: 1,
+            title: "一只红隼".to_string(),
+            is_active: true,
+        }],
         Some(1),
         Some(3),
         false,

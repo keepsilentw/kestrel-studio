@@ -19,7 +19,11 @@ pub async fn fallback(
     serve_at(&state, uri.path().trim_start_matches('/'), &headers).await
 }
 
-async fn serve_at(state: &AppState, requested: &str, headers: &HeaderMap) -> Result<Response, AppError> {
+async fn serve_at(
+    state: &AppState,
+    requested: &str,
+    headers: &HeaderMap,
+) -> Result<Response, AppError> {
     let root = state.public_dir();
     let path = resolve_under(&root, requested)?;
 
@@ -31,12 +35,11 @@ async fn serve_at(state: &AppState, requested: &str, headers: &HeaderMap) -> Res
     let modified = meta
         .modified()
         .ok()
-        .map(|time| httpdate_like(time))
+        .map(httpdate_like)
         .unwrap_or_else(|| "Thu, 01 Jan 1970 00:00:00 GMT".to_string());
     let etag = format!(
         "W/\"{}-{}\"",
-        meta
-            .modified()
+        meta.modified()
             .ok()
             .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|since| since.as_millis())
@@ -52,9 +55,9 @@ async fn serve_at(state: &AppState, requested: &str, headers: &HeaderMap) -> Res
         return Ok((StatusCode::NOT_MODIFIED, [(ETAG, etag)]).into_response());
     }
 
-    let bytes = tokio::fs::read(&path)
-        .await
-        .map_err(|error| AppError::internal(anyhow::anyhow!("reading {}: {error}", path.display())))?;
+    let bytes = tokio::fs::read(&path).await.map_err(|error| {
+        AppError::internal(anyhow::anyhow!("reading {}: {error}", path.display()))
+    })?;
     let mime = mime_guess::from_path(&path)
         .first_raw()
         .unwrap_or("application/octet-stream")
@@ -132,7 +135,11 @@ mod tests {
             resolve_under(root, "/assets//./main.css").expect("normalised"),
             PathBuf::from("/srv/public/assets/main.css")
         );
-        for evil in ["../etc/passwd", "assets/../../etc/passwd", "a/./b/../../../x"] {
+        for evil in [
+            "../etc/passwd",
+            "assets/../../etc/passwd",
+            "a/./b/../../../x",
+        ] {
             assert!(resolve_under(root, evil).is_err(), "{evil}");
         }
     }

@@ -57,7 +57,9 @@ impl std::fmt::Debug for Command {
             Self::Commit => formatter.write_str("Commit"),
             Self::CreateResponse => formatter.write_str("CreateResponse"),
             Self::CancelResponse => formatter.write_str("CancelResponse"),
-            Self::ToolOutput { call_id, output, .. } => formatter
+            Self::ToolOutput {
+                call_id, output, ..
+            } => formatter
                 .debug_struct("ToolOutput")
                 .field("call_id", call_id)
                 .field("output_len", &output.len())
@@ -123,9 +125,9 @@ pub fn command_frame(command: &Command) -> Frame {
         Command::Commit => Frame::Text(message::commit().to_string()),
         Command::CreateResponse => Frame::Text(message::response_create().to_string()),
         Command::CancelResponse => Frame::Text(message::response_cancel().to_string()),
-        Command::ToolOutput { call_id, output, .. } => {
-            Frame::Text(message::function_call_output(call_id, output).to_string())
-        }
+        Command::ToolOutput {
+            call_id, output, ..
+        } => Frame::Text(message::function_call_output(call_id, output).to_string()),
         Command::Pong(payload) => Frame::Pong(payload.clone()),
         Command::Close => Frame::Close(Some(1000)),
     }
@@ -152,7 +154,11 @@ pub async fn open(
     );
 
     let pending_acks: AckQueue = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
-    tokio::spawn(write_loop(writer, command_rx, std::sync::Arc::clone(&pending_acks)));
+    tokio::spawn(write_loop(
+        writer,
+        command_rx,
+        std::sync::Arc::clone(&pending_acks),
+    ));
     tokio::spawn(read_loop(
         reader,
         event_tx,
@@ -232,13 +238,13 @@ async fn read_loop<R: AsyncReadExt + Unpin>(
                     // One pass per frame: the stitch accumulates deltas, so feeding
                     // the same text twice would double the transcript.
                     let produced = stitch.handle(&text);
-                    if !configured
-                        && produced
-                            .iter()
-                            .any(|event| *event == RealtimeEvent::SessionCreated)
-                    {
+                    if !configured && produced.contains(&RealtimeEvent::SessionCreated) {
                         configured = true;
-                        if commands.send(Command::Configure(setup.clone())).await.is_err() {
+                        if commands
+                            .send(Command::Configure(setup.clone()))
+                            .await
+                            .is_err()
+                        {
                             return;
                         }
                     }
@@ -317,7 +323,9 @@ mod tests {
                 .to_string()
         );
         assert_eq!(
-            text_of(&command_frame(&Command::Configure(json!({"type": "session.update"})))),
+            text_of(&command_frame(&Command::Configure(
+                json!({"type": "session.update"})
+            ))),
             r#"{"type":"session.update"}"#
         );
     }
@@ -325,6 +333,9 @@ mod tests {
     #[test]
     fn a_close_command_is_a_close_frame_with_a_normal_code() {
         assert_eq!(command_frame(&Command::Close), Frame::Close(Some(1000)));
-        assert_eq!(command_frame(&Command::Pong(vec![1, 2])), Frame::Pong(vec![1, 2]));
+        assert_eq!(
+            command_frame(&Command::Pong(vec![1, 2])),
+            Frame::Pong(vec![1, 2])
+        );
     }
 }

@@ -277,6 +277,35 @@ ssh lavo-test "cd /opt/kestrel-studio && ACCESS_LOG=1 docker compose up -d"
 上线（§1.1），所以上面这条命令没有在宿主机上跑过。单元层的形状与结果见
 [verification.md](verification.md) §27。
 
+## 2.4 容器健康检查（2026-11-19）
+
+两个 service 都加了 `healthcheck`，探针走应用自己的 `/healthz`。这个端点执行一次
+`SELECT 1`，所以数据库被锁死或连接坏掉时也会失败，而不只是「进程还在」。
+
+- Rust：`scratch` 镜像里没有 curl/shell，探针是二进制自己的 `--healthcheck` 参数；
+  它向 `127.0.0.1:$PORT/healthz` 发一条最小 HTTP 请求，只有 200 才退出 0。
+- Nest：用 Node 24 自带的 `fetch` 请求同一个地址。
+- 参数：`interval 30s`、`timeout 5s`、`retries 3`、`start_period 20s`。
+
+**未验证**：这套只写进了 `docker-compose.yml`，没有在宿主机上 `docker compose up -d`，
+所以容器状态里的 `healthy` 读数还没有出现过。
+
+## 2.5 热备份（2026-11-19）
+
+`make backup` 在**宿主机**上执行，不需要停机：
+
+1. `docker compose exec -T app /app/kestrel-studio --backup data/backup-<时间戳>.db`
+   让二进制用 SQLite 的 `VACUUM INTO` 写一份一致快照——读快照由 SQLite 自己取，
+   不需要把 `-wal` / `-shm` 一起拷贝。
+2. 把快照移到 `BACKUP_DIR`（默认 `/opt/kestrel-backups`）。
+3. 把 `storage/` 打成 `storage-<时间戳>.tar.gz`。媒体文件不在数据库里；正在镜像的
+   文件可能落在半个版本，数据库行仍是「应该存在什么」的真源。
+4. 删除超过 `BACKUP_KEEP_DAYS`（默认 14 天）的备份文件。
+
+**已本地验证**：`--backup` 对 `data/kestrel-studio.db` 生成的副本通过
+`PRAGMA integrity_check`，行数与源库一致。**未验证**：`make backup` 本身没有在宿主机
+跑过，也没有配置 cron；建议先手工跑一次，再加每日任务。
+
 ## 3. 对外暴露：openresty 反代
 
 服务器的对外入口是 1Panel 管理的 openresty（容器名形如 `1Panel-openresty-*`，监听 80/443）。

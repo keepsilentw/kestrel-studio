@@ -28,7 +28,9 @@ impl Default for TicketStore {
 
 impl TicketStore {
     pub fn new() -> Self {
-        Self { open: Mutex::new(HashMap::new()) }
+        Self {
+            open: Mutex::new(HashMap::new()),
+        }
     }
 
     pub fn issue(&self, user_id: i64, now_ms: i64) -> String {

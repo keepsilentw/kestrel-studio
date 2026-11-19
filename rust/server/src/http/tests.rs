@@ -27,8 +27,8 @@ use crate::agent::mode::Mode;
 use crate::auth::roles::{Principal, Role};
 use crate::conversation::ConversationEvent;
 use crate::media::StoredAsset;
-use sqlx::Row;
 use crate::test_utils::*;
+use sqlx::Row;
 
 #[tokio::test]
 async fn the_first_paint_is_ssr_only_and_the_guard_bounces_anonymously() {
@@ -36,29 +36,51 @@ async fn the_first_paint_is_ssr_only_and_the_guard_bounces_anonymously() {
     let (cookie, owner) = account(&state, "walker", Role::User).await;
 
     // Anonymous: the HTML surface redirects instead of answering 401 like the API.
-    let bounced = app.clone().oneshot(get("/", None)).await.expect("anonymous root");
+    let bounced = app
+        .clone()
+        .oneshot(get("/", None))
+        .await
+        .expect("anonymous root");
     assert_eq!(bounced.status(), StatusCode::FOUND);
     assert_eq!(bounced.headers()["location"], "/login");
 
     // The login page renders for an anonymous visitor and says nothing about
     // credentials unless the redirect came back with ?error=1.
-    let page = app.clone().oneshot(get("/login", None)).await.expect("login page");
+    let page = app
+        .clone()
+        .oneshot(get("/login", None))
+        .await
+        .expect("login page");
     assert_eq!(page.status(), StatusCode::OK);
     assert_eq!(page.headers()["content-type"], "text/html; charset=utf-8");
     let body = text_body(page).await;
     assert!(body.contains("action=\"/login\" method=\"post\""), "{body}");
     assert!(!body.contains("用户名或密码错误"));
-    let failed = text_body(app.clone().oneshot(get("/login?error=1", None)).await.expect("error page")).await;
+    let failed = text_body(
+        app.clone()
+            .oneshot(get("/login?error=1", None))
+            .await
+            .expect("error page"),
+    )
+    .await;
     assert!(failed.contains("用户名或密码错误"));
 
     // A signed-in visitor on /login is bounced to the chat, not shown the form.
-    let already = app.clone().oneshot(get("/login", Some(&cookie))).await.expect("signed in");
+    let already = app
+        .clone()
+        .oneshot(get("/login", Some(&cookie)))
+        .await
+        .expect("signed in");
     assert_eq!(already.status(), StatusCode::FOUND);
     assert_eq!(already.headers()["location"], "/");
 
     // The chat page: shell, sidebar, and nothing painted for a conversation that
     // has no finished rows.
-    let conversation_id = state.conversations.create(owner, "画一只红隼").await.expect("create");
+    let conversation_id = state
+        .conversations
+        .create(owner, "画一只红隼")
+        .await
+        .expect("create");
     state
         .conversations
         .append_user_message(conversation_id, "画一只红隼", Some(Mode::Image))
@@ -77,26 +99,44 @@ async fn the_first_paint_is_ssr_only_and_the_guard_bounces_anonymously() {
         .expect("chat page");
     assert_eq!(rendered.status(), StatusCode::OK);
     let body = text_body(rendered).await;
-    assert!(body.contains(&format!("data-conversation-id=\"{conversation_id}\"")), "{body}");
-    assert!(body.contains("class=\"conversation-link is-active\""), "{body}");
+    assert!(
+        body.contains(&format!("data-conversation-id=\"{conversation_id}\"")),
+        "{body}"
+    );
+    assert!(
+        body.contains("class=\"conversation-link is-active\""),
+        "{body}"
+    );
     assert!(
         !body.contains(&format!("data-message-id=\"{placeholder}\"")),
         "an unfinished assistant row is not painted: the stream replays it"
     );
-    assert!(body.contains("data-message-id=\"1\""), "the user row is painted");
+    assert!(
+        body.contains("data-message-id=\"1\""),
+        "the user row is painted"
+    );
     assert!(body.contains("<script type=\"module\" src=\"/assets/main.js\"></script>"));
-    assert!(body.starts_with("<!DOCTYPE html>"), "the page is a document, not a fragment");
+    assert!(
+        body.starts_with("<!DOCTYPE html>"),
+        "the page is a document, not a fragment"
+    );
 
     // A `?c=` that belongs to somebody else is ignored rather than honoured, and
     // the page falls back to the caller's own most recent conversation.
     let (stranger_cookie, _) = account(&state, "nosy", Role::User).await;
     let hijacked = app
         .clone()
-        .oneshot(get(&format!("/?c={conversation_id}"), Some(&stranger_cookie)))
+        .oneshot(get(
+            &format!("/?c={conversation_id}"),
+            Some(&stranger_cookie),
+        ))
         .await
         .expect("other account");
     let body = text_body(hijacked).await;
-    assert!(body.contains("data-conversation-id=\"\""), "nothing to show: {body}");
+    assert!(
+        body.contains("data-conversation-id=\"\""),
+        "nothing to show: {body}"
+    );
     assert!(!body.contains("conversation-link is-active"), "{body}");
 }
 
@@ -107,7 +147,11 @@ async fn the_first_paint_is_ssr_only_and_the_guard_bounces_anonymously() {
 async fn the_new_flag_paints_the_empty_shell_that_survives_a_reload() {
     let (app, state) = app().await;
     let (cookie, owner) = account(&state, "fresh", Role::User).await;
-    let conversation_id = state.conversations.create(owner, "画一只红隼").await.expect("create");
+    let conversation_id = state
+        .conversations
+        .create(owner, "画一只红隼")
+        .await
+        .expect("create");
     state
         .conversations
         .append_user_message(conversation_id, "画一只红隼", Some(Mode::Chat))
@@ -116,18 +160,35 @@ async fn the_new_flag_paints_the_empty_shell_that_survives_a_reload() {
 
     // No flag, no `?c=`: the most recent conversation is painted. This is the
     // reload that used to resurrect the conversation the button had just let go of.
-    let body = text_body(app.clone().oneshot(get("/", Some(&cookie))).await.expect("fallback")).await;
-    assert!(body.contains(&format!("data-conversation-id=\"{conversation_id}\"")), "{body}");
+    let body = text_body(
+        app.clone()
+            .oneshot(get("/", Some(&cookie)))
+            .await
+            .expect("fallback"),
+    )
+    .await;
+    assert!(
+        body.contains(&format!("data-conversation-id=\"{conversation_id}\"")),
+        "{body}"
+    );
     assert!(body.contains("画一只红隼"), "{body}");
 
     // `?new=1` asks for the empty shell by name. The conversation still exists and
     // still shows in the sidebar; nothing is painted, nothing is active, and there
     // is no cursor to subscribe with.
-    let body = text_body(app.clone().oneshot(get("/?new=1", Some(&cookie))).await.expect("fresh shell")).await;
+    let body = text_body(
+        app.clone()
+            .oneshot(get("/?new=1", Some(&cookie)))
+            .await
+            .expect("fresh shell"),
+    )
+    .await;
     assert!(body.contains("data-conversation-id=\"\""), "{body}");
     assert!(body.contains("data-start-seq=\"\""), "{body}");
     assert!(
-        body.contains(&format!("class=\"conversation-link\" href=\"/?c={conversation_id}\">画一只红隼</a>")),
+        body.contains(&format!(
+            "class=\"conversation-link\" href=\"/?c={conversation_id}\">画一只红隼</a>"
+        )),
         "sidebar keeps the row: {body}"
     );
     assert!(!body.contains("conversation-link is-active"), "{body}");
@@ -135,13 +196,28 @@ async fn the_new_flag_paints_the_empty_shell_that_survives_a_reload() {
 
     // An unrecognised value is not the flag: only `?new=1` is written by either
     // client, and a hand-typed `?new` behaves like an absent one.
-    let body = text_body(app.clone().oneshot(get("/?new=on", Some(&cookie))).await.expect("not the flag")).await;
-    assert!(body.contains(&format!("data-conversation-id=\"{conversation_id}\"")), "{body}");
+    let body = text_body(
+        app.clone()
+            .oneshot(get("/?new=on", Some(&cookie)))
+            .await
+            .expect("not the flag"),
+    )
+    .await;
+    assert!(
+        body.contains(&format!("data-conversation-id=\"{conversation_id}\"")),
+        "{body}"
+    );
 
     // A brand-new account has nothing to fall back to, so the flag changes nothing
     // visible — the shell is the same one `GET /` already renders.
     let (stranger, _) = account(&state, "nobody", Role::User).await;
-    let body = text_body(app.clone().oneshot(get("/?new=1", Some(&stranger))).await.expect("no history")).await;
+    let body = text_body(
+        app.clone()
+            .oneshot(get("/?new=1", Some(&stranger)))
+            .await
+            .expect("no history"),
+    )
+    .await;
     assert!(body.contains("data-conversation-id=\"\""), "{body}");
     assert!(body.contains("id=\"stream\""), "{body}");
 }
@@ -150,7 +226,11 @@ async fn the_new_flag_paints_the_empty_shell_that_survives_a_reload() {
 async fn pending_tasks_and_the_catch_up_cursor_are_painted() {
     let (app, state) = app().await;
     let (cookie, owner) = account(&state, "worker", Role::User).await;
-    let conversation_id = state.conversations.create(owner, "拍一段视频").await.expect("create");
+    let conversation_id = state
+        .conversations
+        .create(owner, "拍一段视频")
+        .await
+        .expect("create");
     let message_id = state
         .conversations
         .append_user_message(conversation_id, "拍一段视频", Some(Mode::Video))
@@ -170,10 +250,19 @@ async fn pending_tasks_and_the_catch_up_cursor_are_painted() {
         .await
         .expect("task");
 
-    let body = text_body(app.clone().oneshot(get("/", Some(&cookie))).await.expect("page")).await;
+    let body = text_body(
+        app.clone()
+            .oneshot(get("/", Some(&cookie)))
+            .await
+            .expect("page"),
+    )
+    .await;
     // The announcement event is journaled, so the cursor the page paints from is 1.
     assert!(body.contains("data-start-seq=\"1\""), "{body}");
-    assert!(body.contains("class=\"task-pending\" data-task-id=\"1\""), "{body}");
+    assert!(
+        body.contains("class=\"task-pending\" data-task-id=\"1\""),
+        "{body}"
+    );
     assert!(body.contains("视频任务 #1 排队中…"), "{body}");
 
     // Once the task is terminal it is no longer a pending row.
@@ -182,7 +271,13 @@ async fn pending_tasks_and_the_catch_up_cursor_are_painted() {
         .finish(1, crate::task::TaskStatus::Succeeded, None, None, None)
         .await
         .expect("finish");
-    let body = text_body(app.clone().oneshot(get("/", Some(&cookie))).await.expect("page")).await;
+    let body = text_body(
+        app.clone()
+            .oneshot(get("/", Some(&cookie)))
+            .await
+            .expect("page"),
+    )
+    .await;
     assert!(!body.contains("task-pending"), "{body}");
 }
 
@@ -191,14 +286,21 @@ async fn anonymous_api_calls_are_rejected_and_the_login_pair_redirects() {
     let (app, state) = app().await;
     let (cookie, _) = account(&state, "walker", Role::User).await;
 
-    let anonymous = app.clone().oneshot(get("/api/v1/conversations", None)).await.expect("call");
+    let anonymous = app
+        .clone()
+        .oneshot(get("/api/v1/conversations", None))
+        .await
+        .expect("call");
     assert_eq!(anonymous.status(), StatusCode::UNAUTHORIZED);
     assert_eq!(json_body(anonymous).await["message"], json!("未登录"));
 
     // A forged cookie is a different thing from no cookie, and answered the same.
     let forged = app
         .clone()
-        .oneshot(get("/api/v1/conversations", Some("connect.sid=s:ghost.deadbeef")))
+        .oneshot(get(
+            "/api/v1/conversations",
+            Some("connect.sid=s:ghost.deadbeef"),
+        ))
         .await
         .expect("forged");
     assert_eq!(forged.status(), StatusCode::UNAUTHORIZED);
@@ -211,9 +313,15 @@ async fn anonymous_api_calls_are_rejected_and_the_login_pair_redirects() {
         .expect("login");
     assert_eq!(signed_in.status(), StatusCode::FOUND);
     assert_eq!(signed_in.headers()["location"], "/");
-    let issued = signed_in.headers()["set-cookie"].to_str().expect("cookie").to_string();
+    let issued = signed_in.headers()["set-cookie"]
+        .to_str()
+        .expect("cookie")
+        .to_string();
     assert!(issued.starts_with("connect.sid=s:"), "{issued}");
-    assert!(issued.contains("HttpOnly") && issued.contains("SameSite=Lax"), "{issued}");
+    assert!(
+        issued.contains("HttpOnly") && issued.contains("SameSite=Lax"),
+        "{issued}"
+    );
     assert!(issued.contains("Max-Age=604800"), "seven days: {issued}");
 
     let rejected = app
@@ -244,7 +352,10 @@ async fn anonymous_api_calls_are_rejected_and_the_login_pair_redirects() {
     let out = app.oneshot(post_form("/logout", "")).await.expect("logout");
     assert_eq!(out.status(), StatusCode::FOUND);
     assert_eq!(out.headers()["location"], "/login");
-    assert!(out.headers()["set-cookie"].to_str().expect("cleared").contains("Max-Age=0"));
+    assert!(out.headers()["set-cookie"]
+        .to_str()
+        .expect("cleared")
+        .contains("Max-Age=0"));
 }
 
 #[tokio::test]
@@ -255,7 +366,11 @@ async fn turn_submission_answers_201_400_404_and_409() {
 
     let created = app
         .clone()
-        .oneshot(post_json("/api/v1/conversations", Some(&cookie), json!({ "prompt": "画一只红隼" })))
+        .oneshot(post_json(
+            "/api/v1/conversations",
+            Some(&cookie),
+            json!({ "prompt": "画一只红隼" }),
+        ))
         .await
         .expect("create");
     assert_eq!(created.status(), StatusCode::CREATED);
@@ -284,7 +399,11 @@ async fn turn_submission_answers_201_400_404_and_409() {
     ] {
         let response = app
             .clone()
-            .oneshot(post_json(&path, Some(&cookie), json!({ "prompt": "x", "mode": "image" })))
+            .oneshot(post_json(
+                &path,
+                Some(&cookie),
+                json!({ "prompt": "x", "mode": "image" }),
+            ))
             .await
             .expect("missing");
         assert_eq!(response.status(), StatusCode::NOT_FOUND, "{path}");
@@ -316,7 +435,10 @@ async fn turn_submission_answers_201_400_404_and_409() {
         .await
         .expect("busy");
     assert_eq!(busy.status(), StatusCode::CONFLICT);
-    assert_eq!(json_body(busy).await["message"], json!("该会话已有轮次在进行中"));
+    assert_eq!(
+        json_body(busy).await["message"],
+        json!("该会话已有轮次在进行中")
+    );
     state.release_turn(conversation_id);
 
     // Delete: 403 for a super admin (a rule about the caller, said out loud)...
@@ -330,7 +452,10 @@ async fn turn_submission_answers_201_400_404_and_409() {
         .await
         .expect("forbidden");
     assert_eq!(forbidden.status(), StatusCode::FORBIDDEN);
-    assert_eq!(json_body(forbidden).await["message"], json!("超级管理员不提供会话删除"));
+    assert_eq!(
+        json_body(forbidden).await["message"],
+        json!("超级管理员不提供会话删除")
+    );
 
     // ...404 for somebody else's conversation...
     let (stranger_cookie, _) = account(&state, "stranger", Role::User).await;
@@ -371,7 +496,11 @@ async fn turn_submission_answers_201_400_404_and_409() {
             .conversations
             .can_read(
                 conversation_id,
-                &Principal { id: owner, username: "owner".to_string(), role: Role::User }
+                &Principal {
+                    id: owner,
+                    username: "owner".to_string(),
+                    role: Role::User
+                }
             )
             .await
             .expect("read"),
@@ -427,25 +556,50 @@ async fn the_stream_replays_the_journal_and_reports_a_gap_as_resync() {
 
     state
         .events
-        .publish(conversation_id, ConversationEvent::Text { message_id: 1, delta: "第一段".into() })
+        .publish(
+            conversation_id,
+            ConversationEvent::Text {
+                message_id: 1,
+                delta: "第一段".into(),
+            },
+        )
         .await
         .expect("publish");
     state
         .events
-        .publish(conversation_id, ConversationEvent::TurnDone { message_id: 1 })
+        .publish(
+            conversation_id,
+            ConversationEvent::TurnDone { message_id: 1 },
+        )
         .await
         .expect("publish");
 
     let path = format!("/api/v1/conversations/{conversation_id}/stream?from=0");
-    let body = peek(app.clone().oneshot(get(&path, Some(&cookie))).await.expect("stream"), 4).await;
+    let body = peek(
+        app.clone()
+            .oneshot(get(&path, Some(&cookie)))
+            .await
+            .expect("stream"),
+        4,
+    )
+    .await;
     assert!(body.contains("event: connected"), "{body}");
     // A connection-scoped frame must not move the client's cursor.
     let connected_at = body.find("event: connected").expect("connected");
     assert!(!body[..connected_at].contains("id:"), "{body}");
-    assert!(body.contains("id: 1\nevent: text\ndata: {\"type\":\"text\""), "{body}");
-    assert!(body.contains("第一段"), "the payload is the journaled JSON: {body}");
+    assert!(
+        body.contains("id: 1\nevent: text\ndata: {\"type\":\"text\""),
+        "{body}"
+    );
+    assert!(
+        body.contains("第一段"),
+        "the payload is the journaled JSON: {body}"
+    );
     assert!(body.contains("id: 2\nevent: turn_done"), "{body}");
-    assert!(!body.contains("event: resync"), "from=0 is replayable: {body}");
+    assert!(
+        !body.contains("event: resync"),
+        "from=0 is replayable: {body}"
+    );
 
     // The replayed frame is the journal's own bytes, not a re-serialization: field
     // order included, so a frame a client saw live is identical after a reconnect
@@ -466,9 +620,14 @@ async fn the_stream_replays_the_journal_and_reports_a_gap_as_resync() {
 
     // Last-Event-ID outranks ?from: a reconnect must not see seq 1 twice.
     let mut request = get(&path, Some(&cookie));
-    request.headers_mut().insert("last-event-id", "1".parse().expect("header"));
+    request
+        .headers_mut()
+        .insert("last-event-id", "1".parse().expect("header"));
     let resumed = peek(app.clone().oneshot(request).await.expect("resume"), 3).await;
-    assert!(!resumed.contains("id: 1\nevent: text"), "already seen: {resumed}");
+    assert!(
+        !resumed.contains("id: 1\nevent: text"),
+        "already seen: {resumed}"
+    );
     assert!(resumed.contains("id: 2\nevent: turn_done"), "{resumed}");
 
     // A cursor below the retained window is a gap: one resync frame, and no
@@ -488,12 +647,28 @@ async fn the_stream_replays_the_journal_and_reports_a_gap_as_resync() {
     .await
     .expect("retain a later event");
     let gapped_path = format!("/api/v1/conversations/{conversation_id}/stream?from=1");
-    let gapped = peek(app.clone().oneshot(get(&gapped_path, Some(&cookie))).await.expect("gap"), 4).await;
+    let gapped = peek(
+        app.clone()
+            .oneshot(get(&gapped_path, Some(&cookie)))
+            .await
+            .expect("gap"),
+        4,
+    )
+    .await;
     assert!(gapped.contains("event: resync"), "{gapped}");
     assert!(gapped.contains("\"cursor\":1"), "{gapped}");
-    assert!(gapped.find("event: resync") < gapped.find("event: connected"), "resync comes first");
-    assert!(gapped.contains("id: 40"), "the retained tail is still delivered: {gapped}");
-    assert!(!gapped.contains("id: 1\nevent: text"), "the gap is not padded: {gapped}");
+    assert!(
+        gapped.find("event: resync") < gapped.find("event: connected"),
+        "resync comes first"
+    );
+    assert!(
+        gapped.contains("id: 40"),
+        "the retained tail is still delivered: {gapped}"
+    );
+    assert!(
+        !gapped.contains("id: 1\nevent: text"),
+        "the gap is not padded: {gapped}"
+    );
 
     // Someone else's conversation reads as not found, and an id that is not a
     // number is refused the same way.
@@ -532,7 +707,11 @@ async fn assets_follow_ownership_and_the_signature_is_the_only_authority() {
         width: None,
         height: None,
     };
-    let conversation_id = state.conversations.create(owner, "图").await.expect("create");
+    let conversation_id = state
+        .conversations
+        .create(owner, "图")
+        .await
+        .expect("create");
     let message_id = state
         .conversations
         .append_assistant_message(conversation_id, "好了", Some(Mode::Image))
@@ -546,12 +725,16 @@ async fn assets_follow_ownership_and_the_signature_is_the_only_authority() {
 
     let owned = app
         .clone()
-        .oneshot(get(&format!("/api/v1/assets/{asset_id}/download"), Some(&cookie)))
+        .oneshot(get(
+            &format!("/api/v1/assets/{asset_id}/download"),
+            Some(&cookie),
+        ))
         .await
         .expect("download");
     assert_eq!(owned.status(), StatusCode::OK);
     assert_eq!(owned.headers()["content-type"], "image/png");
     assert_eq!(owned.headers()["content-length"], "4");
+    assert_eq!(owned.headers()["cache-control"], "private, no-store");
     assert!(owned.headers()["content-disposition"]
         .to_str()
         .expect("cd")
@@ -573,7 +756,10 @@ async fn assets_follow_ownership_and_the_signature_is_the_only_authority() {
         .expect("ghost asset");
     let missing = app
         .clone()
-        .oneshot(get(&format!("/api/v1/assets/{ghost}/download"), Some(&cookie)))
+        .oneshot(get(
+            &format!("/api/v1/assets/{ghost}/download"),
+            Some(&cookie),
+        ))
         .await
         .expect("missing");
     assert_eq!(missing.status(), StatusCode::NOT_FOUND);
@@ -587,10 +773,17 @@ async fn assets_follow_ownership_and_the_signature_is_the_only_authority() {
 
     let stranger = app
         .clone()
-        .oneshot(get(&format!("/api/v1/assets/{asset_id}/download"), Some(&stranger_cookie)))
+        .oneshot(get(
+            &format!("/api/v1/assets/{asset_id}/download"),
+            Some(&stranger_cookie),
+        ))
         .await
         .expect("stranger");
-    assert_eq!(stranger.status(), StatusCode::NOT_FOUND, "not the owner's asset");
+    assert_eq!(
+        stranger.status(),
+        StatusCode::NOT_FOUND,
+        "not the owner's asset"
+    );
 
     // The frame route is deliberately outside the session guard: the signature is
     // the whole authorization, covering the asset id and the expiry.
@@ -608,12 +801,19 @@ async fn assets_follow_ownership_and_the_signature_is_the_only_authority() {
     let expired = app
         .clone()
         .oneshot(get(
-            &format!("/api/v1/assets/{asset_id}/frame?exp=1000&sig={}", "00".repeat(32)),
+            &format!(
+                "/api/v1/assets/{asset_id}/frame?exp=1000&sig={}",
+                "00".repeat(32)
+            ),
             None,
         ))
         .await
         .expect("expired");
-    assert_eq!(expired.status(), StatusCode::FORBIDDEN, "the expiry is checked");
+    assert_eq!(
+        expired.status(),
+        StatusCode::FORBIDDEN,
+        "the expiry is checked"
+    );
 
     let url = crate::common::signed_url::build_signed_frame_url(
         &state.config,
@@ -631,7 +831,10 @@ async fn assets_follow_ownership_and_the_signature_is_the_only_authority() {
         .expect("signed");
     assert_eq!(signed.status(), StatusCode::OK);
     assert_eq!(signed.headers()["cache-control"], "private, max-age=600");
-    assert_eq!(&to_bytes(signed.into_body(), LIMIT).await.expect("bytes")[..], b"1234");
+    assert_eq!(
+        &to_bytes(signed.into_body(), LIMIT).await.expect("bytes")[..],
+        b"1234"
+    );
 
     // The same signature on a different asset id does not work.
     let swapped = app
@@ -639,7 +842,11 @@ async fn assets_follow_ownership_and_the_signature_is_the_only_authority() {
         .oneshot(get(&format!("/api/v1/assets/{ghost}/frame?{query}"), None))
         .await
         .expect("swapped");
-    assert_eq!(swapped.status(), StatusCode::FORBIDDEN, "the signature covers the id");
+    assert_eq!(
+        swapped.status(),
+        StatusCode::FORBIDDEN,
+        "the signature covers the id"
+    );
 }
 
 /// Captures whatever the layer stack emits, so the access log can be asserted the
@@ -685,7 +892,12 @@ impl Visit for Recorded {
 }
 
 impl Layer<Registry> for Capture {
-    fn on_new_span(&self, attrs: &span::Attributes<'_>, _id: &span::Id, _ctx: Context<'_, Registry>) {
+    fn on_new_span(
+        &self,
+        attrs: &span::Attributes<'_>,
+        _id: &span::Id,
+        _ctx: Context<'_, Registry>,
+    ) {
         let mut fields = Recorded::default();
         attrs.record(&mut fields);
         self.push(format!(
@@ -750,13 +962,22 @@ async fn the_access_log_records_the_request_and_stays_out_of_the_default_filter(
 
     let lines = loud.lines().join("\n");
     let lowered = lines.to_lowercase();
-    assert!(lines.contains("method=GET"), "the method is logged:\n{lines}");
+    assert!(
+        lines.contains("method=GET"),
+        "the method is logged:\n{lines}"
+    );
     assert!(
         lines.contains("uri=/login?probe=1"),
         "the query string survives — that is what makes `/stream?from=N` readable:\n{lines}"
     );
-    assert!(lines.contains("status=200"), "the status is logged:\n{lines}");
-    assert!(lowered.contains("debug"), "and it lands at DEBUG, not INFO:\n{lines}");
+    assert!(
+        lines.contains("status=200"),
+        "the status is logged:\n{lines}"
+    );
+    assert!(
+        lowered.contains("debug"),
+        "and it lands at DEBUG, not INFO:\n{lines}"
+    );
 }
 
 /// `/api/voice` is registered *after* the trace layer on purpose: it is the one
@@ -791,9 +1012,62 @@ async fn the_voice_upgrade_route_stays_out_of_the_access_log() {
     drop(guard);
 
     let lines = capture.lines().join("\n");
-    assert!(lines.contains("uri=/login"), "the traced group does log:\n{lines}");
+    assert!(
+        lines.contains("uri=/login"),
+        "the traced group does log:\n{lines}"
+    );
     assert!(
         !lines.contains("/api/voice"),
         "the hijacked route stays untraced until an on-host run proves the 101:\n{lines}"
     );
+}
+
+#[tokio::test]
+async fn health_reports_the_database_is_reachable() {
+    let (app, _state) = app().await;
+    let response = app.oneshot(get("/healthz", None)).await.expect("health");
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = json_body(response).await;
+    assert_eq!(body["ok"], true);
+}
+
+#[tokio::test]
+async fn every_response_carries_the_security_headers() {
+    let (app, _state) = app().await;
+    for path in ["/login", "/healthz"] {
+        let response = app
+            .clone()
+            .oneshot(get(path, None))
+            .await
+            .expect("response");
+        assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+        assert_eq!(response.headers()["x-frame-options"], "DENY");
+        assert_eq!(response.headers()["referrer-policy"], "no-referrer");
+        let policy = response.headers()["content-security-policy"]
+            .to_str()
+            .expect("policy is ASCII");
+        assert!(policy.contains("frame-ancestors 'none'"), "{policy}");
+        assert!(policy.contains("connect-src 'self'"), "{policy}");
+    }
+}
+
+#[tokio::test]
+async fn repeated_wrong_passwords_are_throttled() {
+    let (app, state) = app().await;
+    account(&state, "walker", Role::User).await;
+
+    for _ in 0..crate::auth::login_limit::MAX_IDENTITY_FAILURES {
+        let response = app
+            .clone()
+            .oneshot(post_form("/login", "username=walker&password=wrong"))
+            .await
+            .expect("attempt");
+        assert_eq!(response.status(), StatusCode::FOUND);
+    }
+
+    let blocked = app
+        .oneshot(post_form("/login", "username=walker&password=wrong"))
+        .await
+        .expect("blocked");
+    assert_eq!(blocked.status(), StatusCode::TOO_MANY_REQUESTS);
 }

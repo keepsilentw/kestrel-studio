@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
-use axum::extract::{Path as UrlPath, Query, State};
 use axum::extract::Form;
+use axum::extract::{Path as UrlPath, Query, State};
 use axum::response::{IntoResponse, Response};
 use serde::Deserialize;
 
@@ -14,20 +14,22 @@ use crate::error::AppError;
 use crate::http::redirect::found;
 use crate::state::AppState;
 use crate::view::admin_templates::{
-    AccountChip, ConversationRow, Notice, PresentedAccount, TokenRow, account_page, accounts_page,
-    conversation_page, conversations_page, delete_page, tokens_page,
+    account_page, accounts_page, conversation_page, conversations_page, delete_page, tokens_page,
+    AccountChip, ConversationRow, Notice, PresentedAccount, TokenRow,
 };
 use crate::view::render::{format_timestamp, render_messages};
 
-/// The super admin's surface: account management and a read-only view of every
-/// normal account's conversations. Server-rendered forms with POST + redirect,
-/// exactly like /login and /logout — there is no client script on these pages.
-
+// The super admin's surface: account management and a read-only view of every
+// normal account's conversations. Server-rendered forms with POST + redirect,
+// exactly like /login and /logout — there is no client script on these pages.
 fn notice(code: Option<&str>) -> Option<Notice> {
     let text = match code? {
         "created" => Some(("账号已创建", false)),
         "duplicate" => Some(("该用户名已存在", true)),
-        "invalid" => Some(("用户名需 3-32 位字母、数字、下划线或短横线；密码至少 6 位", true)),
+        "invalid" => Some((
+            "用户名需 3-32 位字母、数字、下划线或短横线；密码至少 6 位",
+            true,
+        )),
         "password-reset" => Some(("密码已重置", false)),
         "removed" => Some(("账号及其全部会话与资产已删除", false)),
         "self" => Some(("不能删除当前登录的账号", true)),
@@ -164,7 +166,11 @@ pub async fn conversation(
     let Some(conversation_id) = read_positive_int(Some(&id)) else {
         return Ok(missing);
     };
-    if !state.conversations.can_read(conversation_id, &actor).await? {
+    if !state
+        .conversations
+        .can_read(conversation_id, &actor)
+        .await?
+    {
         return Ok(missing);
     }
     let Some(summary) = state.conversations.summary_of(conversation_id).await? else {
@@ -244,7 +250,9 @@ pub async fn reset_password(
     let Some(account_id) = read_positive_int(Some(&id)) else {
         return Ok(found("/admin?notice=missing"));
     };
-    let result = admin(&state).reset_password(account_id, &form.password).await?;
+    let result = admin(&state)
+        .reset_password(account_id, &form.password)
+        .await?;
     let code = match result {
         ResetPasswordResult::Reset => "password-reset",
         // Back to the account page: a rejected password reads as 'invalid', the

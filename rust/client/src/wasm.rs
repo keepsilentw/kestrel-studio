@@ -61,6 +61,10 @@ pub fn has_microphone() -> bool {
 pub fn build_info() -> Array {
     let out = Array::new();
     out.push(&JsValue::from_str(env!("CARGO_PKG_VERSION")));
-    out.push(&JsValue::from_str(if cfg!(debug_assertions) { "debug" } else { "release" }));
+    out.push(&JsValue::from_str(if cfg!(debug_assertions) {
+        "debug"
+    } else {
+        "release"
+    }));
     out
 }

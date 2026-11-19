@@ -92,9 +92,7 @@ fn base64encode(bytes: &[u8]) -> String {
 
 fn base64decode(value: &str) -> Option<Vec<u8>> {
     use base64::Engine;
-    base64::engine::general_purpose::STANDARD
-        .decode(value)
-        .ok()
+    base64::engine::general_purpose::STANDARD.decode(value).ok()
 }
 
 fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
@@ -195,7 +193,8 @@ mod tests {
     fn a_hash_written_here_is_accepted_by_bcryptjs() {
         let password = "cross-check-红隼";
         let stored = hash(password);
-        let probe = "console.log(require('bcryptjs').compareSync(process.argv[1], process.argv[2]))";
+        let probe =
+            "console.log(require('bcryptjs').compareSync(process.argv[1], process.argv[2]))";
         let output = std::process::Command::new("node")
             .args(["-e", probe, password, &stored])
             .output()
@@ -232,7 +231,10 @@ mod tests {
             assert!(!verify("123456", stored), "{stored}");
         }
         assert!(!is_unverifiable(&hash("x")), "bcrypt is a known format");
-        assert!(!is_unverifiable(&hash_pbkdf2("x")), "pbkdf2 is a known format");
+        assert!(
+            !is_unverifiable(&hash_pbkdf2("x")),
+            "pbkdf2 is a known format"
+        );
         assert!(is_unverifiable("plain"), "anything else is not");
     }
 }

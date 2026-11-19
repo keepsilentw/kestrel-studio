@@ -244,6 +244,11 @@ sequenceDiagram
 一轮最多 5 次 LLM 往返，防止工具调用死循环。事件先落日志再扇出，顺序因此
 只有一个定义；正在跑的会话不接收第二个轮次（409）。
 
+**停滞上限（2026-11-19）**：每轮 LLM 请求有两条时间界——上游 60 秒内不给响应头即失败，
+流开始后 180 秒没有收到任何字节即失败。两者都落成 `turn_error`，不会让页面永久停在
+「正在生成…」。180 秒远高于出图期间的正常静默，只用来识别半开连接。两套实现同形：
+`rust/server/src/bailian/responses.rs`、`nest/server/src/bailian/responses-client.ts`。
+
 ### SSE 事件表
 
 真源是 `nest/server/src/common/sse.ts` 的闭合联合类型（轮次与会话事件都在内）。
@@ -666,6 +671,29 @@ WebSocket 的 upgrade 不经过 Express，所以 `AuthenticatedGuard` 对它无�
 
 实测证据（浏览器里的两次点击、超管侧的标记与回放、库里的行数）见
 [verification.md](verification.md) §6。
+
+### 12.2 登录限流与浏览器侧防护（2026-11-19）
+
+两套后端同形实现，判据以 Rust 侧为准：
+
+- **限流**：15 分钟固定窗口，同一 `地址 + 账号` 失败 5 次、同一地址失败 20 次即返回 429；
+  成功登录只清账号桶，不清地址桶。地址依次取 `X-Real-IP`、`X-Forwarded-For` 第一跳、
+  `req.ip`，都缺时落到一个共享桶。计数在进程内存里，重启即清零——这与「一套后端一个进程」
+  的部署形态一致。位置：`rust/server/src/auth/login_limit.rs`、
+  `nest/server/src/auth/login-limiter.service.ts`。
+- **响应头**：所有响应统一带 `X-Content-Type-Options: nosniff`、`X-Frame-Options: DENY`、
+  `Referrer-Policy: no-referrer`、`Permissions-Policy` 与 CSP。CSP 仍允许内联脚本，因为
+  WASM loader 必须知道 `CLIENT_BUNDLE` 选了哪份包；其余指令收窄到同源连接、同源表单与
+  `object-src 'none'`。位置：`rust/server/src/http/security_headers.rs`、
+  `nest/server/src/common/security-headers.ts`。
+- **Cookie**：生产环境的 `connect.sid` 加 `Secure`。Nest 侧同时设 `trust proxy = 1`，
+  依赖 openresty 传来的 `X-Forwarded-Proto`；本地 `NODE_ENV` 非 production 时不加，http
+  本地登录不受影响。
+- **私有资产**：`/api/v1/assets/:id/download` 的 `Cache-Control` 从
+  `public, max-age=0` 改为 `private, no-store`，避免共享缓存保存会话内内容。
+
+**边界**：本轮只跑了 `tsc --noEmit` 与 `cargo check --tests`，没有启动服务、没有跑单元测试，
+也**没有部署**；上表是代码形状，不是运行时读数。
 
 ## 13. Rust 实现（`rust/server/`）
 

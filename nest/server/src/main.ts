@@ -12,6 +12,7 @@ import { AuthService } from '@/auth/auth.service';
 import { createBearerMiddleware } from '@/auth/bearer.middleware';
 import { TokenService } from '@/auth/token.service';
 import { createAccessLogMiddleware } from '@/common/access-log';
+import { securityHeaders } from '@/common/security-headers';
 import { loadConfig } from '@/config/configuration';
 import { loadEnvFile } from '@/config/env-file';
 import { SQLITE_CONNECTION } from '@/database/database.module';
@@ -24,6 +25,13 @@ async function bootstrap(): Promise<void> {
   const config = loadConfig();
   const app = await NestFactory.create<NestExpressApplication>(AppModule);
   app.disable('x-powered-by');
+  // openresty terminates TLS and the only path into this process is through it,
+  // so one trusted proxy hop is the accurate setting: it makes `req.secure` true
+  // for the session cookie and gives the login limiter a real client address.
+  app.set('trust proxy', 1);
+
+  // First, so static assets and redirects carry the same headers as pages.
+  app.use(securityHeaders());
 
   // Mounted first, before the static handler, so an asset request leaves a line
   // too — the Rust server logs `/assets/main.css` and the two have to stay
@@ -58,6 +66,9 @@ async function bootstrap(): Promise<void> {
       cookie: {
         httpOnly: true,
         sameSite: 'lax',
+        // The production deployment is HTTPS-only. `isProduction` is false on a
+        // local http boot, where a Secure cookie would never come back.
+        secure: config.isProduction,
         maxAge: 7 * 24 * 60 * 60 * 1000,
       },
     }),

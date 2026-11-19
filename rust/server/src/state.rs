@@ -1,6 +1,6 @@
 use std::collections::HashSet;
-use std::sync::{Arc, Mutex};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 
 use sqlx::SqlitePool;
 
@@ -22,6 +22,8 @@ pub struct AppState {
     pub media: Arc<MediaService>,
     /// One-time tickets for the voice socket's handshake.
     pub tickets: Arc<crate::voice::ticket::TicketStore>,
+    /// Failed-login counters, keyed by address and address+account.
+    pub login_limiter: Arc<crate::auth::login_limit::LoginLimiter>,
     pub tasks: Arc<TaskService>,
     /// Conversations with a turn running in this process. One turn at a time per
     /// conversation, so a double submit cannot bill the provider twice.
@@ -47,6 +49,7 @@ impl AppState {
             conversations,
             events,
             tickets: Arc::new(crate::voice::ticket::TicketStore::new()),
+            login_limiter: Arc::new(crate::auth::login_limit::LoginLimiter::new()),
             media,
             tasks,
             config,

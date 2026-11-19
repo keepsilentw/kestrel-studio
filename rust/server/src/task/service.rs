@@ -164,7 +164,9 @@ impl TaskService {
         &self,
         conversation_id: i64,
     ) -> Result<Vec<GenerationTask>, AppError> {
-        let sql = format!("SELECT {COLUMNS} FROM generation_tasks WHERE conversation_id = ?1 ORDER BY id ASC");
+        let sql = format!(
+            "SELECT {COLUMNS} FROM generation_tasks WHERE conversation_id = ?1 ORDER BY id ASC"
+        );
         let rows = sqlx::query(&sql)
             .bind(conversation_id)
             .fetch_all(&self.pool)
@@ -219,13 +221,15 @@ impl TaskService {
         status: TaskStatus,
         attempts: i64,
     ) -> Result<(), AppError> {
-        sqlx::query("UPDATE generation_tasks SET status = ?1, attempts = ?2, updated_at = ?3 WHERE id = ?4")
-            .bind(status.as_str())
-            .bind(attempts)
-            .bind(chrono::Utc::now().timestamp_millis())
-            .bind(id)
-            .execute(&self.pool)
-            .await?;
+        sqlx::query(
+            "UPDATE generation_tasks SET status = ?1, attempts = ?2, updated_at = ?3 WHERE id = ?4",
+        )
+        .bind(status.as_str())
+        .bind(attempts)
+        .bind(chrono::Utc::now().timestamp_millis())
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
@@ -236,13 +240,15 @@ impl TaskService {
         attempts: i64,
         error: &str,
     ) -> Result<(), AppError> {
-        sqlx::query("UPDATE generation_tasks SET attempts = ?1, error = ?2, updated_at = ?3 WHERE id = ?4")
-            .bind(attempts)
-            .bind(error)
-            .bind(chrono::Utc::now().timestamp_millis())
-            .bind(id)
-            .execute(&self.pool)
-            .await?;
+        sqlx::query(
+            "UPDATE generation_tasks SET attempts = ?1, error = ?2, updated_at = ?3 WHERE id = ?4",
+        )
+        .bind(attempts)
+        .bind(error)
+        .bind(chrono::Utc::now().timestamp_millis())
+        .bind(id)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
@@ -299,7 +305,11 @@ mod tests {
             .await
             .expect("conversation");
         let events = Arc::new(EventLog::new(pool.clone()));
-        (TaskService::new(pool.clone(), Arc::clone(&events)), events, pool)
+        (
+            TaskService::new(pool.clone(), Arc::clone(&events)),
+            events,
+            pool,
+        )
     }
 
     fn new_task(conversation_id: i64) -> NewTask {
@@ -323,13 +333,24 @@ mod tests {
         let id = tasks.create(&new_task(1)).await.expect("create");
         let announced = receiver.recv().await.expect("event");
         match announced.event {
-            ConversationEvent::TaskUpdated { task_id, kind, status, error } => {
-                assert_eq!((task_id, kind, status), (id, TaskKind::Video, TaskStatus::Queued));
+            ConversationEvent::TaskUpdated {
+                task_id,
+                kind,
+                status,
+                error,
+            } => {
+                assert_eq!(
+                    (task_id, kind, status),
+                    (id, TaskKind::Video, TaskStatus::Queued)
+                );
                 assert_eq!(error, None);
             }
             other => panic!("unexpected event {other:?}"),
         }
-        assert_eq!(announced.seq, 1, "the announcement is journaled, not just live");
+        assert_eq!(
+            announced.seq, 1,
+            "the announcement is journaled, not just live"
+        );
     }
 
     #[tokio::test]
@@ -360,9 +381,15 @@ mod tests {
             .expect("finish");
         let finished = tasks.find_by_id(first).await.expect("find").expect("row");
         assert_eq!(finished.status, TaskStatus::Succeeded);
-        assert_eq!((finished.asset_id, finished.result_message_id), (Some(3), Some(4)));
+        assert_eq!(
+            (finished.asset_id, finished.result_message_id),
+            (Some(3), Some(4))
+        );
         assert_eq!(finished.error, None);
-        assert!(finished.finished_at.is_some(), "terminal rows carry their end time");
+        assert!(
+            finished.finished_at.is_some(),
+            "terminal rows carry their end time"
+        );
         assert_eq!(tasks.active(20).await.expect("active").len(), 1);
     }
 
@@ -373,14 +400,27 @@ mod tests {
         let (tasks, _events, pool) = services().await;
         let id = tasks.create(&new_task(1)).await.expect("create");
 
-        assert!(tasks.claim(id, "rust").await.expect("first"), "unclaimed is claimable");
+        assert!(
+            tasks.claim(id, "rust").await.expect("first"),
+            "unclaimed is claimable"
+        );
         // The same stack renews its own lease on every tick, which is also how the
         // process that booted after a crash resumes what its predecessor was polling.
-        assert!(tasks.claim(id, "rust").await.expect("renew"), "own lease renews");
-        assert!(!tasks.claim(id, "nest").await.expect("foreign"), "a fresh foreign lease holds");
+        assert!(
+            tasks.claim(id, "rust").await.expect("renew"),
+            "own lease renews"
+        );
+        assert!(
+            !tasks.claim(id, "nest").await.expect("foreign"),
+            "a fresh foreign lease holds"
+        );
 
         let row = tasks.find_by_id(id).await.expect("find").expect("row");
-        assert_eq!(row.claimed_by.as_deref(), Some("rust"), "the winner is stamped");
+        assert_eq!(
+            row.claimed_by.as_deref(),
+            Some("rust"),
+            "the winner is stamped"
+        );
         assert!(row.claimed_at.is_some(), "and when it took the lease");
         assert_eq!(row.attempts, 0, "a claim is not an attempt");
 
@@ -392,12 +432,21 @@ mod tests {
             .execute(&pool)
             .await
             .expect("age the lease");
-        assert!(tasks.claim(id, "nest").await.expect("take over"), "an expired lease is no lease");
+        assert!(
+            tasks.claim(id, "nest").await.expect("take over"),
+            "an expired lease is no lease"
+        );
 
         // A terminal row is nobody's to advance, so the claim must not touch it: this
         // is the same guard `active()` applies by status, in the write that matters.
-        tasks.finish(id, TaskStatus::Succeeded, Some(3), None, None).await.expect("finish");
-        assert!(!tasks.claim(id, "nest").await.expect("terminal"), "a finished row stays finished");
+        tasks
+            .finish(id, TaskStatus::Succeeded, Some(3), None, None)
+            .await
+            .expect("finish");
+        assert!(
+            !tasks.claim(id, "nest").await.expect("terminal"),
+            "a finished row stays finished"
+        );
     }
 
     #[tokio::test]
@@ -405,19 +454,31 @@ mod tests {
         let (tasks, _events, _pool) = services().await;
         let id = tasks.create(&new_task(1)).await.expect("create");
 
-        tasks.mark_attempt_failed(id, 1, "HTTP 502").await.expect("attempt");
+        tasks
+            .mark_attempt_failed(id, 1, "HTTP 502")
+            .await
+            .expect("attempt");
         let row = tasks.find_by_id(id).await.expect("find").expect("row");
         assert_eq!((row.attempts, row.error.as_deref()), (1, Some("HTTP 502")));
         assert_eq!(row.status, TaskStatus::Queued, "still owned by the worker");
         assert_eq!(row.finished_at, None);
 
-        tasks.mark_progress(id, TaskStatus::Running, 1).await.expect("progress");
+        tasks
+            .mark_progress(id, TaskStatus::Running, 1)
+            .await
+            .expect("progress");
         let row = tasks.find_by_id(id).await.expect("find").expect("row");
         assert_eq!(row.status, TaskStatus::Running);
 
-        tasks.finish(id, TaskStatus::Failed, None, Some(9), Some("超时")).await.expect("fail");
+        tasks
+            .finish(id, TaskStatus::Failed, None, Some(9), Some("超时"))
+            .await
+            .expect("fail");
         let row = tasks.find_by_id(id).await.expect("find").expect("row");
-        assert_eq!((row.status, row.error.as_deref(), row.result_message_id), (TaskStatus::Failed, Some("超时"), Some(9)));
+        assert_eq!(
+            (row.status, row.error.as_deref(), row.result_message_id),
+            (TaskStatus::Failed, Some("超时"), Some(9))
+        );
         assert_eq!(row.asset_id, None);
         assert!(tasks.active(20).await.expect("active").is_empty());
     }
@@ -433,7 +494,13 @@ mod tests {
         tasks.create(&new_task(2)).await.expect("create");
 
         assert_eq!(
-            tasks.active_by_conversation(1).await.expect("mine").iter().map(|t| t.id).collect::<Vec<_>>(),
+            tasks
+                .active_by_conversation(1)
+                .await
+                .expect("mine")
+                .iter()
+                .map(|t| t.id)
+                .collect::<Vec<_>>(),
             vec![mine]
         );
         assert_eq!(tasks.by_conversation(2).await.expect("theirs").len(), 1);

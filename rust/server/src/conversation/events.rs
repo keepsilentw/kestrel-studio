@@ -32,9 +32,10 @@ const SEQ_RETRY_LIMIT: u32 = 3;
 /// attempts. The index name is part of SQLite's message, so this only ever matches
 /// the one constraint we created on purpose.
 fn is_seq_conflict(error: &sqlx::Error) -> bool {
-    error
-        .as_database_error()
-        .is_some_and(|db| db.message().contains("UNIQUE constraint failed: idx_events_conversation"))
+    error.as_database_error().is_some_and(|db| {
+        db.message()
+            .contains("UNIQUE constraint failed: idx_events_conversation")
+    })
 }
 
 /// An event together with the journal id that becomes its SSE `id:` field.
@@ -88,7 +89,12 @@ impl EventLog {
             event: event.clone(),
             payload: payload.clone(),
         };
-        if let Some(sender) = self.streams.lock().expect("stream lock").get(&conversation_id) {
+        if let Some(sender) = self
+            .streams
+            .lock()
+            .expect("stream lock")
+            .get(&conversation_id)
+        {
             // A full channel means a subscriber fell behind; that reader's cursor
             // is stale and it will be told to resync, so the send can be ignored.
             let _ = sender.send(published.clone());
@@ -166,7 +172,10 @@ impl EventLog {
     /// Called when a reader's stream ends.
     pub fn release(&self, conversation_id: i64) {
         let mut streams = self.streams.lock().expect("stream lock");
-        if streams.get(&conversation_id).is_some_and(|sender| sender.receiver_count() == 0) {
+        if streams
+            .get(&conversation_id)
+            .is_some_and(|sender| sender.receiver_count() == 0)
+        {
             streams.remove(&conversation_id);
         }
     }
@@ -314,7 +323,10 @@ mod tests {
     }
 
     fn text(seq_free: i64, delta: &str) -> ConversationEvent {
-        ConversationEvent::Text { message_id: seq_free, delta: delta.to_string() }
+        ConversationEvent::Text {
+            message_id: seq_free,
+            delta: delta.to_string(),
+        }
     }
 
     #[tokio::test]
@@ -350,7 +362,10 @@ mod tests {
     #[tokio::test]
     async fn gap_detection_uses_the_retained_window_not_the_whole_history() {
         let log = log().await;
-        assert!(!log.has_gap(1, 0).await.expect("never published"), "empty journal is not a gap");
+        assert!(
+            !log.has_gap(1, 0).await.expect("never published"),
+            "empty journal is not a gap"
+        );
         for _ in 0..3 {
             log.publish(1, text(9, "x")).await.expect("publish");
         }
@@ -366,9 +381,15 @@ mod tests {
             message: sample_message(1, "user", "画一只红隼"),
         };
         log.publish(1, user_message).await.expect("user echo");
-        log.publish(1, ConversationEvent::TurnStarted { message_id: 2, mode: None })
-            .await
-            .expect("turn start");
+        log.publish(
+            1,
+            ConversationEvent::TurnStarted {
+                message_id: 2,
+                mode: None,
+            },
+        )
+        .await
+        .expect("turn start");
         log.publish(1, text(2, "…")).await.expect("delta");
 
         // The user echo is at 1, the turn at 2..; catching up on message 2 starts
@@ -386,7 +407,10 @@ mod tests {
         }
         log.prune(1).await.expect("prune");
         assert_eq!(log.oldest_seq(1).await.expect("oldest"), Some(51));
-        assert_eq!(log.latest_seq(1).await.expect("latest"), RETAINED_EVENTS + 50);
+        assert_eq!(
+            log.latest_seq(1).await.expect("latest"),
+            RETAINED_EVENTS + 50
+        );
     }
 
     #[tokio::test]
@@ -398,7 +422,9 @@ mod tests {
         assert_eq!(got.seq, 1);
 
         // While a reader is alive the tail stays, even if it has drained.
-        log.publish(1, text(9, "still delivered")).await.expect("publish");
+        log.publish(1, text(9, "still delivered"))
+            .await
+            .expect("publish");
         assert_eq!(receiver.try_recv().expect("second event").seq, 2);
         assert!(
             log.streams.lock().expect("stream lock").contains_key(&1),
@@ -410,7 +436,10 @@ mod tests {
         drop(receiver);
         log.release(1);
         assert!(log.streams.lock().expect("stream lock").is_empty());
-        assert_eq!(log.publish(1, text(9, "after")).await.expect("publish").seq, 3);
+        assert_eq!(
+            log.publish(1, text(9, "after")).await.expect("publish").seq,
+            3
+        );
     }
 
     fn sample_message(id: i64, role: &str, content: &str) -> MessageView {

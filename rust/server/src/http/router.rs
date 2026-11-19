@@ -4,9 +4,9 @@ use tower_http::trace::TraceLayer;
 
 use crate::admin::controller as admin;
 use crate::auth::routes;
-use crate::http::{asset_frame, chat, static_files};
-use crate::view::controller as views;
+use crate::http::{asset_frame, chat, health, security_headers, static_files};
 use crate::state::AppState;
+use crate::view::controller as views;
 
 /// The route table. Kept in one place so the URL surface is reviewable at a
 /// glance; the Nest version spread it over ten decorated controllers.
@@ -16,17 +16,27 @@ use crate::state::AppState;
 pub fn build(state: AppState) -> Router {
     Router::new()
         .route("/", get(views::chat))
+        .route("/healthz", get(health::health))
         .route("/login", get(views::login_page).post(routes::login))
         .route("/voice", get(views::voice))
         .route("/settings/tokens", get(views::tokens))
-        .route("/api/voice/ticket", post(crate::voice::gateway::issue_ticket))
+        .route(
+            "/api/voice/ticket",
+            post(crate::voice::gateway::issue_ticket),
+        )
         .route("/admin", get(admin::index))
         .route("/admin/tokens", get(admin::tokens_page_handler))
         .route("/admin/users", post(admin::create_user))
-        .route("/admin/conversations", get(admin::conversations_page_handler))
+        .route(
+            "/admin/conversations",
+            get(admin::conversations_page_handler),
+        )
         .route("/admin/conversations/{id}", get(admin::conversation))
         .route("/admin/users/{id}", get(admin::account))
-        .route("/admin/users/{id}/delete", get(admin::confirm_delete).post(admin::remove_user))
+        .route(
+            "/admin/users/{id}/delete",
+            get(admin::confirm_delete).post(admin::remove_user),
+        )
         .route("/admin/users/{id}/password", post(admin::reset_password))
         .route("/logout", post(routes::logout))
         .route("/api/v1/session", post(routes::json_login))
@@ -35,10 +45,19 @@ pub fn build(state: AppState) -> Router {
             post(routes::create_token).get(routes::list_tokens),
         )
         .route("/api/v1/tokens/{id}", delete(routes::revoke_token))
-        .route("/api/v1/conversations", post(chat::create_conversation).get(chat::list_conversations))
+        .route(
+            "/api/v1/conversations",
+            post(chat::create_conversation).get(chat::list_conversations),
+        )
         .route("/api/v1/conversations/{id}/turns", post(chat::start_turn))
-        .route("/api/v1/conversations/{id}/delete", post(chat::delete_conversation))
-        .route("/api/v1/conversations/{id}/messages", get(chat::conversation_messages))
+        .route(
+            "/api/v1/conversations/{id}/delete",
+            post(chat::delete_conversation),
+        )
+        .route(
+            "/api/v1/conversations/{id}/messages",
+            get(chat::conversation_messages),
+        )
         .route("/api/v1/conversations/{id}/tasks", get(chat::active_tasks))
         .route("/api/v1/conversations/{id}/stream", get(chat::stream))
         .route("/api/v1/assets/{id}/download", get(chat::download))
@@ -63,5 +82,7 @@ pub fn build(state: AppState) -> Router {
         // access line would buy nothing here anyway. Move it inside the traced group
         // only after an on-host run proves the 101 still lands.
         .route("/api/voice", get(crate::voice::gateway::handle))
+        // Header-only, so unlike the tracer it may wrap the upgrade route too.
+        .layer(axum::middleware::from_fn(security_headers::apply))
         .with_state(state)
 }

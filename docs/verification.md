@@ -3428,3 +3428,42 @@ idx_api_tokens_user(user_id, revoked_at)
 
 `api_tokens` 表存在且为 **0 行**，`users` 仍为 **2 行**；本次部署没有在生产上签发令牌，
 也没有用真实账号登录。P3 的签发 / 撤销 / 401 交互已在本地浏览器验过（§50.2）。
+
+## 52. 安全与稳定性第一批：本地质量门（2026-11-19）
+
+本轮改的是登录限流、响应安全头、生产 Cookie、私有资产缓存头、`/healthz` 与模型流停滞上限，
+两套后端同形。**没有部署，也没有在浏览器里复跑**；下面是本机能给出的读数。
+
+### 52.1 质量门
+
+| 命令 | 读数 |
+|---|---|
+| `make check` | Nest server / client typecheck 通过；`cargo check`、`cargo fmt --check`、`cargo clippy -D warnings` 在两个 Rust crate 上都通过 |
+| `make test` | Nest server **516 passed**（34 个文件；新增 4 条限流单测 + 1 条登录 429 集成测试）；Nest client **72 passed**；Rust server **213 个测试**（2 ignored，其余通过；新增 3 条限流、1 条 Cookie、3 条 HTTP 断言）；Rust client **50 passed** |
+| `cargo check --tests` | 无 warning |
+| `git diff --check` | 通过 |
+
+### 52.2 热备份
+
+在开发机上对 `data/kestrel-studio.db` 执行：
+
+```bash
+cargo run --manifest-path rust/server/Cargo.toml -- \
+  --backup /Users/tangweiwei/tmp/kestrel-backup-20261119.db
+```
+
+读数：`backup written … bytes=114688`；副本 `PRAGMA integrity_check` 为 `ok`，
+`users` 2 行、`messages` 50 行，与源库一致。测试文件已删除。
+
+### 52.3 没证的部分
+
+- 线上 429、`Secure` Cookie、CSP 与 `/healthz` 的运行时读数：未部署，未验。
+- `make backup` 的宿主机路径（`docker compose exec`、`/opt/kestrel-backups`、cron）：未在本机执行。
+- 模型流超时：没有构造半开连接的上游，只做了编译与既有流式测试；180 秒边界未实测。
+- clippy 的 **34 条**既有告警与 rustfmt 的全仓差异已清掉；`make check` 现在包含两个 crate 的
+  `fmt --check` 与 `clippy --tests -D warnings`。
+- `crates/proto` 与 `crates/md` 的格式用 `rustfmt --check` 直接检查，不经过 `cargo fmt`——
+  后者会在 crate 目录里生成没人跟踪的 `Cargo.lock`（implementation-notes.md §18）。
+- rustfmt 把若干 `dataset()` 链拆成多行后，`dataset_keys` 的源码扫描器原来只认单行写法，测试
+  立刻转红（`only found 5 dataset lookups`）。扫描器已改成跳过空白，并重新通过；这条是格式门
+  抓到的真实回归，不是测试本身的问题。

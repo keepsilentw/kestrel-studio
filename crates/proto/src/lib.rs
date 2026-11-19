@@ -26,7 +26,9 @@ pub enum ClientFrame {
     /// The button was pressed: open the upstream session for this call.
     Start,
     /// One chunk of the utterance. Base64 of raw PCM, 16-bit signed, mono, 24 kHz.
-    Audio { pcm: String },
+    Audio {
+        pcm: String,
+    },
     /// The button was released: the utterance is complete.
     Commit,
     /// The button went down while the assistant was still answering: stop this
@@ -47,8 +49,13 @@ pub enum ServerFrame {
         conversation_id: i64,
     },
     /// What the user said, after upstream transcription.
-    Transcript { text: String },
-    ToolCall { name: String, status: String },
+    Transcript {
+        text: String,
+    },
+    ToolCall {
+        name: String,
+        status: String,
+    },
     /// The same fields the SSE `asset` event carries, spelled out because serde
     /// cannot flatten inside a newtype variant.
     #[serde(rename = "asset")]
@@ -60,12 +67,18 @@ pub enum ServerFrame {
         bytes: i64,
     },
     /// Base64 of raw PCM to play back.
-    Audio { pcm: String },
+    Audio {
+        pcm: String,
+    },
     /// What the model said, as text alongside the audio.
     #[serde(rename = "assistant_text")]
-    AssistantText { text: String },
+    AssistantText {
+        text: String,
+    },
     Done,
-    Error { message: String },
+    Error {
+        message: String,
+    },
 }
 
 impl ServerFrame {
@@ -88,7 +101,9 @@ pub fn parse_client_frame(raw: &str) -> Option<ClientFrame> {
             .get("pcm")
             .and_then(Value::as_str)
             .filter(|pcm| !pcm.is_empty())
-            .map(|pcm| ClientFrame::Audio { pcm: pcm.to_string() }),
+            .map(|pcm| ClientFrame::Audio {
+                pcm: pcm.to_string(),
+            }),
         _ => None,
     }
 }

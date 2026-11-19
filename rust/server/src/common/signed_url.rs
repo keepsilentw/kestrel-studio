@@ -63,7 +63,10 @@ mod tests {
         let config = AppConfig::test("/tmp/kestrel-signed-url", "https://example.test");
         let now = chrono::Utc::now().timestamp_millis();
         let url = build_signed_frame_url(&config, 42, now);
-        assert!(url.starts_with("https://example.test/api/v1/assets/42/frame?"), "{url}");
+        assert!(
+            url.starts_with("https://example.test/api/v1/assets/42/frame?"),
+            "{url}"
+        );
 
         let query = url.split_once('?').expect("query").1;
         let mut exp = None;
@@ -78,8 +81,15 @@ mod tests {
         }
         assert_eq!(exp, Some(now + FRAME_TTL_MS), "two hours");
         assert!(verify_signed_frame(&config, 42, exp, &sig));
-        assert!(!verify_signed_frame(&config, 43, exp, &sig), "another asset id");
-        let tampered = format!("{}{}", if sig.starts_with('f') { 'e' } else { 'f' }, &sig[1..]);
+        assert!(
+            !verify_signed_frame(&config, 43, exp, &sig),
+            "another asset id"
+        );
+        let tampered = format!(
+            "{}{}",
+            if sig.starts_with('f') { 'e' } else { 'f' },
+            &sig[1..]
+        );
         assert!(!verify_signed_frame(&config, 42, exp, &tampered));
         assert!(!verify_signed_frame(&config, 42, None, &sig));
         let mut rotated = AppConfig::test("/tmp/x", "https://example.test");
@@ -100,6 +110,10 @@ mod tests {
     fn a_trailing_slash_in_the_base_url_is_not_double_printed() {
         let config = AppConfig::test("/tmp/x", "https://example.test");
         let url = build_signed_frame_url(&config, 1, 0);
-        assert_eq!(url.matches("//").count(), 1, "only the scheme separator: {url}");
+        assert_eq!(
+            url.matches("//").count(),
+            1,
+            "only the scheme separator: {url}"
+        );
     }
 }

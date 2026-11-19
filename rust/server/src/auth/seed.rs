@@ -18,22 +18,23 @@ async fn ensure_user(
     plain: &str,
     role: Role,
 ) -> Result<bool, AppError> {
-    let existing: Option<(i64,)> =
-        sqlx::query_as("SELECT id FROM users WHERE username = ?1")
-            .bind(username)
-            .fetch_optional(pool)
-            .await?;
+    let existing: Option<(i64,)> = sqlx::query_as("SELECT id FROM users WHERE username = ?1")
+        .bind(username)
+        .fetch_optional(pool)
+        .await?;
     if existing.is_some() {
         return Ok(false);
     }
 
-    sqlx::query("INSERT INTO users (username, password_hash, role, created_at) VALUES (?1, ?2, ?3, ?4)")
-        .bind(username)
-        .bind(password::hash(plain))
-        .bind(role.as_str())
-        .bind(chrono::Utc::now().timestamp_millis())
-        .execute(pool)
-        .await?;
+    sqlx::query(
+        "INSERT INTO users (username, password_hash, role, created_at) VALUES (?1, ?2, ?3, ?4)",
+    )
+    .bind(username)
+    .bind(password::hash(plain))
+    .bind(role.as_str())
+    .bind(chrono::Utc::now().timestamp_millis())
+    .execute(pool)
+    .await?;
     Ok(true)
 }
 
@@ -43,7 +44,13 @@ pub async fn ensure_admin_user(pool: &SqlitePool, is_production: bool) -> Result
     if is_production {
         return Ok(false);
     }
-    ensure_user(pool, DEFAULT_ADMIN_USERNAME, DEFAULT_ADMIN_PASSWORD, Role::User).await
+    ensure_user(
+        pool,
+        DEFAULT_ADMIN_USERNAME,
+        DEFAULT_ADMIN_PASSWORD,
+        Role::User,
+    )
+    .await
 }
 
 /// The super admin is not a constant: its credentials arrive from the
@@ -83,7 +90,10 @@ mod tests {
             .fetch_one(&pool)
             .await
             .expect("read back");
-        assert_eq!(row.try_get::<String, _>("password_hash").expect("hash"), "changed");
+        assert_eq!(
+            row.try_get::<String, _>("password_hash").expect("hash"),
+            "changed"
+        );
     }
 
     #[tokio::test]
@@ -104,7 +114,9 @@ mod tests {
             username: "owner".to_string(),
             password: "s3cret".to_string(),
         };
-        assert!(ensure_super_admin(&pool, Some(&account)).await.expect("seed super"));
+        assert!(ensure_super_admin(&pool, Some(&account))
+            .await
+            .expect("seed super"));
         assert_eq!(
             crate::auth::service::AuthService::new(pool.clone())
                 .validate("owner", "s3cret")

@@ -25,12 +25,17 @@ APP  := kestrel-studio
 # run directly with pnpm/cargo when a single target is genuinely needed.
 
 CARGO ?= cargo
+RUSTFMT ?= rustfmt
 NEST_SERVER_DIR ?= $(CURDIR)/nest/server
 NEST_CLIENT_DIR ?= $(CURDIR)/nest/client
 RUST_SERVER_DIR ?= $(CURDIR)/rust/server
 RUST_CLIENT_DIR ?= $(CURDIR)/rust/client
 CARGO_SERVER_ARGS := --manifest-path $(RUST_SERVER_DIR)/Cargo.toml
 CARGO_CLIENT_ARGS := --manifest-path $(RUST_CLIENT_DIR)/Cargo.toml
+# Shared crates are path dependencies of both Rust packages. Checking them with
+# rustfmt directly avoids `cargo` writing an untracked Cargo.lock inside each
+# crate (docs/implementation-notes.md §18).
+SHARED_RUST_FILES := $(CURDIR)/crates/proto/src/lib.rs $(CURDIR)/crates/md/src/lib.rs
 
 # The pm2 entry must point here. `start` and `restart` compare it against the
 # entry pm2 actually holds and rebuild the entry when the repository moved — a
@@ -52,6 +57,8 @@ LINUX_BINARY     ?= /tmp/kestrel-studio-linux/kestrel-studio
 
 DEPLOY_HOST ?= lavo-test
 DEPLOY_DIR  ?= /opt/kestrel-studio
+BACKUP_DIR  ?= /opt/kestrel-backups
+BACKUP_KEEP_DAYS ?= 14
 
 # Health probe shared by `start` and `status`, so the two cannot drift.
 define HEALTH_PROBE
@@ -68,6 +75,7 @@ endef
 .PHONY: check test test-watch
 .PHONY: clean run-rust build-linux
 .PHONY: deploy deploy-status deploy-logs deploy-restart deploy-down
+.PHONY: backup
 .PHONY: census census-prod
 
 help:
@@ -90,7 +98,7 @@ help:
 	@echo "    make stop / restart / status / logs"
 	@echo ""
 	@echo "  质量"
-	@echo "    make check                  全部包（Nest 三份 tsconfig + 两个 cargo check）"
+	@echo "    make check                  全部包（Nest 三份 tsconfig + cargo check / fmt / clippy）"
 	@echo "    make test                   全部包单元测试（Nest 两轮 vitest + 两个 cargo test）"
 	@echo "    make test-watch             Nest 后端测试 watch"
 	@echo "    make census / census-prod   数一遍助手消息里的 markdown 构造（子集取舍的哨兵，只读）"
@@ -103,6 +111,7 @@ help:
 	@echo "    make deploy-status / deploy-logs / deploy-restart / deploy-down"
 	@echo "    make deploy-nest            打包并构建 Nest 那套的镜像（不启动，见目标注释）"
 	@echo "    make nest-up / nest-down / nest-logs   第二后端的启停与日志（共用同一个库，先读 §13.2）"
+	@echo "    make backup                 热备份数据库与 storage/（在宿主机执行；保留 $(BACKUP_KEEP_DAYS) 天）"
 	@echo ""
 	@echo "  单个包的 check/test 直接调 pnpm --dir 或 cargo（这里只保留跨包编排）。"
 
@@ -227,6 +236,11 @@ check:
 	$(PNPM) --dir $(NEST_CLIENT_DIR) run typecheck
 	$(CARGO) check $(CARGO_SERVER_ARGS) --tests
 	$(CARGO) check $(CARGO_CLIENT_ARGS) --tests
+	$(CARGO) fmt $(CARGO_SERVER_ARGS) -- --check
+	$(CARGO) fmt $(CARGO_CLIENT_ARGS) -- --check
+	$(RUSTFMT) --edition 2021 --check $(SHARED_RUST_FILES)
+	$(CARGO) clippy $(CARGO_SERVER_ARGS) --tests -- -D warnings
+	$(CARGO) clippy $(CARGO_CLIENT_ARGS) --tests -- -D warnings
 
 test:
 	$(PNPM) --dir $(NEST_SERVER_DIR) run test
@@ -314,3 +328,17 @@ deploy-restart:
 
 deploy-down:
 	ssh $(DEPLOY_HOST) "cd $(DEPLOY_DIR) && docker compose down"
+
+# Runs on the deployed host: `docker compose exec` reaches the Rust binary, whose
+# `--backup` uses `VACUUM INTO` for a consistent copy while the service keeps
+# running. Media files live outside SQLite, so they get their own tarball.
+backup:
+	@mkdir -p "$(BACKUP_DIR)"
+	@STAMP=$$(date +%Y%m%d-%H%M%S); \
+	docker compose exec -T app /app/kestrel-studio --backup "data/backup-$$STAMP.db" \
+		&& mv "data/backup-$$STAMP.db" "$(BACKUP_DIR)/kestrel-studio-$$STAMP.db" \
+		&& tar -czf "$(BACKUP_DIR)/storage-$$STAMP.tar.gz" -C "$(CURDIR)" storage \
+		&& find "$(BACKUP_DIR)" -maxdepth 1 -type f \
+			\( -name 'kestrel-studio-*.db' -o -name 'storage-*.tar.gz' \) \
+			-mtime +$(BACKUP_KEEP_DAYS) -delete \
+		&& echo "backup: $(BACKUP_DIR)/kestrel-studio-$$STAMP.db"

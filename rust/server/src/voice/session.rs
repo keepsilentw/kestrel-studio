@@ -215,7 +215,12 @@ impl VoiceCall {
         if self.upstream.is_some() {
             return;
         }
-        let conversation_id = match self.state.conversations.create(self.user_id, "语音会话").await {
+        let conversation_id = match self
+            .state
+            .conversations
+            .create(self.user_id, "语音会话")
+            .await
+        {
             Ok(id) => id,
             Err(error) => {
                 tracing::warn!(%error, "the voice conversation could not be opened");
@@ -294,8 +299,10 @@ impl VoiceCall {
                     self.assistant_text.push('\n');
                 }
                 self.assistant_text.push_str(trimmed);
-                self.send(ServerFrame::AssistantText { text: trimmed.to_string() })
-                    .await;
+                self.send(ServerFrame::AssistantText {
+                    text: trimmed.to_string(),
+                })
+                .await;
             }
             RealtimeEvent::Audio(pcm) => {
                 if self.interrupted {
@@ -308,15 +315,22 @@ impl VoiceCall {
                 }
                 self.send(ServerFrame::Audio { pcm }).await
             }
-            RealtimeEvent::FunctionCall { call_id, name, arguments } => {
+            RealtimeEvent::FunctionCall {
+                call_id,
+                name,
+                arguments,
+            } => {
                 if self.interrupted {
                     // Emitted by the answer the user stopped. The turn is closed, so
                     // running it would spend a generation nobody asked to keep.
                     return;
                 }
                 self.pending_calls.push((call_id, name.clone(), arguments));
-                self.send(ServerFrame::ToolCall { name, status: "running".to_string() })
-                    .await;
+                self.send(ServerFrame::ToolCall {
+                    name,
+                    status: "running".to_string(),
+                })
+                .await;
             }
             RealtimeEvent::ResponseDone => {
                 self.responding = false;
@@ -398,8 +412,10 @@ impl VoiceCall {
         self.assistant_text = String::new();
         self.tool_calls = Vec::new();
         self.tool_rounds = 0;
-        self.send(ServerFrame::Transcript { text: transcript.to_string() })
-            .await;
+        self.send(ServerFrame::Transcript {
+            text: transcript.to_string(),
+        })
+        .await;
     }
 
     async fn dispatch_pending(&mut self) {
@@ -421,7 +437,14 @@ impl VoiceCall {
         for (call_id, name, arguments) in calls {
             let parsed = parse_tool_arguments(&arguments);
             let outcome = registry
-                .execute(&name, &parsed, ToolContext { conversation_id, message_id })
+                .execute(
+                    &name,
+                    &parsed,
+                    ToolContext {
+                        conversation_id,
+                        message_id,
+                    },
+                )
                 .await;
 
             let mut asset_ids = Vec::new();
@@ -599,7 +622,13 @@ mod tests {
             .expect("user");
         let mut call = VoiceCall::new(state.clone(), 1, out_tx);
         call.attach_upstream(Upstream::from_channels(cmd_tx, event_rx));
-        call.conversation_id = Some(state.conversations.create(1, "语音会话").await.expect("conversation"));
+        call.conversation_id = Some(
+            state
+                .conversations
+                .create(1, "语音会话")
+                .await
+                .expect("conversation"),
+        );
         let expected = call.conversation_id;
         assert!(expected.is_some());
         (call, cmd_rx, event_tx, out_rx, state)
@@ -624,15 +653,24 @@ mod tests {
             .await;
 
         let conversation_id = call.conversation_id.expect("conversation");
-        let views = state.conversations.views(conversation_id).await.expect("views");
+        let views = state
+            .conversations
+            .views(conversation_id)
+            .await
+            .expect("views");
         assert_eq!(views.len(), 2, "user row plus the assistant placeholder");
         assert_eq!(views[0].content, "画一只红隼");
         assert_eq!(views[0].mode, None, "a voice turn has no mode");
-        assert!(views[1].content.is_empty(), "the placeholder is not painted yet");
+        assert!(
+            views[1].content.is_empty(),
+            "the placeholder is not painted yet"
+        );
         call.assistant_message_id = Some(views[1].id);
 
         assert!(
-            frames(&mut out).iter().any(|frame| frame.contains("\"type\":\"transcript\"")),
+            frames(&mut out)
+                .iter()
+                .any(|frame| frame.contains("\"type\":\"transcript\"")),
             "the browser is told what was heard"
         );
         match commands.recv().await.expect("a command") {
@@ -645,11 +683,17 @@ mod tests {
     async fn audio_stops_flowing_after_the_endpoint_refuses_this_utterance() {
         let (mut call, mut commands, _events, mut out, _state) = fixture().await;
 
-        call.receive(ClientFrame::Audio { pcm: "AAA=".into() }).await;
-        assert!(matches!(commands.recv().await, Some(Command::AppendAudio(_))));
+        call.receive(ClientFrame::Audio { pcm: "AAA=".into() })
+            .await;
+        assert!(matches!(
+            commands.recv().await,
+            Some(Command::AppendAudio(_))
+        ));
 
-        call.on_realtime(RealtimeEvent::Failed("buffer overflow".into())).await;
-        call.receive(ClientFrame::Audio { pcm: "BBB=".into() }).await;
+        call.on_realtime(RealtimeEvent::Failed("buffer overflow".into()))
+            .await;
+        call.receive(ClientFrame::Audio { pcm: "BBB=".into() })
+            .await;
         // Refusing does not reset the count; only a commit does, because the number
         // is what distinguishes an empty microphone from a rejected buffer for the
         // utterance that is still being described.
@@ -670,17 +714,23 @@ mod tests {
         // One error line per turn, however many refusals follow it.
         let first = frames(&mut out);
         assert_eq!(
-            first.iter().filter(|frame| frame.contains("\"type\":\"error\"")).count(),
+            first
+                .iter()
+                .filter(|frame| frame.contains("\"type\":\"error\""))
+                .count(),
             1,
             "{first:?}"
         );
-        call.on_realtime(RealtimeEvent::Failed("buffer overflow".into())).await;
+        call.on_realtime(RealtimeEvent::Failed("buffer overflow".into()))
+            .await;
         // The second refusal says nothing new - **but the turn that was just committed
         // still has to close on the wire**, and that frame is what the page's button
         // waits for. Asserting the channel was silent here was pinning the hole.
         let rest = frames(&mut out);
         assert_eq!(
-            rest.iter().filter(|frame| frame.contains("\"type\":\"error\"")).count(),
+            rest.iter()
+                .filter(|frame| frame.contains("\"type\":\"error\""))
+                .count(),
             0,
             "a run of failures is one problem: {rest:?}"
         );
@@ -703,17 +753,24 @@ mod tests {
         );
         call.busy = true;
 
-        call.on_realtime(RealtimeEvent::Failed("额度不足".into())).await;
+        call.on_realtime(RealtimeEvent::Failed("额度不足".into()))
+            .await;
 
         assert!(!call.busy, "the turn is over even though it failed");
         assert!(call.assistant_message_id.is_none());
-        let views = state.conversations.views(conversation_id).await.expect("views");
+        let views = state
+            .conversations
+            .views(conversation_id)
+            .await
+            .expect("views");
         assert_eq!(
             views.last().expect("assistant").content,
             EMPTY_TURN_NOTE,
             "an empty placeholder would orphan the user row"
         );
-        assert!(frames(&mut out).iter().any(|frame| frame.contains("\"type\":\"done\"")));
+        assert!(frames(&mut out)
+            .iter()
+            .any(|frame| frame.contains("\"type\":\"done\"")));
     }
 
     #[tokio::test]
@@ -729,11 +786,19 @@ mod tests {
         );
 
         for segment in ["第一句\n", "  ", "第二句"] {
-            call.on_realtime(RealtimeEvent::AssistantText(segment.to_string())).await;
+            call.on_realtime(RealtimeEvent::AssistantText(segment.to_string()))
+                .await;
         }
-        assert_eq!(call.assistant_text, "第一句\n第二句", "blank segments add nothing");
+        assert_eq!(
+            call.assistant_text, "第一句\n第二句",
+            "blank segments add nothing"
+        );
         call.finalize_turn().await;
-        let views = state.conversations.views(conversation_id).await.expect("views");
+        let views = state
+            .conversations
+            .views(conversation_id)
+            .await
+            .expect("views");
         assert_eq!(views.last().expect("assistant").content, "第一句\n第二句");
         assert_eq!(
             frames(&mut out)
@@ -752,7 +817,10 @@ mod tests {
         assert!(call.busy);
 
         call.receive(ClientFrame::Commit).await;
-        assert!(commands.try_recv().is_err(), "the UI disables the button; a stray press is dropped");
+        assert!(
+            commands.try_recv().is_err(),
+            "the UI disables the button; a stray press is dropped"
+        );
     }
 
     /// The barge-in, server half: the page has already gone silent, and this is
@@ -777,16 +845,31 @@ mod tests {
 
         call.receive(ClientFrame::Cancel).await;
 
-        assert!(matches!(commands.recv().await, Some(Command::CancelResponse)));
-        assert!(!call.busy, "the turn is over, so the next utterance can be accepted");
+        assert!(matches!(
+            commands.recv().await,
+            Some(Command::CancelResponse)
+        ));
+        assert!(
+            !call.busy,
+            "the turn is over, so the next utterance can be accepted"
+        );
         assert!(!call.responding);
-        assert!(call.interrupted, "the endpoint still owes a response.done for it");
+        assert!(
+            call.interrupted,
+            "the endpoint still owes a response.done for it"
+        );
         let closed = frames(&mut out);
         assert!(
-            closed.iter().any(|frame| frame.contains("\"type\":\"done\"")),
+            closed
+                .iter()
+                .any(|frame| frame.contains("\"type\":\"done\"")),
             "the browser is told the turn closed: {closed:?}"
         );
-        let views = state.conversations.views(conversation_id).await.expect("views");
+        let views = state
+            .conversations
+            .views(conversation_id)
+            .await
+            .expect("views");
         assert_eq!(
             views.last().expect("assistant").content,
             "我先画一只红隼",
@@ -818,7 +901,10 @@ mod tests {
         ));
 
         call.receive(ClientFrame::Cancel).await;
-        assert!(call.pending_calls.is_empty(), "an interrupted call is not run");
+        assert!(
+            call.pending_calls.is_empty(),
+            "an interrupted call is not run"
+        );
         assert!(
             frames(&mut out)
                 .iter()
@@ -827,24 +913,32 @@ mod tests {
         );
 
         // The remainder of the cancelled answer, still on its way.
-        call.on_realtime(RealtimeEvent::Audio("AAA=".to_string())).await;
-        call.on_realtime(RealtimeEvent::AssistantText("，稍等".to_string())).await;
+        call.on_realtime(RealtimeEvent::Audio("AAA=".to_string()))
+            .await;
+        call.on_realtime(RealtimeEvent::AssistantText("，稍等".to_string()))
+            .await;
         call.on_realtime(RealtimeEvent::FunctionCall {
             call_id: "call-2".to_string(),
             name: "generate_image".to_string(),
             arguments: "{}".to_string(),
         })
         .await;
-        assert!(frames(&mut out).is_empty(), "nothing of the cancelled turn reaches the page");
+        assert!(
+            frames(&mut out).is_empty(),
+            "nothing of the cancelled turn reaches the page"
+        );
         assert!(call.pending_calls.is_empty());
 
         // The endpoint's own close for it arrives and is swallowed: the turn was
         // already finalised, and a second `done` would hand back a button the user
         // is already holding down.
         call.on_realtime(RealtimeEvent::ResponseDone).await;
-        assert!(frames(&mut out).is_empty(), "the swallowed close sends nothing");
+        assert!(
+            frames(&mut out).is_empty(),
+            "the swallowed close sends nothing"
+        );
         assert!(!call.interrupted);
-        while let Ok(command) = commands.try_recv() {
+        for command in std::iter::from_fn(|| commands.try_recv().ok()) {
             assert!(
                 !matches!(command, Command::ToolOutput { .. }),
                 "a dropped call must not be answered upstream: {command:?}"
@@ -869,7 +963,9 @@ mod tests {
         assert!(call.busy && !call.responding);
         call.receive(ClientFrame::Cancel).await;
         assert!(
-            !commands.try_recv().is_ok_and(|command| matches!(command, Command::CancelResponse)),
+            !commands
+                .try_recv()
+                .is_ok_and(|command| matches!(command, Command::CancelResponse)),
             "nothing to cancel upstream"
         );
         assert!(call.busy, "the turn is untouched");
@@ -910,7 +1006,10 @@ mod tests {
 
         call.receive(ClientFrame::Cancel).await;
 
-        assert!(matches!(commands.recv().await, Some(Command::CancelResponse)));
+        assert!(matches!(
+            commands.recv().await,
+            Some(Command::CancelResponse)
+        ));
         assert!(
             frames(&mut out)
                 .iter()
@@ -935,14 +1034,17 @@ mod tests {
 
         call.on_realtime(RealtimeEvent::ResponseDone).await;
 
-        assert!(call.pending_calls.is_empty(), "the calls are dropped, not replayed");
+        assert!(
+            call.pending_calls.is_empty(),
+            "the calls are dropped, not replayed"
+        );
         assert!(
             frames(&mut out)
                 .iter()
                 .any(|frame| frame.contains("\"type\":\"done\"")),
             "the turn still closes on the wire"
         );
-        while let Ok(command) = commands.try_recv() {
+        if let Ok(command) = commands.try_recv() {
             panic!("a dispatch with no row must not reach upstream: {command:?}");
         }
     }
@@ -1104,9 +1206,16 @@ mod tests {
         // A response with nothing pending now closes the turn, and the trail is
         // written down even though the assistant said nothing.
         call.on_realtime(RealtimeEvent::ResponseDone).await;
-        let views = state.conversations.views(conversation_id).await.expect("views");
+        let views = state
+            .conversations
+            .views(conversation_id)
+            .await
+            .expect("views");
         let assistant = views.last().expect("assistant");
-        assert_eq!(assistant.content, "", "a tools-only turn has no speech to store");
+        assert_eq!(
+            assistant.content, "",
+            "a tools-only turn has no speech to store"
+        );
         let records = assistant.tool_calls.as_ref().expect("trail");
         assert_eq!(records.len(), 1);
         assert_eq!(records[0].name, "no_such_tool");
@@ -1140,9 +1249,17 @@ mod tests {
             })
             .await;
             call.on_realtime(RealtimeEvent::ResponseDone).await;
-            assert_eq!(next_label(&mut labels).await, "tool_output", "round {round}");
+            assert_eq!(
+                next_label(&mut labels).await,
+                "tool_output",
+                "round {round}"
+            );
             if round + 1 < MAX_TOOL_ROUNDS {
-                assert_eq!(next_label(&mut labels).await, "create_response", "round {round}");
+                assert_eq!(
+                    next_label(&mut labels).await,
+                    "create_response",
+                    "round {round}"
+                );
                 asked += 1;
             } else {
                 assert!(
@@ -1153,7 +1270,11 @@ mod tests {
         }
 
         assert_eq!(call.tool_rounds, MAX_TOOL_ROUNDS);
-        assert_eq!(asked, MAX_TOOL_ROUNDS - 1, "the last round asks for nothing");
+        assert_eq!(
+            asked,
+            MAX_TOOL_ROUNDS - 1,
+            "the last round asks for nothing"
+        );
         let sent = frames(&mut out);
         assert!(
             sent.iter()

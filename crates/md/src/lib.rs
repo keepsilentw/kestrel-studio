@@ -25,7 +25,6 @@
 //! measurements behind that number, and the catch that plays the same role on the Nest side,
 //! are in docs/verification.md §46.7.
 
-
 /// HTML text/attribute escaping.
 ///
 /// Stricter than the Handlebars default, which leaves `'` alone: the templates
@@ -168,10 +167,7 @@ fn render(source: &str, depth: usize) -> String {
         }
 
         if let Some((level, text)) = heading(line) {
-            out.push_str(&format!(
-                "<h{level}>{}</h{level}>\n",
-                inline(text)
-            ));
+            out.push_str(&format!("<h{level}>{}</h{level}>\n", inline(text)));
             index += 1;
             continue;
         }
@@ -442,7 +438,8 @@ fn render_list(lines: &[&str], index: &mut usize, indent: usize, out: &mut Strin
         let Some(current_mark) = item_mark(line) else {
             break;
         };
-        if is_thematic_break(line) || !same_list(current_mark, mark) || leading_width(raw) < indent {
+        if is_thematic_break(line) || !same_list(current_mark, mark) || leading_width(raw) < indent
+        {
             break;
         }
 
@@ -452,12 +449,14 @@ fn render_list(lines: &[&str], index: &mut usize, indent: usize, out: &mut Strin
         let mut gap = false;
 
         loop {
-            let Some(raw_child) = lines.get(*index) else { break };
+            let Some(raw_child) = lines.get(*index) else {
+                break;
+            };
             let child = raw_child.trim_end();
             if child.is_empty() {
-                let deeper_follows = lines.get(*index + 1).is_some_and(|next| {
-                    leading_width(next) > indent && !next.trim().is_empty()
-                });
+                let deeper_follows = lines
+                    .get(*index + 1)
+                    .is_some_and(|next| leading_width(next) > indent && !next.trim().is_empty());
                 if !deeper_follows {
                     break;
                 }
@@ -476,7 +475,13 @@ fn render_list(lines: &[&str], index: &mut usize, indent: usize, out: &mut Strin
                         break;
                     }
                     let mut nested = String::new();
-                    render_list(lines, index, leading_width(raw_child), &mut nested, depth + 1);
+                    render_list(
+                        lines,
+                        index,
+                        leading_width(raw_child),
+                        &mut nested,
+                        depth + 1,
+                    );
                     blocks.push(Block::Html(nested));
                     continue;
                 }
@@ -641,7 +646,11 @@ fn item_mark(line: &str) -> Option<ItemMark> {
         if !(rest.is_empty() || rest.starts_with(' ') || rest.starts_with('\t')) {
             return None;
         }
-        return Some(ItemMark { ordered: false, marker: first, number: None });
+        return Some(ItemMark {
+            ordered: false,
+            marker: first,
+            number: None,
+        });
     }
     let digits = trimmed.chars().take_while(|c| c.is_ascii_digit()).count();
     if digits == 0 || digits > 9 {
@@ -657,7 +666,11 @@ fn item_mark(line: &str) -> Option<ItemMark> {
         return None;
     }
     let number = trimmed[..digits].parse::<u32>().ok();
-    Some(ItemMark { ordered: true, marker: delimiter, number })
+    Some(ItemMark {
+        ordered: true,
+        marker: delimiter,
+        number,
+    })
 }
 
 /// The item's own text, marker removed. Empty items strip down to `""`.
@@ -764,14 +777,18 @@ fn links(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(open) = rest.find('[') {
-        let Some(close) = rest[open + 1..].find(']') else { break };
+        let Some(close) = rest[open + 1..].find(']') else {
+            break;
+        };
         let label_end = open + 1 + close;
         if !rest[label_end + 1..].starts_with('(') {
             out.push_str(&rest[..open + 1]);
             rest = &rest[open + 1..];
             continue;
         }
-        let Some(paren_end) = rest[label_end + 2..].find(')') else { break };
+        let Some(paren_end) = rest[label_end + 2..].find(')') else {
+            break;
+        };
         let url = &rest[label_end + 2..label_end + 2 + paren_end];
         let label = &rest[open + 1..label_end];
         let tail = label_end + 2 + paren_end + 1;
@@ -789,7 +806,6 @@ fn links(text: &str) -> String {
     out
 }
 
-
 /// A GFM table: a header row carrying pipes, a `---` delimiter row, then rows that keep
 /// the pipes. Emits `marked`'s shape so a turn that streamed past as HTML and the same
 /// turn re-rendered after a reload cannot be told apart.
@@ -801,14 +817,28 @@ fn table_block(lines: &[&str], index: usize, out: &mut String) -> Option<usize> 
     let columns = aligns.len();
 
     out.push_str("<table>\n<thead>\n<tr>");
-    for (cell, align) in fit_columns(split_cells(header), columns).iter().zip(&aligns) {
-        out.push_str(&format!("<th{}>{}</th>", align.style(), inline(cell.trim())));
+    for (cell, align) in fit_columns(split_cells(header), columns)
+        .iter()
+        .zip(&aligns)
+    {
+        out.push_str(&format!(
+            "<th{}>{}</th>",
+            align.style(),
+            inline(cell.trim())
+        ));
     }
     out.push_str("</tr>\n</thead>\n<tbody>\n");
     for row in index + 2..end {
         out.push_str("<tr>");
-        for (cell, align) in fit_columns(split_cells(lines[row]), columns).iter().zip(&aligns) {
-            out.push_str(&format!("<td{}>{}</td>", align.style(), inline(cell.trim())));
+        for (cell, align) in fit_columns(split_cells(lines[row]), columns)
+            .iter()
+            .zip(&aligns)
+        {
+            out.push_str(&format!(
+                "<td{}>{}</td>",
+                align.style(),
+                inline(cell.trim())
+            ));
         }
         out.push_str("</tr>\n");
     }

@@ -1,5 +1,6 @@
 use futures_util::StreamExt;
 use serde::Serialize;
+use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 
@@ -8,6 +9,16 @@ use crate::config::AppConfig;
 use crate::error::AppError;
 
 use super::InputItem;
+
+/// The provider answers headers quickly; a connection that never produces them
+/// would otherwise hold a turn slot forever.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(60);
+
+/// Image rounds can be silent for tens of seconds, so this is deliberately far
+/// above normal latency. It only catches a half-open stream: no bytes at all for
+/// three minutes ends the turn with `turn_error` instead of leaving the page
+/// locked on "正在生成…".
+const STREAM_IDLE_TIMEOUT: Duration = Duration::from_secs(180);
 
 /// A tool the model may call. `parameters` is a JSON Schema object.
 #[derive(Debug, Clone, Serialize)]
@@ -113,26 +124,35 @@ impl ResponsesClient {
         let url = format!("{}/compatible-mode/v1/responses", config.bailian.base_url);
         let body = build_body(config, &request);
 
-        let response = http
-            .post(&url)
-            .bearer_auth(api_key)
-            .header(reqwest::header::ACCEPT, "text/event-stream")
-            .json(&body)
-            .send()
-            .await
-            .map_err(|error| AppError::internal(anyhow::anyhow!("Bailian request: {error}")))?;
+        let response = tokio::time::timeout(
+            CONNECT_TIMEOUT,
+            http.post(&url)
+                .bearer_auth(api_key)
+                .header(reqwest::header::ACCEPT, "text/event-stream")
+                .json(&body)
+                .send(),
+        )
+        .await
+        .map_err(|_| {
+            AppError::internal(anyhow::anyhow!(
+                "Bailian request timed out after {}s",
+                CONNECT_TIMEOUT.as_secs()
+            ))
+        })?
+        .map_err(|error| AppError::internal(anyhow::anyhow!("Bailian request: {error}")))?;
 
         let status = response.status();
         if !status.is_success() {
-            let raw = response
-                .text()
-                .await
-                .unwrap_or_default();
+            let raw = response.text().await.unwrap_or_default();
             let truncated: String = raw.chars().take(300).collect();
             return Err(AppError::internal(anyhow::anyhow!(
                 "Bailian request failed (HTTP {}): {}",
                 status.as_u16(),
-                if truncated.is_empty() { "no body" } else { &truncated }
+                if truncated.is_empty() {
+                    "no body"
+                } else {
+                    &truncated
+                }
             )));
         }
 
@@ -141,12 +161,22 @@ impl ResponsesClient {
         tokio::spawn(async move {
             let mut parser = SseParser::new();
             let mut pending: Option<PendingCall> = None;
-            while let Some(chunk) = bytes.next().await {
-                let chunk = match chunk {
-                    Ok(value) => value,
-                    Err(error) => {
+            loop {
+                let chunk = match tokio::time::timeout(STREAM_IDLE_TIMEOUT, bytes.next()).await {
+                    Ok(Some(Ok(value))) => value,
+                    Ok(Some(Err(error))) => {
                         let _ = sender
                             .send(StreamEvent::Failed(format!("stream interrupted: {error}")))
+                            .await;
+                        return;
+                    }
+                    Ok(None) => break,
+                    Err(_) => {
+                        let _ = sender
+                            .send(StreamEvent::Failed(format!(
+                                "模型响应超过 {} 秒没有新数据",
+                                STREAM_IDLE_TIMEOUT.as_secs()
+                            )))
                             .await;
                         return;
                     }
@@ -197,7 +227,7 @@ async fn handle_frame(
     data: &str,
     pending: &mut Option<PendingCall>,
     sender: &mpsc::Sender<StreamEvent>,
-    ) -> bool {
+) -> bool {
     let Some(name) = event else { return true };
     let Ok(payload) = serde_json::from_str::<serde_json::Value>(data) else {
         tracing::warn!("skipping unparsable SSE frame for event {name}");
@@ -215,7 +245,9 @@ async fn handle_frame(
             .map(|value| StreamEvent::Text(value.to_string())),
         "response.output_item.added" => {
             let item = payload.get("item");
-            if item.and_then(|value| value.get("type")).and_then(serde_json::Value::as_str)
+            if item
+                .and_then(|value| value.get("type"))
+                .and_then(serde_json::Value::as_str)
                 == Some("function_call")
             {
                 *pending = Some(PendingCall {
@@ -368,8 +400,7 @@ mod tests {
         let mut held: Option<PendingCall> = None;
         for (name, data) in frames {
             assert!(
-                handle_frame(&Some(name.to_string()), data, &mut held, &sender)
-                    .await,
+                handle_frame(&Some(name.to_string()), data, &mut held, &sender).await,
                 "the stream keeps going"
             );
         }
@@ -422,10 +453,7 @@ mod tests {
         // `try_recv`, not `recv().await`: the sender is still alive here, so
         // awaiting would park forever on an empty queue instead of answering the
         // question, which is only whether anything else was emitted.
-        assert!(matches!(
-            receiver.try_recv(),
-            Err(TryRecvError::Empty),
-        ));
+        assert!(matches!(receiver.try_recv(), Err(TryRecvError::Empty),));
     }
 
     #[tokio::test]

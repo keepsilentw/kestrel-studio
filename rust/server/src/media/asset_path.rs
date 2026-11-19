@@ -95,7 +95,10 @@ mod tests {
         assert_eq!(stored_asset_name("/a/b/"), "b");
         let resolved = resolve_asset_path(&config, "c.png");
         assert_eq!(resolved, PathBuf::from("/tmp/kestrel-test-storage/c.png"));
-        assert!(starts_under(&resolved, Path::new("/tmp/kestrel-test-storage")));
+        assert!(starts_under(
+            &resolved,
+            Path::new("/tmp/kestrel-test-storage")
+        ));
         assert!(!starts_under(
             &PathBuf::from("/tmp/other/x.png"),
             Path::new("/tmp/kestrel-test-storage")
@@ -125,7 +128,10 @@ mod tests {
         let config = AppConfig::test("storage", "https://example.test");
         let resolved = resolve_asset_path(&config, "frame.png");
         assert!(resolved.is_absolute());
-        assert_eq!(resolved.file_name().map(|name| name.to_str()).flatten(), Some("frame.png"));
+        assert_eq!(
+            resolved.file_name().and_then(|name| name.to_str()),
+            Some("frame.png")
+        );
         assert!(absolute("./storage").ends_with("storage"));
         assert_eq!(absolute("a/../b"), absolute("b"), "dot segments collapse");
     }

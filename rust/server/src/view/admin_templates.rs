@@ -1,12 +1,11 @@
 use super::html::escape;
 use super::render::RenderedMessage;
 
-/// The super admin's pages.
-///
-/// Ported from `views/admin*.hbs`. One thing to keep in mind while reading: these
-/// pages carry **no client script** — plain POST + redirect, like `/login` — so
-/// everything a page needs has to be in the HTML the server prints.
-
+// The super admin's pages.
+//
+// Ported from `views/admin*.hbs`. One thing to keep in mind while reading: these
+// pages carry **no client script** — plain POST + redirect, like `/login` — so
+// everything a page needs has to be in the HTML the server prints.
 pub struct Notice {
     pub text: &'static str,
     pub is_error: bool,
@@ -48,7 +47,9 @@ pub struct AccountChip {
 fn shell(title: &str, menu: &[(&str, &str)], username: &str, main: &str) -> String {
     let links: String = menu
         .iter()
-        .map(|(href, label)| format!("      <a class=\"menu-button\" href=\"{href}\">{label}</a>\n"))
+        .map(|(href, label)| {
+            format!("      <a class=\"menu-button\" href=\"{href}\">{label}</a>\n")
+        })
         .collect();
     format!(
         "<!DOCTYPE html>\n<html lang=\"zh-CN\">\n<head>\n  <meta charset=\"utf-8\">\n  <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n  <title>{title} · Kestrel Studio</title>\n  <link rel=\"icon\" type=\"image/svg+xml\" href=\"/logo.svg\">\n  <link rel=\"stylesheet\" href=\"/assets/main.css\">\n</head>\n<body class=\"admin-page\">\n  <header class=\"topbar\">\n    <a class=\"brand\" href=\"/\">\n      <img class=\"brand-logo\" src=\"/logo.svg\" alt=\"\" width=\"32\" height=\"32\">\n      <span class=\"brand-name\">Kestrel Studio</span>\n    </a>\n\n    <nav class=\"menu\">\n{links}    </nav>\n\n    <div class=\"account\">\n      <div class=\"account-menu\">\n        <span class=\"account-name\">{name}</span>\n        <form action=\"/logout\" method=\"post\" class=\"logout-form\">\n          <button type=\"submit\" class=\"logout-button\">退出登录</button>\n        </form>\n      </div>\n    </div>\n  </header>\n\n{main}</body>\n</html>\n",
@@ -63,13 +64,24 @@ fn notice_html(notice: Option<&Notice>) -> String {
     match notice {
         None => String::new(),
         Some(note) => {
-            let class = if note.is_error { " admin-notice-error" } else { "" };
-            format!("    <p class=\"admin-notice{class}\">{}</p>\n", escape(note.text))
+            let class = if note.is_error {
+                " admin-notice-error"
+            } else {
+                ""
+            };
+            format!(
+                "    <p class=\"admin-notice{class}\">{}</p>\n",
+                escape(note.text)
+            )
         }
     }
 }
 
-pub fn accounts_page(username: &str, accounts: &[PresentedAccount], notice: Option<&Notice>) -> String {
+pub fn accounts_page(
+    username: &str,
+    accounts: &[PresentedAccount],
+    notice: Option<&Notice>,
+) -> String {
     let mut rows = String::new();
     for account in accounts {
         rows.push_str(&format!(
@@ -91,7 +103,11 @@ pub fn accounts_page(username: &str, accounts: &[PresentedAccount], notice: Opti
     );
     shell(
         "账号管理",
-        &[("/", "返回对话"), ("/admin/conversations", "全站会话"), ("/admin/tokens", "设备令牌")],
+        &[
+            ("/", "返回对话"),
+            ("/admin/conversations", "全站会话"),
+            ("/admin/tokens", "设备令牌"),
+        ],
         username,
         &main,
     )
@@ -110,7 +126,9 @@ pub fn tokens_page(username: &str, rows: &[TokenRow]) -> String {
         ));
     }
     if body.is_empty() {
-        body.push_str("          <tr><td colspan=\"4\" class=\"admin-empty\">没有有效令牌</td></tr>\n");
+        body.push_str(
+            "          <tr><td colspan=\"4\" class=\"admin-empty\">没有有效令牌</td></tr>\n",
+        );
     }
 
     let main = format!(
@@ -138,7 +156,11 @@ pub fn conversations_page(
     site_total: usize,
     notice: Option<&Notice>,
 ) -> String {
-    let all_active = if owner_name.is_none() { " is-active" } else { "" };
+    let all_active = if owner_name.is_none() {
+        " is-active"
+    } else {
+        ""
+    };
     let mut chip_items = format!("        <li><a class=\"admin-chip{all_active}\" href=\"/admin/conversations\">全部</a></li>\n");
     for chip in chips {
         let active = if chip.is_active { " is-active" } else { "" };
@@ -153,7 +175,10 @@ pub fn conversations_page(
     for row in rows {
         let deleted = match row.deleted_at_label.as_deref() {
             None => String::new(),
-            Some(label) => format!("\n              <span class=\"admin-tag\">已删除 · {}</span>", escape(label)),
+            Some(label) => format!(
+                "\n              <span class=\"admin-tag\">已删除 · {}</span>",
+                escape(label)
+            ),
         };
         body.push_str(&format!(
             "          <tr>\n            <td>\n              {}{deleted}\n            </td>\n            <td>{owner}</td>\n            <td>{updated}</td>\n            <td><a href=\"/admin/conversations/{id}\">查看</a></td>\n          </tr>\n",
@@ -181,17 +206,17 @@ pub fn conversations_page(
     );
     shell(
         "全站会话",
-        &[("/", "返回对话"), ("/admin", "账号管理"), ("/admin/tokens", "设备令牌")],
+        &[
+            ("/", "返回对话"),
+            ("/admin", "账号管理"),
+            ("/admin/tokens", "设备令牌"),
+        ],
         username,
         &main,
     )
 }
 
-pub fn account_page(
-    username: &str,
-    account: &PresentedAccount,
-    notice: Option<&Notice>,
-) -> String {
+pub fn account_page(username: &str, account: &PresentedAccount, notice: Option<&Notice>) -> String {
     let main = format!(
         "  <main class=\"admin-main\">\n{note}    <section class=\"admin-card\">\n      <h2 class=\"admin-title\">{name}</h2>\n      <dl class=\"admin-facts\">\n        <dt>角色</dt><dd>{role}</dd>\n        <dt>会话</dt><dd><a href=\"/admin/conversations?user={id}\">{conversations} 个</a></dd>\n        <dt>资产</dt><dd>{assets} 个</dd>\n        <dt>创建时间</dt><dd>{created}</dd>\n      </dl>\n    </section>\n\n    <section class=\"admin-card\">\n      <h2 class=\"admin-title\">重置密码</h2>\n      <p class=\"admin-hint\">账号名只作显示，实际按本页地址里的账号重置。</p>\n\n      <form class=\"admin-form\" action=\"/admin/users/{id}/password\" method=\"post\">\n        <label class=\"admin-field\">\n          <span>账号</span>\n          <input name=\"username\" type=\"text\" value=\"{name}\" readonly autocomplete=\"username\">\n        </label>\n        <label class=\"admin-field\">\n          <span>新密码</span>\n          <input name=\"password\" type=\"password\" required autocomplete=\"new-password\">\n        </label>\n        <button type=\"submit\" class=\"admin-button\">重置密码</button>\n      </form>\n    </section>\n\n    <section class=\"admin-card admin-card-danger\">\n      <h2 class=\"admin-title\">删除账号</h2>\n      <p class=\"admin-hint\">\n        将一并删除该账号名下 {conversations} 个会话、{assets} 个资产文件，\n        以及这些会话的全部消息与任务记录。此操作不可撤销。\n      </p>\n      <a class=\"admin-button admin-button-danger\" href=\"/admin/users/{id}/delete\">删除账号</a>\n    </section>\n  </main>\n",
         note = notice_html(notice),
@@ -221,7 +246,11 @@ pub fn delete_page(username: &str, account: &PresentedAccount) -> String {
     );
     shell(
         "删除账号",
-        &[("/", "返回对话"), ("/admin", "账号管理"), ("/admin/tokens", "设备令牌")],
+        &[
+            ("/", "返回对话"),
+            ("/admin", "账号管理"),
+            ("/admin/tokens", "设备令牌"),
+        ],
         username,
         &main,
     )
@@ -245,9 +274,16 @@ pub fn conversation_page(
     }
     let deleted = match deleted_at_label {
         None => String::new(),
-        Some(label) => format!("\n      · <span class=\"admin-tag\">已于 {} 被用户删除</span>", escape(label)),
+        Some(label) => format!(
+            "\n      · <span class=\"admin-tag\">已于 {} 被用户删除</span>",
+            escape(label)
+        ),
     };
-    let scope = if is_own { "· 这是你自己的会话" } else { "· 只读视图，不能在此发送消息" };
+    let scope = if is_own {
+        "· 这是你自己的会话"
+    } else {
+        "· 只读视图，不能在此发送消息"
+    };
 
     let main = format!(
         "  <main class=\"admin-main\"\n    <p class=\"admin-banner\">\n      {owner} 的会话 · 更新于 {updated}{deleted}\n      {scope}\n    </p>\n    <h2 class=\"admin-title\">{title}</h2>\n\n    <div class=\"stream admin-stream\">\n{turns}    </div>\n  </main>\n",

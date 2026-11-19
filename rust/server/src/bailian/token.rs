@@ -19,7 +19,7 @@ fn home_dir() -> Option<PathBuf> {
     std::env::var_os("HOME")
         .or_else(|| std::env::var_os("USERPROFILE"))
         .map(PathBuf::from)
-        .or_else(|| dirs_fallback())
+        .or_else(dirs_fallback)
 }
 
 /// `node:os.homedir()` has no direct equivalent in std. The env vars above cover
@@ -43,7 +43,11 @@ async fn token_from_cc_switch_db() -> Option<String> {
     let path = match non_empty(std::env::var("CC_SWITCH_DB").ok().as_deref()) {
         Some(explicit) => explicit,
         None => match home_dir() {
-            Some(home) => home.join(".cc-switch").join("cc-switch.db").to_string_lossy().into_owned(),
+            Some(home) => home
+                .join(".cc-switch")
+                .join("cc-switch.db")
+                .to_string_lossy()
+                .into_owned(),
             None => return None,
         },
     };
@@ -55,22 +59,20 @@ async fn token_from_cc_switch_db() -> Option<String> {
         .filename(&path)
         .read_only(true)
         .create_if_missing(false);
-    let mut connection = sqlx::sqlite::SqliteConnection::connect_with(&options).await.ok()?;
-
-    let row = sqlx::query("SELECT settings_config FROM providers WHERE id = ?1 AND app_type = 'codex'")
-        .bind(provider_id())
-        .fetch_optional(&mut connection)
+    let mut connection = sqlx::sqlite::SqliteConnection::connect_with(&options)
         .await
         .ok()?;
+
+    let row =
+        sqlx::query("SELECT settings_config FROM providers WHERE id = ?1 AND app_type = 'codex'")
+            .bind(provider_id())
+            .fetch_optional(&mut connection)
+            .await
+            .ok()?;
     let raw: String = row?.try_get("settings_config").ok()?;
 
     let parsed: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    non_empty(
-        parsed
-            .get("auth")?
-            .get("OPENAI_API_KEY")?
-            .as_str(),
-    )
+    non_empty(parsed.get("auth")?.get("OPENAI_API_KEY")?.as_str())
 }
 
 /// Fallback: read the bearer token cc-switch wrote into the Codex provider block

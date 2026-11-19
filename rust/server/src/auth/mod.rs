@@ -1,10 +1,11 @@
 pub mod bcrypt;
 pub mod blowfish_tables;
 pub mod guards;
+pub mod login_limit;
 pub mod password;
 pub mod roles;
 pub mod routes;
 pub mod seed;
-pub mod session;
 pub mod service;
+pub mod session;
 pub mod tokens;

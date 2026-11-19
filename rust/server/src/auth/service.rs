@@ -26,11 +26,16 @@ impl AuthService {
 
     /// Checks credentials the same way the passport strategy did: an unknown
     /// username and a wrong password are indistinguishable to the caller.
-    pub async fn validate(&self, username: &str, password: &str) -> Result<Option<Principal>, AppError> {
-        let row = sqlx::query("SELECT id, username, password_hash, role FROM users WHERE username = ?1")
-            .bind(username)
-            .fetch_optional(&self.pool)
-            .await?;
+    pub async fn validate(
+        &self,
+        username: &str,
+        password: &str,
+    ) -> Result<Option<Principal>, AppError> {
+        let row =
+            sqlx::query("SELECT id, username, password_hash, role FROM users WHERE username = ?1")
+                .bind(username)
+                .fetch_optional(&self.pool)
+                .await?;
         let Some(row) = row else { return Ok(None) };
 
         let stored: String = row.try_get("password_hash")?;
@@ -59,5 +64,4 @@ impl AuthService {
             )
         }))
     }
-
 }

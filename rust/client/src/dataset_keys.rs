@@ -16,11 +16,26 @@
 
 /// Every `dataset().get("…")` literal in `source`, with its byte offset.
 fn dataset_literals(source: &str) -> Vec<(usize, String)> {
-    const CALL: &str = "dataset().get(\"";
+    const CALL: &str = "dataset()";
+    const GET: &str = ".get(";
     let mut found = Vec::new();
     let mut offset = 0;
     while let Some(at) = source[offset..].find(CALL) {
-        let start = offset + at + CALL.len();
+        let mut cursor = offset + at + CALL.len();
+        // rustfmt may break `dataset()\n    .get("…")` across lines, so the
+        // parser skips whitespace instead of matching one fixed byte string.
+        cursor += source[cursor..].len() - source[cursor..].trim_start().len();
+        let Some(rest) = source[cursor..].strip_prefix(GET) else {
+            offset = cursor;
+            continue;
+        };
+        cursor = source.len() - rest.len();
+        cursor += source[cursor..].len() - source[cursor..].trim_start().len();
+        let Some(rest) = source[cursor..].strip_prefix('"') else {
+            offset = cursor;
+            continue;
+        };
+        let start = source.len() - rest.len();
         let Some(end) = source[start..].find('"') else {
             break;
         };
@@ -36,7 +51,13 @@ mod tests {
 
     /// The modules that can touch the DOM. `chat_core` / `voice_core` / `pcm`
     /// cannot, so scanning them would only add files to keep in sync.
-    const DOM_MODULES: [&str; 5] = ["chat_page.rs", "voice_page.rs", "wasm.rs", "audio.rs", "wire.rs"];
+    const DOM_MODULES: [&str; 5] = [
+        "chat_page.rs",
+        "voice_page.rs",
+        "wasm.rs",
+        "audio.rs",
+        "wire.rs",
+    ];
 
     #[test]
     fn dataset_keys_are_camel_case() {
@@ -45,8 +66,12 @@ mod tests {
             let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
                 .join("src")
                 .join(name);
-            let source = std::fs::read_to_string(&path)
-                .unwrap_or_else(|error| panic!("{} must be readable for the contract test: {error}", path.display()));
+            let source = std::fs::read_to_string(&path).unwrap_or_else(|error| {
+                panic!(
+                    "{} must be readable for the contract test: {error}",
+                    path.display()
+                )
+            });
             for (byte, key) in dataset_literals(&source) {
                 checked += 1;
                 assert!(
@@ -67,7 +92,10 @@ mod tests {
     fn the_parser_sees_both_spellings() {
         let source = r#"let a = body.dataset().get("conversation-id");
                          let b = body.dataset().get("conversationId");"#;
-        let keys: Vec<String> = dataset_literals(source).into_iter().map(|(_, key)| key).collect();
+        let keys: Vec<String> = dataset_literals(source)
+            .into_iter()
+            .map(|(_, key)| key)
+            .collect();
         assert_eq!(keys, ["conversation-id", "conversationId"]);
     }
 }

@@ -50,18 +50,15 @@ impl AgentService {
         let state = self.state.clone();
         let mut turn = Turn::default();
 
-        let mut items: Vec<RequestItem> = match state
-            .conversations
-            .build_input_items(conversation_id)
-            .await
-        {
-            Ok(history) => history.into_iter().map(RequestItem::Message).collect(),
-            Err(error) => {
-                turn.failure = Some(error.describe());
-                self.finalize(conversation_id, message_id, &turn).await;
-                return;
-            }
-        };
+        let mut items: Vec<RequestItem> =
+            match state.conversations.build_input_items(conversation_id).await {
+                Ok(history) => history.into_iter().map(RequestItem::Message).collect(),
+                Err(error) => {
+                    turn.failure = Some(error.describe());
+                    self.finalize(conversation_id, message_id, &turn).await;
+                    return;
+                }
+            };
 
         let api_key = match state.require_key().await {
             Ok(key) => key,
@@ -74,7 +71,15 @@ impl AgentService {
 
         for _round in 0..MAX_TOOL_ROUNDS {
             let calls = match self
-                .run_round(&state, &api_key, conversation_id, message_id, mode, &mut items, &mut turn)
+                .run_round(
+                    &state,
+                    &api_key,
+                    conversation_id,
+                    message_id,
+                    mode,
+                    &items,
+                    &mut turn,
+                )
                 .await
             {
                 Ok(calls) => calls,
@@ -87,8 +92,15 @@ impl AgentService {
                 break;
             }
             for call in calls {
-                self.run_tool(&state, conversation_id, message_id, &call, &mut items, &mut turn)
-                    .await;
+                self.run_tool(
+                    &state,
+                    conversation_id,
+                    message_id,
+                    &call,
+                    &mut items,
+                    &mut turn,
+                )
+                .await;
             }
         }
 
@@ -98,6 +110,9 @@ impl AgentService {
     /// One LLM round trip: stream deltas into the journal and collect the tool
     /// calls the model asked for. The history is snapshotted per round because
     /// this loop is stateless — there is no `previous_response_id`.
+    // The round needs the whole turn context; a parameter struct would only
+    // rename the same fields.
+    #[allow(clippy::too_many_arguments)]
     async fn run_round(
         &self,
         state: &AppState,
@@ -105,7 +120,7 @@ impl AgentService {
         conversation_id: i64,
         message_id: i64,
         mode: Mode,
-        items: &mut Vec<RequestItem>,
+        items: &[RequestItem],
         turn: &mut Turn,
     ) -> Result<Vec<ParsedCall>, String> {
         let instructions = mode.build_instructions();
@@ -114,7 +129,7 @@ impl AgentService {
             &state.config,
             api_key,
             StreamRequest {
-                input: items.clone(),
+                input: items.to_vec(),
                 tools: ToolRegistry::specs_for(mode),
                 instructions: Some(&instructions),
             },
@@ -127,16 +142,32 @@ impl AgentService {
             match event {
                 StreamEvent::Reasoning(delta) => {
                     turn.reasoning.push_str(&delta);
-                    self.emit(state, conversation_id, ConversationEvent::Reasoning { message_id, delta })
-                        .await;
+                    self.emit(
+                        state,
+                        conversation_id,
+                        ConversationEvent::Reasoning { message_id, delta },
+                    )
+                    .await;
                 }
                 StreamEvent::Text(delta) => {
                     turn.answer.push_str(&delta);
-                    self.emit(state, conversation_id, ConversationEvent::Text { message_id, delta })
-                        .await;
+                    self.emit(
+                        state,
+                        conversation_id,
+                        ConversationEvent::Text { message_id, delta },
+                    )
+                    .await;
                 }
-                StreamEvent::FunctionCall { call_id, name, arguments } => {
-                    calls.push(ParsedCall { call_id, name, arguments });
+                StreamEvent::FunctionCall {
+                    call_id,
+                    name,
+                    arguments,
+                } => {
+                    calls.push(ParsedCall {
+                        call_id,
+                        name,
+                        arguments,
+                    });
                 }
                 StreamEvent::Failed(message) => return Err(message),
             }
@@ -172,7 +203,10 @@ impl AgentService {
             .execute(
                 &call.name,
                 &arguments,
-                ToolContext { conversation_id, message_id },
+                ToolContext {
+                    conversation_id,
+                    message_id,
+                },
             )
             .await;
 
@@ -223,7 +257,11 @@ impl AgentService {
         });
 
         // The call must be echoed back before its result.
-        items.push(RequestItem::call(&call.call_id, &call.name, &call.arguments));
+        items.push(RequestItem::call(
+            &call.call_id,
+            &call.name,
+            &call.arguments,
+        ));
         items.push(RequestItem::output(&call.call_id, &summary));
     }
 
@@ -238,13 +276,11 @@ impl AgentService {
         let state = self.state.clone();
         let content = match turn.failure.as_deref() {
             None => turn.answer.clone(),
-            Some(reason) => {
-                [turn.answer.clone(), format!("本轮处理失败：{reason}")]
-                    .into_iter()
-                    .filter(|part| !part.is_empty())
-                    .collect::<Vec<_>>()
-                    .join("\n\n")
-            }
+            Some(reason) => [turn.answer.clone(), format!("本轮处理失败：{reason}")]
+                .into_iter()
+                .filter(|part| !part.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n\n"),
         };
         let records = (!turn.tool_records.is_empty()).then_some(turn.tool_records.as_slice());
 

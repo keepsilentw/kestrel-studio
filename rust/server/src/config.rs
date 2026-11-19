@@ -198,8 +198,7 @@ impl AppConfig {
             super_admin: read_super_admin(),
             bailian: BailianConfig {
                 base_url: trim_trailing_slashes(
-                    &read_env("BAILIAN_BASE_URL")
-                        .unwrap_or_else(|| DEFAULT_BASE_URL.to_string()),
+                    &read_env("BAILIAN_BASE_URL").unwrap_or_else(|| DEFAULT_BASE_URL.to_string()),
                 ),
                 chat_model: read_env("BAILIAN_CHAT_MODEL")
                     .unwrap_or_else(|| DEFAULT_CHAT_MODEL.to_string()),
@@ -286,7 +285,11 @@ mod tests {
         }
         // `read_env` already trims and lowercases upstream; this is the value list.
         for raw in ["", "wasmb", "ts", "WAM", "n"] {
-            assert_eq!(ClientBundle::parse(raw), None, "{raw:?} must not pick a client");
+            assert_eq!(
+                ClientBundle::parse(raw),
+                None,
+                "{raw:?} must not pick a client"
+            );
         }
     }
 }

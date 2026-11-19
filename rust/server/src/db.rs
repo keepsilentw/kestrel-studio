@@ -206,18 +206,21 @@ pub async fn apply_schema(pool: &SqlitePool) -> Result<(), crate::error::AppErro
         let rows = sqlx::query(&format!("SELECT name FROM pragma_table_info('{table}')"))
             .fetch_all(pool)
             .await?;
-        let exists = rows
-            .iter()
-            .any(|row| row.try_get::<String, _>("name").is_ok_and(|name| name == column));
+        let exists = rows.iter().any(|row| {
+            row.try_get::<String, _>("name")
+                .is_ok_and(|name| name == column)
+        });
         if !exists {
-            sqlx::query(&format!("ALTER TABLE {table} ADD COLUMN {column} {definition}"))
-                .execute(pool)
-                .await
-                .map_err(|error| {
-                    crate::error::AppError::internal(anyhow::anyhow!(
-                        "adding {table}.{column}: {error}"
-                    ))
-                })?;
+            sqlx::query(&format!(
+                "ALTER TABLE {table} ADD COLUMN {column} {definition}"
+            ))
+            .execute(pool)
+            .await
+            .map_err(|error| {
+                crate::error::AppError::internal(anyhow::anyhow!(
+                    "adding {table}.{column}: {error}"
+                ))
+            })?;
         }
     }
 
@@ -355,12 +358,11 @@ mod tests {
 
         // The three columns that make two backends safe side by side are on the
         // table and survive a second pass (docs/architecture.md §13.2).
-        let owned: Vec<(String,)> = sqlx::query_as(
-            "SELECT name FROM pragma_table_info('messages') WHERE name = 'owner'",
-        )
-        .fetch_all(&pool)
-        .await
-        .expect("table info");
+        let owned: Vec<(String,)> =
+            sqlx::query_as("SELECT name FROM pragma_table_info('messages') WHERE name = 'owner'")
+                .fetch_all(&pool)
+                .await
+                .expect("table info");
         assert_eq!(owned.len(), 1, "messages.owner exists exactly once");
         let leased: Vec<(String,)> = sqlx::query_as(
             "SELECT name FROM pragma_table_info('generation_tasks') WHERE name IN ('claimed_by','claimed_at')",
@@ -405,10 +407,12 @@ mod tests {
             .execute(&pool)
             .await
             .expect("drop");
-        sqlx::query("CREATE INDEX idx_events_conversation ON conversation_events(conversation_id, seq)")
-            .execute(&pool)
-            .await
-            .expect("plain index");
+        sqlx::query(
+            "CREATE INDEX idx_events_conversation ON conversation_events(conversation_id, seq)",
+        )
+        .execute(&pool)
+        .await
+        .expect("plain index");
 
         sqlx::query("INSERT INTO users (id, username, password_hash, role, created_at) VALUES (1,'u','h','user',1)")
             .execute(&pool)
@@ -431,12 +435,11 @@ mod tests {
 
         apply_schema(&pool).await.expect("migrate");
 
-        let kept: Vec<(i64, String)> = sqlx::query_as(
-            "SELECT seq, type FROM conversation_events ORDER BY seq ASC",
-        )
-        .fetch_all(&pool)
-        .await
-        .expect("rows");
+        let kept: Vec<(i64, String)> =
+            sqlx::query_as("SELECT seq, type FROM conversation_events ORDER BY seq ASC")
+                .fetch_all(&pool)
+                .await
+                .expect("rows");
         // The lowest rowid of each contested pair keeps the value every cursor has
         // already been served from; the hidden loser moves to the tail in rowid order.
         let expected: Vec<(i64, String)> = [(1i64, "a"), (2, "c"), (3, "b"), (4, "d")]

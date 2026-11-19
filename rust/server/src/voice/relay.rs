@@ -5,13 +5,12 @@ use crate::net::ws::{encode, Frame, WsDecoder, WsError};
 
 use super::protocol::{parse_client_frame, ClientFrame, ServerFrame};
 
-/// The byte pump on either side of an upgraded voice socket.
-///
-/// Kept separate from the HTTP upgrade on purpose: these two functions take any
-/// `AsyncRead`/`AsyncWrite` pair, so the whole frame loop is testable over an
-/// in-memory duplex without a socket - the one part of the voice path that the
-/// sandbox this is developed in cannot reach is `hyper::upgrade::on` itself.
-
+// The byte pump on either side of an upgraded voice socket.
+//
+// Kept separate from the HTTP upgrade on purpose: these two functions take any
+// `AsyncRead`/`AsyncWrite` pair, so the whole frame loop is testable over an
+// in-memory duplex without a socket - the one part of the voice path that the
+// sandbox this is developed in cannot reach is `hyper::upgrade::on` itself.
 /// What the browser side produced. `Ping` is surfaced rather than answered here so
 /// the single owner of the write half stays the writer, not whoever read a frame.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -116,10 +115,7 @@ mod tests {
     use tokio::io::duplex;
     use tokio::io::AsyncWriteExt;
 
-    fn pair() -> (
-        tokio::io::DuplexStream,
-        tokio::io::DuplexStream,
-    ) {
+    fn pair() -> (tokio::io::DuplexStream, tokio::io::DuplexStream) {
         duplex(4 << 10)
     }
 
@@ -139,7 +135,10 @@ mod tests {
             .await
             .expect("start");
         browser_side
-            .write_all(&encode(&Frame::Text(r#"{"type":"audio","pcm":"AAA="}"#.into()), true))
+            .write_all(&encode(
+                &Frame::Text(r#"{"type":"audio","pcm":"AAA="}"#.into()),
+                true,
+            ))
             .await
             .expect("audio");
         browser_side
@@ -192,15 +191,20 @@ mod tests {
         let bytes = encode(&Frame::Text(r#"{"type":"commit"}"#.into()), true);
         browser_side.write_all(&bytes[..3]).await.expect("head");
         // Nothing yet: the pump must not invent a frame from partial bytes.
-        assert!(matches!(
-            tokio::time::timeout(std::time::Duration::from_millis(50), rx.recv()).await,
-            Err(_)
-        ));
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(50), rx.recv())
+                .await
+                .is_err()
+        );
         browser_side.write_all(&bytes[3..]).await.expect("tail");
         assert_eq!(rx.recv().await, Some(Inbound::Frame(ClientFrame::Commit)));
 
         drop(browser_side);
-        assert_eq!(rx.recv().await, Some(Inbound::Closed(None)), "EOF is a close");
+        assert_eq!(
+            rx.recv().await,
+            Some(Inbound::Closed(None)),
+            "EOF is a close"
+        );
     }
 
     #[tokio::test]

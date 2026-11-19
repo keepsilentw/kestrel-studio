@@ -42,11 +42,7 @@ pub struct IssuedToken {
     pub created_at: i64,
 }
 
-pub async fn issue(
-    pool: &SqlitePool,
-    user_id: i64,
-    label: &str,
-) -> Result<IssuedToken, AppError> {
+pub async fn issue(pool: &SqlitePool, user_id: i64, label: &str) -> Result<IssuedToken, AppError> {
     let token = format!(
         "{TOKEN_PREFIX}{}",
         crate::config::hex::encode(&random_bytes(24))
@@ -146,7 +142,10 @@ mod tests {
 
         let issued = issue(&pool, 1, "  phone  ").await.expect("issue");
         assert!(issued.token.starts_with(TOKEN_PREFIX));
-        assert_eq!(resolve(&pool, &issued.token).await.expect("resolve"), Some(1));
+        assert_eq!(
+            resolve(&pool, &issued.token).await.expect("resolve"),
+            Some(1)
+        );
         assert_eq!(resolve(&pool, "kst_unknown").await.expect("resolve"), None);
 
         let stored: String = sqlx::query("SELECT token_hash FROM api_tokens WHERE id = ?1")

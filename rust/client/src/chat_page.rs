@@ -17,8 +17,8 @@
 //! `/` still loads `/assets/main.js` — the switch is roadmap.md §4 P4, and none of
 //! this module has ever run in a browser (docs/verification.md §13.5).
 
-use std::cell::RefCell;
 use std::cell::Cell;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -238,7 +238,9 @@ fn mode_buttons(document: &Document) -> Result<Vec<HtmlButtonElement>, JsValue> 
 }
 
 fn conversation_id(body: &HtmlElement) -> Option<String> {
-    body.dataset().get("conversationId").filter(|id| !id.is_empty())
+    body.dataset()
+        .get("conversationId")
+        .filter(|id| !id.is_empty())
 }
 
 /// The ids the SSR shell already painted. Without this the replay from
@@ -252,9 +254,17 @@ fn seed_rendered(document: &Document, page: &Handle) {
     };
     let mut page = page.borrow_mut();
     for index in 0..nodes.length() {
-        let Some(node) = nodes.item(index) else { continue };
-        let Some(html) = node.dyn_ref::<HtmlElement>() else { continue };
-        if let Some(raw) = html.dataset().get("messageId").and_then(|value| value.parse::<i64>().ok()) {
+        let Some(node) = nodes.item(index) else {
+            continue;
+        };
+        let Some(html) = node.dyn_ref::<HtmlElement>() else {
+            continue;
+        };
+        if let Some(raw) = html
+            .dataset()
+            .get("messageId")
+            .and_then(|value| value.parse::<i64>().ok())
+        {
             page.journal.note_rendered(raw);
         }
     }
@@ -264,7 +274,11 @@ fn seed_rendered(document: &Document, page: &Handle) {
 /// it when it names a mode this build knows, so the buttons cannot disagree with
 /// the page.
 fn restore_mode(dom: &Dom) -> Mode {
-    let shell = dom.body.dataset().get("mode").and_then(|raw| Mode::from_storage(Some(&raw)));
+    let shell = dom
+        .body
+        .dataset()
+        .get("mode")
+        .and_then(|raw| Mode::from_storage(Some(&raw)));
     let stored = web_sys::window()
         .and_then(|window| window.local_storage().ok().flatten())
         .and_then(|store| store.get_item(MODE_STORAGE_KEY).ok().flatten())
@@ -300,15 +314,28 @@ fn sync_composer(page: &Handle) {
         (borrow.dom.clone(), borrow.submitting || borrow.turn_running)
     };
     dom.send.set_disabled(busy);
-    dom.prompt.set_attribute("placeholder", if busy { "正在生成…" } else { "想让红隼帮你做什么？" }).ok();
+    dom.prompt
+        .set_attribute(
+            "placeholder",
+            if busy {
+                "正在生成…"
+            } else {
+                "想让红隼帮你做什么？"
+            },
+        )
+        .ok();
 }
 
 fn bind(page: &Handle, dom: &Dom) -> Result<(), JsValue> {
     for button in dom.modes.clone() {
         let scoped = Rc::clone(page);
-        let Some(name) = button.dataset().get("mode") else { continue };
+        let Some(name) = button.dataset().get("mode") else {
+            continue;
+        };
         let closure = Closure::<dyn FnMut()>::new(move || {
-            let Some(mode) = Mode::from_storage(Some(&name)) else { return };
+            let Some(mode) = Mode::from_storage(Some(&name)) else {
+                return;
+            };
             scoped.borrow_mut().mode = mode;
             if let Some(store) = web_sys::window().and_then(|w| w.local_storage().ok().flatten()) {
                 let _ = store.set_item(MODE_STORAGE_KEY, mode.as_str());
@@ -335,17 +362,18 @@ fn bind(page: &Handle, dom: &Dom) -> Result<(), JsValue> {
     // form: the form's own submit is prevented above, and a keypress inside the
     // textarea is the only place this decision can be observed.
     let scoped = Rc::clone(page);
-    let enter = Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |event: web_sys::KeyboardEvent| {
-        if event.key() != "Enter" {
-            return;
-        }
-        if !enter_submits(event.shift_key(), event.is_composing()) {
-            return;
-        }
-        // Without this the browser inserts the newline as well as sending.
-        event.prevent_default();
-        send_prompt(&scoped);
-    });
+    let enter =
+        Closure::<dyn FnMut(web_sys::KeyboardEvent)>::new(move |event: web_sys::KeyboardEvent| {
+            if event.key() != "Enter" {
+                return;
+            }
+            if !enter_submits(event.shift_key(), event.is_composing()) {
+                return;
+            }
+            // Without this the browser inserts the newline as well as sending.
+            event.prevent_default();
+            send_prompt(&scoped);
+        });
     dom.prompt
         .add_event_listener_with_callback("keydown", enter.as_ref().unchecked_ref())?;
     enter.forget();
@@ -362,58 +390,63 @@ fn bind(page: &Handle, dom: &Dom) -> Result<(), JsValue> {
     // One delegated listener for previews: assets are appended continuously, and
     // a listener per image would be a leak the length of the conversation.
     let scoped = Rc::clone(page);
-    let click = Closure::<dyn FnMut(web_sys::MouseEvent)>::new(move |event: web_sys::MouseEvent| {
-        let Some(target) = event
-            .target()
-            .and_then(|value| value.dyn_into::<Element>().ok())
-        else {
-            return;
-        };
-        if target.class_list().contains("asset-image") {
-            let Some(src) = target.get_attribute("src") else { return };
-            let (preview, preview_image) = {
-                let borrow = scoped.borrow();
-                (borrow.dom.preview.clone(), borrow.dom.preview_image.clone())
+    let click =
+        Closure::<dyn FnMut(web_sys::MouseEvent)>::new(move |event: web_sys::MouseEvent| {
+            let Some(target) = event
+                .target()
+                .and_then(|value| value.dyn_into::<Element>().ok())
+            else {
+                return;
             };
-            preview_image.set_attribute("src", &src).ok();
-            preview.set_attribute("data-src", &src).ok();
-            if !preview.open() {
-                // A dialog that refuses to open is the feature failing, not a detail:
-                // say which. `showModal` throws when the element is not a dialog or the
-                // document is not active.
-                if let Err(error) = preview.show_modal() {
-                    web_sys::console::error_1(&JsValue::from_str(&format!(
-                        "kestrel: cannot open the preview: {error:?}"
-                    )));
+            if target.class_list().contains("asset-image") {
+                let Some(src) = target.get_attribute("src") else {
+                    return;
+                };
+                let (preview, preview_image) = {
+                    let borrow = scoped.borrow();
+                    (borrow.dom.preview.clone(), borrow.dom.preview_image.clone())
+                };
+                preview_image.set_attribute("src", &src).ok();
+                preview.set_attribute("data-src", &src).ok();
+                if !preview.open() {
+                    // A dialog that refuses to open is the feature failing, not a detail:
+                    // say which. `showModal` throws when the element is not a dialog or the
+                    // document is not active.
+                    if let Err(error) = preview.show_modal() {
+                        web_sys::console::error_1(&JsValue::from_str(&format!(
+                            "kestrel: cannot open the preview: {error:?}"
+                        )));
+                    }
                 }
+                return;
             }
-            return;
-        }
 
-        // The download link. Re-encoding only exists for still images, so a video's
-        // link is left to the browser — same carve-out the TS client made.
-        let Some(link) = find_closest(&target, "a.asset-download") else { return };
-        let is_video = find_closest(&target, "figure.asset")
-            .and_then(|figure| figure.query_selector("video").ok().flatten())
-            .is_some();
-        if is_video {
-            return;
-        }
-        // The `<img>` on the page is the same resource the link points at (both are
-        // built from one url in `append_asset`), and it is already decoded — so the
-        // canvas can draw from it directly instead of fetching the href a second time.
-        let Some(source) = find_closest(&target, "figure.asset")
-            .and_then(|figure| figure.query_selector("img.asset-image").ok().flatten())
-            .and_then(|image| image.dyn_into::<HtmlImageElement>().ok())
-        else {
-            // No image to draw from: leave the plain link alone so the download still
-            // happens, just without the re-encode step.
-            let _ = link;
-            return;
-        };
-        event.prevent_default();
-        open_download_dialog(&scoped, source);
-    });
+            // The download link. Re-encoding only exists for still images, so a video's
+            // link is left to the browser — same carve-out the TS client made.
+            let Some(link) = find_closest(&target, "a.asset-download") else {
+                return;
+            };
+            let is_video = find_closest(&target, "figure.asset")
+                .and_then(|figure| figure.query_selector("video").ok().flatten())
+                .is_some();
+            if is_video {
+                return;
+            }
+            // The `<img>` on the page is the same resource the link points at (both are
+            // built from one url in `append_asset`), and it is already decoded — so the
+            // canvas can draw from it directly instead of fetching the href a second time.
+            let Some(source) = find_closest(&target, "figure.asset")
+                .and_then(|figure| figure.query_selector("img.asset-image").ok().flatten())
+                .and_then(|image| image.dyn_into::<HtmlImageElement>().ok())
+            else {
+                // No image to draw from: leave the plain link alone so the download still
+                // happens, just without the re-encode step.
+                let _ = link;
+                return;
+            };
+            event.prevent_default();
+            open_download_dialog(&scoped, source);
+        });
     dom.stream
         .add_event_listener_with_callback("click", click.as_ref().unchecked_ref())?;
     click.forget();
@@ -421,35 +454,40 @@ fn bind(page: &Handle, dom: &Dom) -> Result<(), JsValue> {
     // One document-level listener covers the sidebar rows, which the shell renders
     // and the client may later rebuild: a per-row listener would leak on refresh.
     let scoped = Rc::clone(page);
-    let on_choice = Closure::<dyn FnMut(web_sys::MouseEvent)>::new(move |event: web_sys::MouseEvent| {
-        let Some(target) = event
-            .target()
-            .and_then(|value| value.dyn_into::<Element>().ok())
-        else {
-            return;
-        };
-        if let Some(button) = find_closest(&target, "[data-delete-conversation]") {
-            let Some(raw) = button.dataset().get("deleteConversation").and_then(|value| value.parse::<i64>().ok()) else {
+    let on_choice =
+        Closure::<dyn FnMut(web_sys::MouseEvent)>::new(move |event: web_sys::MouseEvent| {
+            let Some(target) = event
+                .target()
+                .and_then(|value| value.dyn_into::<Element>().ok())
+            else {
                 return;
             };
-            ask_delete(&scoped, raw);
-            return;
-        }
-        if let Some(button) = find_closest(&target, "[data-delete-choice]") {
-            match button.dataset().get("deleteChoice").as_deref() {
-                Some("cancel") => {
-                    // The question is dropped here, not in the `close` handler the
-                    // spec queues: one answer must not be able to fire the delete
-                    // request twice.
-                    scoped.borrow_mut().pending_delete = None;
-                    let borrow = scoped.borrow();
-                    borrow.dom.delete_dialog.close();
-                }
-                Some("confirm") => confirm_delete(&scoped),
-                _ => {}
+            if let Some(button) = find_closest(&target, "[data-delete-conversation]") {
+                let Some(raw) = button
+                    .dataset()
+                    .get("deleteConversation")
+                    .and_then(|value| value.parse::<i64>().ok())
+                else {
+                    return;
+                };
+                ask_delete(&scoped, raw);
+                return;
             }
-        }
-    });
+            if let Some(button) = find_closest(&target, "[data-delete-choice]") {
+                match button.dataset().get("deleteChoice").as_deref() {
+                    Some("cancel") => {
+                        // The question is dropped here, not in the `close` handler the
+                        // spec queues: one answer must not be able to fire the delete
+                        // request twice.
+                        scoped.borrow_mut().pending_delete = None;
+                        let borrow = scoped.borrow();
+                        borrow.dom.delete_dialog.close();
+                    }
+                    Some("confirm") => confirm_delete(&scoped),
+                    _ => {}
+                }
+            }
+        });
     if let Some(document) = dom.body.owner_document() {
         document
             .add_event_listener_with_callback("click", on_choice.as_ref().unchecked_ref())
@@ -502,17 +540,24 @@ fn ask_delete(page: &Handle, id: i64) {
         borrow.dom.delete_dialog.clone()
     };
     if let Err(error) = dialog.show_modal() {
-        web_sys::console::error_1(&JsValue::from_str(&format!("cannot open the delete dialog: {error:?}")));
+        web_sys::console::error_1(&JsValue::from_str(&format!(
+            "cannot open the delete dialog: {error:?}"
+        )));
     }
 }
 
 /// Delete for real. A failure is reported on the dialog rather than silently
 /// leaving the row looking deleted.
 fn confirm_delete(page: &Handle) {
-    let Some(id) = page.borrow().pending_delete else { return };
+    let Some(id) = page.borrow().pending_delete else {
+        return;
+    };
     let (dom, current) = {
         let borrow = page.borrow();
-        (borrow.dom.clone(), conversation_id(&borrow.dom.body).unwrap_or_default())
+        (
+            borrow.dom.clone(),
+            conversation_id(&borrow.dom.body).unwrap_or_default(),
+        )
     };
     dom.delete_dialog.close();
 
@@ -551,10 +596,15 @@ fn open_stream(page: &Handle, id: &str, from: &str) {
     let path = if from.is_empty() {
         format!("/api/v1/conversations/{id}/stream")
     } else {
-        format!("/api/v1/conversations/{id}/stream?from={}", js_sys::encode_uri_component(from))
+        format!(
+            "/api/v1/conversations/{id}/stream?from={}",
+            js_sys::encode_uri_component(from)
+        )
     };
     let Ok(source) = EventSource::new(&path) else {
-        web_sys::console::error_1(&JsValue::from_str(&format!("kestrel: cannot subscribe {path}")));
+        web_sys::console::error_1(&JsValue::from_str(&format!(
+            "kestrel: cannot subscribe {path}"
+        )));
         return;
     };
 
@@ -567,7 +617,9 @@ fn open_stream(page: &Handle, id: &str, from: &str) {
         }
         let _ = &scoped;
     });
-    source.add_event_listener_with_callback(Stream::RESYNC_EVENT, resync.as_ref().unchecked_ref()).ok();
+    source
+        .add_event_listener_with_callback(Stream::RESYNC_EVENT, resync.as_ref().unchecked_ref())
+        .ok();
     resync.forget();
 
     for name in EVENT_NAMES {
@@ -592,7 +644,9 @@ fn open_stream(page: &Handle, id: &str, from: &str) {
                 apply(&scoped, paint);
             }
         });
-        source.add_event_listener_with_callback(name, listener.as_ref().unchecked_ref()).ok();
+        source
+            .add_event_listener_with_callback(name, listener.as_ref().unchecked_ref())
+            .ok();
         listener.forget();
     }
 
@@ -679,7 +733,9 @@ fn apply(page: &Handle, paint: Paint) {
         }
         Paint::RenderMessage { message } => {
             let Some(document) = dom.stream.owner_document() else {
-                web_sys::console::error_1(&JsValue::from_str("kestrel: the stream has no owner document"));
+                web_sys::console::error_1(&JsValue::from_str(
+                    "kestrel: the stream has no owner document",
+                ));
                 return;
             };
             let article = render_message(&document, &message);
@@ -694,7 +750,9 @@ fn apply(page: &Handle, paint: Paint) {
             scroll_bottom(&dom.stream);
         }
         Paint::OpenTurn { message_id, mode } => {
-            let Some(document) = dom.stream.owner_document() else { return };
+            let Some(document) = dom.stream.owner_document() else {
+                return;
+            };
             let article = open_turn(&document, mode);
             let live = Live {
                 reasoning: child(&article, "reasoning-body"),
@@ -713,7 +771,9 @@ fn apply(page: &Handle, paint: Paint) {
         Paint::Reasoning { message_id, delta } => {
             let text = {
                 let mut borrow = page.borrow_mut();
-                let Some(live) = borrow.live.get_mut(&message_id) else { return };
+                let Some(live) = borrow.live.get_mut(&message_id) else {
+                    return;
+                };
                 live.reasoning_text.push_str(&delta);
                 live.reasoning_text.clone()
             };
@@ -729,27 +789,65 @@ fn apply(page: &Handle, paint: Paint) {
                 live.answer.push_str(&delta);
                 // Re-rendered whole: a markdown span can straddle two deltas, and
                 // appending rendered HTML per delta would cut it in half.
-                live.content.set_inner_html(&kestrel_md::markdown(&live.answer));
+                live.content
+                    .set_inner_html(&kestrel_md::markdown(&live.answer));
             }
             drop(borrow);
             scroll_bottom(&dom.stream);
         }
-        Paint::ToolCall { message_id, name, status } => {
-            let label = if status == "running" { "执行中…" } else { "已完成" };
+        Paint::ToolCall {
+            message_id,
+            name,
+            status,
+        } => {
+            let label = if status == "running" {
+                "执行中…"
+            } else {
+                "已完成"
+            };
             let text = format!("{name} {label}");
-            if let Some(tools) = page.borrow().live.get(&message_id).map(|live| live.tools.clone()) {
+            if let Some(tools) = page
+                .borrow()
+                .live
+                .get(&message_id)
+                .map(|live| live.tools.clone())
+            {
                 append_item(&tools, &text, "tool-call");
             }
         }
-        Paint::ToolResult { message_id, name, ok, summary } => {
+        Paint::ToolResult {
+            message_id,
+            name,
+            ok,
+            summary,
+        } => {
             let text = format!("{name} — {summary}");
-            let class = if ok { "tool-call tool-call-ok" } else { "tool-call tool-call-fail" };
-            if let Some(tools) = page.borrow().live.get(&message_id).map(|live| live.tools.clone()) {
+            let class = if ok {
+                "tool-call tool-call-ok"
+            } else {
+                "tool-call tool-call-fail"
+            };
+            if let Some(tools) = page
+                .borrow()
+                .live
+                .get(&message_id)
+                .map(|live| live.tools.clone())
+            {
                 append_item(&tools, &text, class);
             }
         }
-        Paint::Asset { message_id, kind, url, width, height } => {
-            let container = page.borrow().live.get(&message_id).map(|live| live.assets.clone());
+        Paint::Asset {
+            message_id,
+            kind,
+            url,
+            width,
+            height,
+        } => {
+            let container = page
+                .borrow()
+                .live
+                .get(&message_id)
+                .map(|live| live.assets.clone());
             if let (Some(document), Some(container)) = (dom.stream.owner_document(), container) {
                 append_asset(&document, &container, &kind, &url, width, height);
                 scroll_bottom(&dom.stream);
@@ -760,7 +858,10 @@ fn apply(page: &Handle, paint: Paint) {
             page.borrow_mut().turn_running = false;
             sync_composer(page);
         }
-        Paint::TurnError { message_id, message } => {
+        Paint::TurnError {
+            message_id,
+            message,
+        } => {
             {
                 let borrow = page.borrow_mut();
                 if let Some(live) = borrow.live.get(&message_id) {
@@ -772,7 +873,12 @@ fn apply(page: &Handle, paint: Paint) {
             page.borrow_mut().turn_running = false;
             sync_composer(page);
         }
-        Paint::TaskUpdated { task_id, kind, status, error } => {
+        Paint::TaskUpdated {
+            task_id,
+            kind,
+            status,
+            error,
+        } => {
             task_chip(page, &dom, task_id, &kind, &status, error.as_deref());
         }
     }
@@ -787,7 +893,9 @@ fn child(article: &HtmlElement, class: &str) -> HtmlElement {
         .unwrap_or_else(|| {
             // A missing part means the shell's markup and this file disagree. Say
             // so instead of dropping the turn into a detached node.
-            web_sys::console::error_1(&JsValue::from_str(&format!("kestrel: no .{class} in the turn")) );
+            web_sys::console::error_1(&JsValue::from_str(&format!(
+                "kestrel: no .{class} in the turn"
+            )));
             article.clone()
         })
 }
@@ -834,7 +942,9 @@ fn open_turn(document: &Document, mode: Option<Mode>) -> HtmlElement {
 
 fn render_message(document: &Document, message: &MessageView) -> HtmlElement {
     let article = build(document, "article", &format!("turn turn-{}", message.role));
-    article.set_attribute("data-message-id", &message.id.to_string()).ok();
+    article
+        .set_attribute("data-message-id", &message.id.to_string())
+        .ok();
 
     if let Some(mode) = message.mode {
         let badge = build(document, "span", "turn-mode");
@@ -868,7 +978,11 @@ fn render_message(document: &Document, message: &MessageView) -> HtmlElement {
         if !calls.is_empty() {
             let list = build(document, "ul", "tool-calls");
             for call in calls {
-                append_item(&list, &format!("{} — {}", call.name, call.summary), "tool-call");
+                append_item(
+                    &list,
+                    &format!("{} — {}", call.name, call.summary),
+                    "tool-call",
+                );
             }
             article.append_child(&list).ok();
         }
@@ -883,7 +997,14 @@ fn render_message(document: &Document, message: &MessageView) -> HtmlElement {
     if !message.assets.is_empty() {
         let list = build(document, "div", "assets");
         for asset in &message.assets {
-            append_asset(document, &list, asset.kind.as_str(), &asset.url, asset.width, asset.height);
+            append_asset(
+                document,
+                &list,
+                asset.kind.as_str(),
+                &asset.url,
+                asset.width,
+                asset.height,
+            );
         }
         article.append_child(&list).ok();
     }
@@ -891,7 +1012,9 @@ fn render_message(document: &Document, message: &MessageView) -> HtmlElement {
 }
 
 fn append_item(list: &HtmlElement, text: &str, class: &str) {
-    let Some(document) = list.owner_document() else { return };
+    let Some(document) = list.owner_document() else {
+        return;
+    };
     let item = build(&document, "li", class);
     item.set_text_content(Some(text));
     list.append_child(&item).ok();
@@ -942,12 +1065,21 @@ fn append_asset(
 
 /// The pending-task chip: a video keeps rendering after its turn is over, and the
 /// only signal it exists is this row updating from `task_updated`.
-fn task_chip(page: &Handle, dom: &Dom, task_id: i64, kind: &str, status: &str, error: Option<&str>) {
-    let Some(document) = dom.stream.owner_document() else { return };
+fn task_chip(
+    page: &Handle,
+    dom: &Dom,
+    task_id: i64,
+    kind: &str,
+    status: &str,
+    error: Option<&str>,
+) {
+    let Some(document) = dom.stream.owner_document() else {
+        return;
+    };
     let label = match kestrel_proto::TaskStatus::parse(status) {
-        kestrel_proto::TaskStatus::Failed => {
-            error.map(|text| format!("{kind} 失败：{text}")).unwrap_or_else(|| format!("{kind} 失败"))
-        }
+        kestrel_proto::TaskStatus::Failed => error
+            .map(|text| format!("{kind} 失败：{text}"))
+            .unwrap_or_else(|| format!("{kind} 失败")),
         other => format!("{kind} {}", other.label()),
     };
 
@@ -957,7 +1089,8 @@ fn task_chip(page: &Handle, dom: &Dom, task_id: i64, kind: &str, status: &str, e
         return;
     }
     let chip = build(&document, "div", "pending-task");
-    chip.set_attribute("data-task-id", &task_id.to_string()).ok();
+    chip.set_attribute("data-task-id", &task_id.to_string())
+        .ok();
     chip.set_text_content(Some(&label));
     dom.stream.append_child(&chip).ok();
     page.borrow_mut().tasks.insert(task_id, chip);
@@ -1006,10 +1139,13 @@ async fn run_turn(dom: &Dom, page: &Handle, prompt: &str, mode: Mode) -> Result<
     if id.is_empty() {
         id = create_conversation(dom, page, prompt).await?;
     }
-    let status = post_json(&format!("/api/v1/conversations/{id}/turns"), &serde_json::json!({
-        "prompt": prompt,
-        "mode": mode.as_str(),
-    }))
+    let status = post_json(
+        &format!("/api/v1/conversations/{id}/turns"),
+        &serde_json::json!({
+            "prompt": prompt,
+            "mode": mode.as_str(),
+        }),
+    )
     .await?;
 
     if status == 404 {
@@ -1017,10 +1153,13 @@ async fn run_turn(dom: &Dom, page: &Handle, prompt: &str, mode: Mode) -> Result<
         // deleted it). The prompt was never stored, so recreating and retrying
         // once is safe; a second failure is reported rather than looped on.
         let id = create_conversation(dom, page, prompt).await?;
-        let retried = post_json(&format!("/api/v1/conversations/{id}/turns"), &serde_json::json!({
-            "prompt": prompt,
-            "mode": mode.as_str(),
-        }))
+        let retried = post_json(
+            &format!("/api/v1/conversations/{id}/turns"),
+            &serde_json::json!({
+                "prompt": prompt,
+                "mode": mode.as_str(),
+            }),
+        )
         .await?;
         if retried != 202 {
             return Err(format!("提交轮次失败（HTTP {retried}）"));
@@ -1034,9 +1173,12 @@ async fn run_turn(dom: &Dom, page: &Handle, prompt: &str, mode: Mode) -> Result<
 }
 
 async fn create_conversation(dom: &Dom, page: &Handle, prompt: &str) -> Result<String, String> {
-    let value = post_json_value("/api/v1/conversations", &serde_json::json!({ "prompt": prompt }))
-        .await?
-        .ok_or_else(|| "创建会话的响应没有正文".to_string())?;
+    let value = post_json_value(
+        "/api/v1/conversations",
+        &serde_json::json!({ "prompt": prompt }),
+    )
+    .await?
+    .ok_or_else(|| "创建会话的响应没有正文".to_string())?;
     let id = value
         .get("conversationId")
         .and_then(serde_json::Value::as_i64)
@@ -1068,7 +1210,10 @@ async fn post_json(path: &str, body: &serde_json::Value) -> Result<u16, String> 
 }
 
 /// The same request, with the parsed body when the endpoint returns one.
-async fn post_json_value(path: &str, body: &serde_json::Value) -> Result<Option<serde_json::Value>, String> {
+async fn post_json_value(
+    path: &str,
+    body: &serde_json::Value,
+) -> Result<Option<serde_json::Value>, String> {
     let response = post_send(path, body).await?;
     let status = response.status();
     if !(200..300).contains(&status) {
@@ -1078,9 +1223,15 @@ async fn post_json_value(path: &str, body: &serde_json::Value) -> Result<Option<
         return Ok(None);
     }
     let text = response.text().map_err(|_| "no body".to_string())?;
-    let value = JsFuture::from(text).await.map_err(|_| "unreadable body".to_string())?;
-    let Some(raw) = value.as_string() else { return Ok(None) };
-    Ok(Some(serde_json::from_str(&raw).map_err(|_| "body is not JSON")?))
+    let value = JsFuture::from(text)
+        .await
+        .map_err(|_| "unreadable body".to_string())?;
+    let Some(raw) = value.as_string() else {
+        return Ok(None);
+    };
+    Ok(Some(
+        serde_json::from_str(&raw).map_err(|_| "body is not JSON")?,
+    ))
 }
 
 async fn post_send(path: &str, body: &serde_json::Value) -> Result<Response, String> {
@@ -1093,12 +1244,15 @@ async fn post_send(path: &str, body: &serde_json::Value) -> Result<Response, Str
     init.set_method("POST");
     init.set_headers(&JsValue::from(headers));
     init.set_body(&JsValue::from_str(&body.to_string()));
-    let request = Request::new_with_str_and_init(path, &init).map_err(|_| "cannot build the request")?;
+    let request =
+        Request::new_with_str_and_init(path, &init).map_err(|_| "cannot build the request")?;
 
     let value = JsFuture::from(window.fetch_with_request(&request))
         .await
         .map_err(|_| format!("{path} 请求失败"))?;
-    value.dyn_into::<Response>().map_err(|_| "malformed response".to_string())
+    value
+        .dyn_into::<Response>()
+        .map_err(|_| "malformed response".to_string())
 }
 
 /// A POST with no body, for the endpoints that take nothing but the id in the
@@ -1108,11 +1262,14 @@ async fn post_empty(path: &str) -> Result<u16, String> {
     let window = web_sys::window().ok_or("no window")?;
     let init = RequestInit::new();
     init.set_method("POST");
-    let request = Request::new_with_str_and_init(path, &init).map_err(|_| "cannot build the request")?;
+    let request =
+        Request::new_with_str_and_init(path, &init).map_err(|_| "cannot build the request")?;
     let value = JsFuture::from(window.fetch_with_request(&request))
         .await
         .map_err(|_| format!("{path} 请求失败"))?;
-    let response: Response = value.dyn_into().map_err(|_| "malformed response".to_string())?;
+    let response: Response = value
+        .dyn_into()
+        .map_err(|_| "malformed response".to_string())?;
     Ok(response.status())
 }
 
@@ -1126,7 +1283,13 @@ fn current_plan(dom: &Dom, image: &HtmlImageElement) -> Option<DownloadPlan> {
     let format = dom.download_format.value();
     let quality = quality_percent(Some(&dom.download_quality.value()));
     let size = checked_size(&document);
-    plan_download(image.natural_width(), image.natural_height(), size, &format, quality)
+    plan_download(
+        image.natural_width(),
+        image.natural_height(),
+        size,
+        &format,
+        quality,
+    )
 }
 
 /// The checked radio's edge. Queried, not held: the group is markup, and a shell
@@ -1166,7 +1329,11 @@ fn sync_quality_availability(dom: &Dom) {
 /// A data URL rather than a `Blob` + object URL (what `main.ts` did): the encoder
 /// is synchronous in both cases, and this costs no callback plumbing and nothing to
 /// revoke. The bytes are the same, which is what makes the estimate honest.
-fn render_data_url(image: &HtmlImageElement, plan: &DownloadPlan, format: &str) -> Result<String, String> {
+fn render_data_url(
+    image: &HtmlImageElement,
+    plan: &DownloadPlan,
+    format: &str,
+) -> Result<String, String> {
     let document = image.owner_document().ok_or("图片已不在文档里")?;
     let canvas = document
         .create_element("canvas")
@@ -1192,7 +1359,10 @@ fn render_data_url(image: &HtmlImageElement, plan: &DownloadPlan, format: &str) 
         .map_err(|_| "图片导出失败".to_string())?;
     canvas
         // `encoderOptions` is a JS number: the quality 0..1, ignored by PNG.
-        .to_data_url_with_type_and_encoder_options(format, &JsValue::from_f64(f64::from(plan.quality)))
+        .to_data_url_with_type_and_encoder_options(
+            format,
+            &JsValue::from_f64(f64::from(plan.quality)),
+        )
         .map_err(|_| "图片导出失败".to_string())
 }
 
@@ -1249,7 +1419,9 @@ fn schedule_estimate(page: &Handle) {
     }
     let scoped = pending.1;
     let fire = Closure::once_into_js(move || update_estimate(&scoped));
-    let Ok(handle) = window.set_timeout_with_callback_and_timeout_and_arguments_0(fire.as_ref().unchecked_ref(), 160) else {
+    let Ok(handle) = window
+        .set_timeout_with_callback_and_timeout_and_arguments_0(fire.as_ref().unchecked_ref(), 160)
+    else {
         // No timer means no debounce: encode now rather than never.
         update_estimate(page);
         return;
@@ -1315,12 +1487,10 @@ fn perform_download(page: &Handle) {
             return;
         }
     };
-    let Some(document) = dom.body.owner_document() else { return };
-    let name = download_filename(
-        &format,
-        checked_size(&document),
-        js_sys::Date::now() as i64,
-    );
+    let Some(document) = dom.body.owner_document() else {
+        return;
+    };
+    let name = download_filename(&format, checked_size(&document), js_sys::Date::now() as i64);
     // A detached `<a>` is enough for the click to start a download — which is what
     // `main.ts` did — so there is no node to insert and none to take back out.
     let link = build(&document, "a", "download-trigger");
@@ -1333,11 +1503,15 @@ fn perform_download(page: &Handle) {
 /// The dialog's own wiring. One document-level query for the radio group, because
 /// those inputs are markup rather than ids the shell guarantees.
 fn bind_download(page: &Handle, dom: &Dom) {
-    let Some(document) = dom.body.owner_document() else { return };
+    let Some(document) = dom.body.owner_document() else {
+        return;
+    };
 
     if let Ok(radios) = document.query_selector_all("input[name=\"download-size\"]") {
         for index in 0..radios.length() {
-            let Some(node) = radios.item(index) else { continue };
+            let Some(node) = radios.item(index) else {
+                continue;
+            };
             let scoped = Rc::clone(page);
             let listener = Closure::<dyn FnMut()>::new(move || schedule_estimate(&scoped));
             if node
@@ -1367,7 +1541,10 @@ fn bind_download(page: &Handle, dom: &Dom) {
         let lossy = borrow.dom.download_format.value() != "image/png";
         if lossy {
             let shown = format!("{}%", borrow.dom.download_quality.value());
-            borrow.dom.download_quality_value.set_text_content(Some(&shown));
+            borrow
+                .dom
+                .download_quality_value
+                .set_text_content(Some(&shown));
         }
         drop(borrow);
         schedule_estimate(&scoped);
@@ -1394,15 +1571,16 @@ fn bind_download(page: &Handle, dom: &Dom) {
     // Backdrop click closes a `<dialog>` only if the page says so: the target is the
     // dialog itself when the click lands outside its content box.
     let backdrop = dom.download_dialog.clone();
-    let outside = Closure::<dyn FnMut(web_sys::MouseEvent)>::new(move |event: web_sys::MouseEvent| {
-        let is_dialog = event
-            .target()
-            .and_then(|value| value.dyn_into::<HtmlDialogElement>().ok())
-            .is_some();
-        if is_dialog {
-            backdrop.close();
-        }
-    });
+    let outside =
+        Closure::<dyn FnMut(web_sys::MouseEvent)>::new(move |event: web_sys::MouseEvent| {
+            let is_dialog = event
+                .target()
+                .and_then(|value| value.dyn_into::<HtmlDialogElement>().ok())
+                .is_some();
+            if is_dialog {
+                backdrop.close();
+            }
+        });
     dom.download_dialog
         .add_event_listener_with_callback("click", outside.as_ref().unchecked_ref())
         .ok();
@@ -1498,7 +1676,15 @@ fn paint_history(document: &Document, rows: &[crate::chat_core::HistoryRow]) {
 
     for row in rows {
         let item = build(document, "li", "conversation-item");
-        let link = build(document, "a", if row.is_active { "conversation-link is-active" } else { "conversation-link" });
+        let link = build(
+            document,
+            "a",
+            if row.is_active {
+                "conversation-link is-active"
+            } else {
+                "conversation-link"
+            },
+        );
         link.set_attribute("href", &format!("/?c={}", row.id)).ok();
         link.set_text_content(Some(&row.title));
         item.append_child(&link).ok();
@@ -1521,7 +1707,9 @@ fn paint_history(document: &Document, rows: &[crate::chat_core::HistoryRow]) {
 }
 
 fn show_history_error(dom: &Dom, message: &str) {
-    let Some(document) = dom.body.owner_document() else { return };
+    let Some(document) = dom.body.owner_document() else {
+        return;
+    };
     let Some(list) = document.query_selector(".conversation-list").ok().flatten() else {
         web_sys::console::error_1(&JsValue::from_str(&format!("kestrel: {message}")));
         return;
@@ -1541,17 +1729,24 @@ async fn get_json(path: &str) -> Result<serde_json::Value, String> {
     // pair this crate's web-sys features give a promise directly.
     let init = RequestInit::new();
     init.set_method("GET");
-    let request = Request::new_with_str_and_init(path, &init).map_err(|_| "cannot build the request")?;
+    let request =
+        Request::new_with_str_and_init(path, &init).map_err(|_| "cannot build the request")?;
     let value = JsFuture::from(window.fetch_with_request(&request))
         .await
         .map_err(|_| format!("{path} 请求失败"))?;
-    let response: Response = value.dyn_into().map_err(|_| "malformed response".to_string())?;
+    let response: Response = value
+        .dyn_into()
+        .map_err(|_| "malformed response".to_string())?;
     if !response.ok() {
         return Err(format!("{path} 失败（HTTP {}）", response.status()));
     }
     let body = response.text().map_err(|_| "no body".to_string())?;
-    let text = JsFuture::from(body).await.map_err(|_| "no body".to_string())?;
-    let raw = text.as_string().ok_or_else(|| "body is not text".to_string())?;
+    let text = JsFuture::from(body)
+        .await
+        .map_err(|_| "no body".to_string())?;
+    let raw = text
+        .as_string()
+        .ok_or_else(|| "body is not text".to_string())?;
     serde_json::from_str(&raw).map_err(|_| format!("{path} 的响应不是 JSON"))
 }
 
@@ -1572,10 +1767,18 @@ fn bind_extras(page: &Handle) {
     // Rows the shell already rendered, each pointing at a turn by message id.
     if let Ok(links) = document.query_selector_all(".turn-index-link[data-target]") {
         for index in 0..links.length() {
-            let Some(node) = links.item(index) else { continue };
-            let Some(link) = node.dyn_ref::<HtmlButtonElement>() else { continue };
-            let Some(target) = link.dataset().get("target") else { continue };
-            let Ok(Some(article)) = document.query_selector(&format!("[data-message-id=\"{target}\"]")) else {
+            let Some(node) = links.item(index) else {
+                continue;
+            };
+            let Some(link) = node.dyn_ref::<HtmlButtonElement>() else {
+                continue;
+            };
+            let Some(target) = link.dataset().get("target") else {
+                continue;
+            };
+            let Ok(Some(article)) =
+                document.query_selector(&format!("[data-message-id=\"{target}\"]"))
+            else {
                 continue;
             };
             let Ok(article) = article.dyn_into::<HtmlElement>() else {
@@ -1680,10 +1883,15 @@ fn append_anchor(page: &Handle, article: &HtmlElement, label: &str) {
     }
     let (stream, document) = {
         let borrow = page.borrow();
-        (borrow.dom.stream.clone(), borrow.dom.stream.owner_document())
+        (
+            borrow.dom.stream.clone(),
+            borrow.dom.stream.owner_document(),
+        )
     };
     let Some(document) = document else { return };
-    let Some(list) = ensure_turn_index_list(&stream) else { return };
+    let Some(list) = ensure_turn_index_list(&stream) else {
+        return;
+    };
 
     let item = build(&document, "li", "");
     // `build` hands back an `HtmlElement`; the index row is a button, and the two
@@ -1709,7 +1917,10 @@ fn append_anchor(page: &Handle, article: &HtmlElement, label: &str) {
     let listener = Closure::<dyn FnMut()>::new(move || {
         scroll_to(&scoped, &bound, &target);
     });
-    if link.add_event_listener_with_callback("click", listener.as_ref().unchecked_ref()).is_ok() {
+    if link
+        .add_event_listener_with_callback("click", listener.as_ref().unchecked_ref())
+        .is_ok()
+    {
         listener.forget();
     }
     let _ = index;
@@ -1742,7 +1953,8 @@ fn sync_index_visibility(page: &Handle) {
     if let Some(document) = document {
         if let Some(nav) = document.get_element_by_id("turn-index") {
             let empty = count == 0;
-            nav.dyn_ref::<HtmlElement>().map(|node| node.set_hidden(empty));
+            nav.dyn_ref::<HtmlElement>()
+                .map(|node| node.set_hidden(empty));
         }
     }
 }

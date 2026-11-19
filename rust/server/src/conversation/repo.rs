@@ -83,12 +83,16 @@ fn parse_tool_calls(raw: Option<String>) -> Option<Vec<ToolCallRecord>> {
 ///
 /// Returns `(user_id, is_super)` for the `readable_sql` predicate.
 fn readable_args(viewer: &Principal) -> (i64, i64) {
-    (viewer.id, i64::from(viewer.role == crate::auth::roles::Role::Super))
+    (
+        viewer.id,
+        i64::from(viewer.role == crate::auth::roles::Role::Super),
+    )
 }
 
 /// SQL fragment for the visibility rule. Requires `users` joined as `u` on
 /// `conversations`.
-const READABLE_SQL: &str = "((c.user_id = ?1 AND c.deleted_at IS NULL) OR (?2 = 1 AND u.role = 'user'))";
+const READABLE_SQL: &str =
+    "((c.user_id = ?1 AND c.deleted_at IS NULL) OR (?2 = 1 AND u.role = 'user'))";
 
 pub struct ConversationService {
     pool: SqlitePool,
@@ -322,13 +326,15 @@ impl ConversationService {
         tool_calls: Option<&[ToolCallRecord]>,
     ) -> Result<(), AppError> {
         let encoded = tool_calls.map(|calls| serde_json::to_string(calls).unwrap_or_default());
-        sqlx::query("UPDATE messages SET content = ?1, reasoning = ?2, tool_calls = ?3 WHERE id = ?4")
-            .bind(content)
-            .bind(reasoning)
-            .bind(encoded)
-            .bind(message_id)
-            .execute(&self.pool)
-            .await?;
+        sqlx::query(
+            "UPDATE messages SET content = ?1, reasoning = ?2, tool_calls = ?3 WHERE id = ?4",
+        )
+        .bind(content)
+        .bind(reasoning)
+        .bind(encoded)
+        .bind(message_id)
+        .execute(&self.pool)
+        .await?;
         Ok(())
     }
 
@@ -336,7 +342,10 @@ impl ConversationService {
     /// exists before the text does. The stream's catch-up starting point keys off
     /// it — a fresh connection to a busy conversation replays the live turn from
     /// its first event instead of showing nothing until it finalizes.
-    pub async fn unfinished_assistant(&self, conversation_id: i64) -> Result<Option<i64>, AppError> {
+    pub async fn unfinished_assistant(
+        &self,
+        conversation_id: i64,
+    ) -> Result<Option<i64>, AppError> {
         let row = sqlx::query(
             "SELECT id FROM messages WHERE conversation_id = ?1 AND role = 'assistant' AND content = '' ORDER BY id DESC LIMIT 1",
         )
@@ -468,12 +477,14 @@ impl ConversationService {
             };
             match crate::media::dims::image_dims(&bytes) {
                 Some((width, height)) => {
-                    sqlx::query("UPDATE assets SET width = ?1, height = ?2 WHERE id = ?3 AND width IS NULL")
-                        .bind(width as i64)
-                        .bind(height as i64)
-                        .bind(id)
-                        .execute(&self.pool)
-                        .await?;
+                    sqlx::query(
+                        "UPDATE assets SET width = ?1, height = ?2 WHERE id = ?3 AND width IS NULL",
+                    )
+                    .bind(width as i64)
+                    .bind(height as i64)
+                    .bind(id)
+                    .execute(&self.pool)
+                    .await?;
                     filled += 1;
                 }
                 None => unreadable += 1,
@@ -484,9 +495,10 @@ impl ConversationService {
 
     /// How many image rows are still waiting for dimensions, after one bounded pass.
     pub async fn assets_without_dimensions(&self) -> Result<i64, AppError> {
-        let row = sqlx::query("SELECT COUNT(*) AS n FROM assets WHERE kind = 'image' AND width IS NULL")
-            .fetch_one(&self.pool)
-            .await?;
+        let row =
+            sqlx::query("SELECT COUNT(*) AS n FROM assets WHERE kind = 'image' AND width IS NULL")
+                .fetch_one(&self.pool)
+                .await?;
         Ok(row.try_get("n")?)
     }
 
@@ -496,8 +508,7 @@ impl ConversationService {
         use tokio::io::AsyncReadExt;
         let file = tokio::fs::File::open(path).await.ok()?;
         let mut buffer = Vec::with_capacity(64 * 1024);
-        file
-            .take(DIMENSION_READ_BYTES)
+        file.take(DIMENSION_READ_BYTES)
             .read_to_end(&mut buffer)
             .await
             .ok()?;
@@ -605,11 +616,16 @@ impl ConversationService {
     }
 
     /// Replays the conversation as text turns. Tool round-trips are not replayed.
-    pub async fn build_input_items(&self, conversation_id: i64) -> Result<Vec<InputItem>, AppError> {
-        let rows = sqlx::query("SELECT role, content FROM messages WHERE conversation_id = ?1 ORDER BY id ASC")
-            .bind(conversation_id)
-            .fetch_all(&self.pool)
-            .await?;
+    pub async fn build_input_items(
+        &self,
+        conversation_id: i64,
+    ) -> Result<Vec<InputItem>, AppError> {
+        let rows = sqlx::query(
+            "SELECT role, content FROM messages WHERE conversation_id = ?1 ORDER BY id ASC",
+        )
+        .bind(conversation_id)
+        .fetch_all(&self.pool)
+        .await?;
         let mut items = Vec::new();
         for row in rows {
             let content: String = row.try_get("content").expect("content");
@@ -618,7 +634,10 @@ impl ConversationService {
                 continue;
             }
             let role: String = row.try_get("role").expect("role");
-            items.push(InputItem { role, content: trimmed.to_string() });
+            items.push(InputItem {
+                role,
+                content: trimmed.to_string(),
+            });
         }
         Ok(items)
     }
@@ -681,7 +700,10 @@ impl ConversationService {
         let mut grouped: HashMap<i64, Vec<AssetView>> = HashMap::new();
         for row in &rows {
             let message_id: i64 = row.try_get("message_id").expect("message_id");
-            grouped.entry(message_id).or_default().push(to_asset_view(row));
+            grouped
+                .entry(message_id)
+                .or_default()
+                .push(to_asset_view(row));
         }
         Ok(grouped)
     }
@@ -764,7 +786,10 @@ fn build_message_view(
     }
 }
 
-async fn message_ids_in(tx: &mut Transaction<'_, sqlx::Sqlite>, ids: &[i64]) -> Result<Vec<i64>, AppError> {
+async fn message_ids_in(
+    tx: &mut Transaction<'_, sqlx::Sqlite>,
+    ids: &[i64],
+) -> Result<Vec<i64>, AppError> {
     let marks = placeholders(ids.len(), 1);
     let rows = sqlx::query(&format!(
         "SELECT id FROM messages WHERE conversation_id IN ({marks})"
@@ -906,11 +931,32 @@ mod tests {
         assert!(!service.can_read(11, &boss2).await.expect("read"));
 
         // Soft-deleted: hidden from the owner, still readable by a super admin.
-        assert_eq!(service.soft_delete_conversations(&[10]).await.expect("hide"), 1);
-        assert!(!service.can_read(10, &owner).await.expect("read"), "hidden from owner");
-        assert!(service.can_read(10, &boss).await.expect("read"), "still visible to admin");
-        assert_eq!(service.soft_delete_conversations(&[10]).await.expect("already hidden"), 0);
-        assert_eq!(service.soft_delete_conversations(&[]).await.expect("empty"), 0);
+        assert_eq!(
+            service
+                .soft_delete_conversations(&[10])
+                .await
+                .expect("hide"),
+            1
+        );
+        assert!(
+            !service.can_read(10, &owner).await.expect("read"),
+            "hidden from owner"
+        );
+        assert!(
+            service.can_read(10, &boss).await.expect("read"),
+            "still visible to admin"
+        );
+        assert_eq!(
+            service
+                .soft_delete_conversations(&[10])
+                .await
+                .expect("already hidden"),
+            0
+        );
+        assert_eq!(
+            service.soft_delete_conversations(&[]).await.expect("empty"),
+            0
+        );
     }
 
     #[tokio::test]
@@ -920,9 +966,15 @@ mod tests {
         assert!(!service.is_owned_by(10, 2).await.expect("not mine"));
         // A super admin may read a normal account's conversation but never write
         // into it, so ownership is false for it too.
-        assert!(!service.is_owned_by(10, 3).await.expect("admin is not the owner"));
+        assert!(!service
+            .is_owned_by(10, 3)
+            .await
+            .expect("admin is not the owner"));
         // A hidden conversation is not writable either: a stale `?c=` opens a new one.
-        service.soft_delete_conversations(&[10]).await.expect("hide");
+        service
+            .soft_delete_conversations(&[10])
+            .await
+            .expect("hide");
         assert!(!service.is_owned_by(10, 1).await.expect("hidden"));
     }
 
@@ -935,7 +987,10 @@ mod tests {
             vec![10, 11],
             "updated_at DESC then id DESC"
         );
-        service.soft_delete_conversations(&[10]).await.expect("hide");
+        service
+            .soft_delete_conversations(&[10])
+            .await
+            .expect("hide");
         assert_eq!(service.list_by_user(1).await.expect("list").len(), 1);
 
         // The admin surface sees everything, with the owner attached.
@@ -998,7 +1053,11 @@ mod tests {
             .expect("finalize");
         assert_eq!(service.unfinished_assistant(10).await.expect("probe"), None);
 
-        let view = service.message_view(placeholder).await.expect("view").expect("row");
+        let view = service
+            .message_view(placeholder)
+            .await
+            .expect("view")
+            .expect("row");
         assert_eq!(view.reasoning.as_deref(), Some("构思…"));
         assert_eq!(view.mode, Some(Mode::Image));
 
@@ -1043,7 +1102,10 @@ mod tests {
             "turn_error",
             "the abandoned turn ends in the journal, not only in `messages`"
         );
-        assert_eq!(last.get::<Option<i64>, _>("message_id"), Some(second_placeholder));
+        assert_eq!(
+            last.get::<Option<i64>, _>("message_id"),
+            Some(second_placeholder)
+        );
     }
 
     /// A minimal but real PNG header — the backfill reads the file, so the fixture has
@@ -1101,7 +1163,10 @@ mod tests {
 
         // Idempotent: a filled row is never opened again, so the steady-state cost of
         // this at boot is one scan and no file reads.
-        assert_eq!(service.backfill_asset_dimensions().await.expect("second"), (0, 0));
+        assert_eq!(
+            service.backfill_asset_dimensions().await.expect("second"),
+            (0, 0)
+        );
         assert_eq!(service.assets_without_dimensions().await.expect("count"), 0);
 
         std::fs::remove_file(&file).ok();
@@ -1151,11 +1216,13 @@ mod tests {
             .expect("placeholder");
         let foreign = insert_raw_placeholder(&pool, 11, Some("nest"), now_ms()).await;
         let unowned_fresh = insert_raw_placeholder(&pool, 11, None, now_ms()).await;
-        let unowned_old =
-            insert_raw_placeholder(&pool, 11, None, now_ms() - 6 * 60 * 1000).await;
+        let unowned_old = insert_raw_placeholder(&pool, 11, None, now_ms() - 6 * 60 * 1000).await;
 
         let abandoned = service.abandon_stale_placeholders().await.expect("abandon");
-        let ended: Vec<i64> = abandoned.iter().map(|(_, message_id)| *message_id).collect();
+        let ended: Vec<i64> = abandoned
+            .iter()
+            .map(|(_, message_id)| *message_id)
+            .collect();
         assert_eq!(
             ended,
             vec![mine, unowned_old],
@@ -1280,10 +1347,22 @@ mod tests {
             .is_some());
 
         // The first-frame lookup is scoped to one conversation.
-        assert!(service.image_asset_in(10, asset_id).await.expect("scoped").is_some());
-        assert!(service.image_asset_in(20, asset_id).await.expect("other conversation").is_none());
+        assert!(service
+            .image_asset_in(10, asset_id)
+            .await
+            .expect("scoped")
+            .is_some());
+        assert!(service
+            .image_asset_in(20, asset_id)
+            .await
+            .expect("other conversation")
+            .is_none());
         // The signed frame endpoint is unscoped by design.
-        let (file, mime) = service.asset_file(asset_id).await.expect("file").expect("row");
+        let (file, mime) = service
+            .asset_file(asset_id)
+            .await
+            .expect("file")
+            .expect("row");
         assert_eq!(mime, "image/png");
         assert!(file.to_string_lossy().ends_with("frame.png"));
 

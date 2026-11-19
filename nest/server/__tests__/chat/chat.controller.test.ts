@@ -656,6 +656,7 @@ describe('GET /api/v1/assets/:id/download', () => {
     expect(response.status).toBe(200);
     expect(response.headers.get('content-type')).toContain('image/png');
     expect(response.headers.get('content-disposition')).toContain('inline');
+    expect(response.headers.get('cache-control')).toBe('private, no-store');
     await expect(response.text()).resolves.toBe('fake-png-bytes');
   });
 

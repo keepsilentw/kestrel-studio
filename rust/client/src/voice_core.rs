@@ -56,19 +56,27 @@ pub enum Effect {
     OpenSocket,
     StartCapture,
     SetStatus(&'static str),
-    AppendEntry { kind: &'static str, text: String },
+    AppendEntry {
+        kind: &'static str,
+        text: String,
+    },
     /// `Some(id)` subscribes the conversation event stream — a long video render
     /// lands as a new message there, not on the socket; images do come inline on
     /// the socket. `None` closes it.
     ConversationStream(Option<i64>),
     SetButtonEnabled(bool),
     SetButtonActive(bool),
-    PlayAudio { pcm: String },
+    PlayAudio {
+        pcm: String,
+    },
     /// Silence the speaker now: everything queued for the interrupted answer is
     /// dropped. Paired with [`Effect::PlayAudio`] being withheld while the page is
     /// muted, which is what keeps a cancelled answer from restarting itself.
     StopPlayback,
-    ShowAsset { kind: String, url: String },
+    ShowAsset {
+        kind: String,
+        url: String,
+    },
 }
 
 /// The wire the machine drives: the WASM socket in the browser, a vector in tests.
@@ -167,7 +175,11 @@ impl<S: Transport> Session<S> {
             // A press during a turn is only refused while there is nothing to hear.
             // Once the answer is speaking the user is talking over it, and that is
             // an interruption, not a queue jump (docs/architecture.md §11.6).
-            return if self.spoke { self.interrupt(now_ms) } else { Vec::new() };
+            return if self.spoke {
+                self.interrupt(now_ms)
+            } else {
+                Vec::new()
+            };
         }
         self.holding = true;
         self.blocked = false;
@@ -362,10 +374,16 @@ impl<S: Transport> Session<S> {
                     return Vec::new();
                 }
                 self.spoke = true;
-                vec![Effect::SetStatus(STATUS_ANSWERING), Effect::PlayAudio { pcm }]
+                vec![
+                    Effect::SetStatus(STATUS_ANSWERING),
+                    Effect::PlayAudio { pcm },
+                ]
             }
             ServerFrame::AssistantText { text } => {
-                vec![Effect::AppendEntry { kind: "assistant", text }]
+                vec![Effect::AppendEntry {
+                    kind: "assistant",
+                    text,
+                }]
             }
             ServerFrame::Done => self.close_turn(),
             ServerFrame::Error { message } => {
@@ -381,7 +399,10 @@ impl<S: Transport> Session<S> {
                 // how one refusal became a wall of them (docs/verification.md §7.1).
                 self.pending_commit = false;
                 vec![
-                    Effect::AppendEntry { kind: "error", text: message },
+                    Effect::AppendEntry {
+                        kind: "error",
+                        text: message,
+                    },
                     Effect::SetButtonEnabled(true),
                 ]
             }
@@ -451,7 +472,10 @@ impl<S: Transport> Session<S> {
         self.queued.clear();
         self.hold_deadline = None;
         vec![
-            Effect::AppendEntry { kind: "error", text: message.to_string() },
+            Effect::AppendEntry {
+                kind: "error",
+                text: message.to_string(),
+            },
             Effect::SetButtonActive(false),
             Effect::SetButtonEnabled(true),
             Effect::SetStatus(STATUS_IDLE),
@@ -610,8 +634,12 @@ mod tests {
             frames(&session),
             vec![
                 ClientFrame::Start,
-                ClientFrame::Audio { pcm: "AAA=".to_string() },
-                ClientFrame::Audio { pcm: "BBB=".to_string() },
+                ClientFrame::Audio {
+                    pcm: "AAA=".to_string()
+                },
+                ClientFrame::Audio {
+                    pcm: "BBB=".to_string()
+                },
             ]
         );
     }
@@ -637,7 +665,9 @@ mod tests {
             frames(&session),
             vec![
                 ClientFrame::Start,
-                ClientFrame::Audio { pcm: "AAA=".to_string() },
+                ClientFrame::Audio {
+                    pcm: "AAA=".to_string()
+                },
                 ClientFrame::Commit,
             ]
         );
@@ -655,7 +685,9 @@ mod tests {
             frames(&session),
             vec![
                 ClientFrame::Start,
-                ClientFrame::Audio { pcm: "AAA=".to_string() },
+                ClientFrame::Audio {
+                    pcm: "AAA=".to_string()
+                },
                 ClientFrame::Commit,
             ]
         );
@@ -690,7 +722,9 @@ mod tests {
             frames(&session),
             vec![
                 ClientFrame::Start,
-                ClientFrame::Audio { pcm: "AAA=".to_string() },
+                ClientFrame::Audio {
+                    pcm: "AAA=".to_string()
+                },
                 ClientFrame::Commit,
             ]
         );
@@ -700,7 +734,9 @@ mod tests {
             frames(&session),
             vec![
                 ClientFrame::Start,
-                ClientFrame::Audio { pcm: "AAA=".to_string() },
+                ClientFrame::Audio {
+                    pcm: "AAA=".to_string()
+                },
                 ClientFrame::Commit
             ],
             "past the cap the endpoint holds 30 s of buffer; more would be refused"
@@ -712,7 +748,9 @@ mod tests {
             frames(&session),
             vec![
                 ClientFrame::Start,
-                ClientFrame::Audio { pcm: "AAA=".to_string() },
+                ClientFrame::Audio {
+                    pcm: "AAA=".to_string()
+                },
                 ClientFrame::Commit
             ]
         );
@@ -746,7 +784,14 @@ mod tests {
     #[test]
     fn frames_that_do_not_parse_or_are_unknown_are_ignored() {
         let mut session = session();
-        for raw in ["", "not json", "[]", "null", r#"{"type":"nope"}"#, r#"{"pcm":"AAA="}"#] {
+        for raw in [
+            "",
+            "not json",
+            "[]",
+            "null",
+            r#"{"type":"nope"}"#,
+            r#"{"pcm":"AAA="}"#,
+        ] {
             assert!(
                 session.on_server_frame(raw, 0).is_empty(),
                 "{raw} must be ignored, not panic"
@@ -847,7 +892,9 @@ mod tests {
             frames(&session),
             vec![
                 ClientFrame::Start,
-                ClientFrame::Audio { pcm: "AAA=".to_string() },
+                ClientFrame::Audio {
+                    pcm: "AAA=".to_string()
+                },
                 ClientFrame::Commit,
             ],
             "a hold that did capture audio still commits"
@@ -926,7 +973,9 @@ mod tests {
             frames(&session),
             vec![
                 ClientFrame::Start,
-                ClientFrame::Audio { pcm: "AAA=".to_string() },
+                ClientFrame::Audio {
+                    pcm: "AAA=".to_string()
+                },
                 ClientFrame::Commit,
             ]
         );
@@ -978,7 +1027,10 @@ mod tests {
             Some(&Effect::SetStatus(STATUS_LISTENING)),
             "the page is now listening to the user, not playing"
         );
-        assert!(session.is_holding(), "the interrupting press is a hold like any other");
+        assert!(
+            session.is_holding(),
+            "the interrupting press is a hold like any other"
+        );
         assert_eq!(
             session.hold_deadline(),
             Some(1_000 + MAX_HOLD_MS),
@@ -1026,7 +1078,12 @@ mod tests {
         session.on_server_frame(DONE, 1_600);
         assert_eq!(
             session.on_server_frame(AUDIO, 2_000),
-            vec![Effect::SetStatus(STATUS_ANSWERING), Effect::PlayAudio { pcm: "AAA=".to_string() }],
+            vec![
+                Effect::SetStatus(STATUS_ANSWERING),
+                Effect::PlayAudio {
+                    pcm: "AAA=".to_string()
+                }
+            ],
             "the next answer plays"
         );
     }
@@ -1045,10 +1102,14 @@ mod tests {
             session.transport().frames,
             vec![
                 ClientFrame::Start,
-                ClientFrame::Audio { pcm: "AAA=".to_string() },
+                ClientFrame::Audio {
+                    pcm: "AAA=".to_string()
+                },
                 ClientFrame::Commit,
                 ClientFrame::Cancel,
-                ClientFrame::Audio { pcm: "BBB=".to_string() },
+                ClientFrame::Audio {
+                    pcm: "BBB=".to_string()
+                },
             ],
             "the audio went out as it was captured; the commit is what is held"
         );
@@ -1058,10 +1119,14 @@ mod tests {
             session.transport().frames,
             vec![
                 ClientFrame::Start,
-                ClientFrame::Audio { pcm: "AAA=".to_string() },
+                ClientFrame::Audio {
+                    pcm: "AAA=".to_string()
+                },
                 ClientFrame::Commit,
                 ClientFrame::Cancel,
-                ClientFrame::Audio { pcm: "BBB=".to_string() },
+                ClientFrame::Audio {
+                    pcm: "BBB=".to_string()
+                },
                 ClientFrame::Commit,
             ],
             "the held audio went out before the deferred commit"
@@ -1080,11 +1145,16 @@ mod tests {
         assert_eq!(effects.last(), Some(&Effect::SetStatus(STATUS_THINKING)));
         assert_eq!(
             session.transport().frames.last(),
-            Some(&ClientFrame::Audio { pcm: "CCC=".to_string() }),
+            Some(&ClientFrame::Audio {
+                pcm: "CCC=".to_string()
+            }),
             "no commit ahead of the turn still running"
         );
         session.on_server_frame(DONE, 2_000);
-        assert_eq!(session.transport().frames.last(), Some(&ClientFrame::Commit));
+        assert_eq!(
+            session.transport().frames.last(),
+            Some(&ClientFrame::Commit)
+        );
     }
 
     /// A hold that is still feeding keeps "正在听…" when the turn it was waiting on
@@ -1099,7 +1169,10 @@ mod tests {
         session.release();
         assert_eq!(
             session.on_server_frame(DONE, 1_000),
-            vec![Effect::SetButtonEnabled(true), Effect::SetStatus(STATUS_IDLE)],
+            vec![
+                Effect::SetButtonEnabled(true),
+                Effect::SetStatus(STATUS_IDLE)
+            ],
             "released: the hold is over"
         );
 
@@ -1107,7 +1180,10 @@ mod tests {
         holding.press(1_000);
         assert_eq!(
             holding.on_server_frame(DONE, 1_500),
-            vec![Effect::SetButtonEnabled(true), Effect::SetStatus(STATUS_LISTENING)],
+            vec![
+                Effect::SetButtonEnabled(true),
+                Effect::SetStatus(STATUS_LISTENING)
+            ],
             "the user is still talking over the answer"
         );
     }

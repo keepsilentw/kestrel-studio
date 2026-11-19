@@ -12,6 +12,7 @@ pub enum AppError {
     Forbidden(String),
     NotFound(String),
     Conflict(String),
+    TooManyRequests(String),
     Unavailable(String),
     Internal(anyhow::Error),
 }
@@ -24,6 +25,7 @@ impl AppError {
             Self::Forbidden(_) => StatusCode::FORBIDDEN,
             Self::NotFound(_) => StatusCode::NOT_FOUND,
             Self::Conflict(_) => StatusCode::CONFLICT,
+            Self::TooManyRequests(_) => StatusCode::TOO_MANY_REQUESTS,
             Self::Unavailable(_) => StatusCode::SERVICE_UNAVAILABLE,
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -36,6 +38,7 @@ impl AppError {
             | Self::Forbidden(message)
             | Self::NotFound(message)
             | Self::Conflict(message)
+            | Self::TooManyRequests(message)
             | Self::Unavailable(message) => message.clone(),
             // Never the provider's own text: the client gets a sentence, while
             // `describe` keeps the detail for logs, tool results and task rows.
@@ -66,6 +69,9 @@ impl AppError {
     }
     pub fn conflict(message: impl Into<String>) -> Self {
         Self::Conflict(message.into())
+    }
+    pub fn too_many_requests(message: impl Into<String>) -> Self {
+        Self::TooManyRequests(message.into())
     }
     pub fn unavailable(message: impl Into<String>) -> Self {
         Self::Unavailable(message.into())

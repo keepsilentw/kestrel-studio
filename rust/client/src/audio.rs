@@ -33,7 +33,7 @@ use std::rc::Rc;
 
 use wasm_bindgen::prelude::*;
 use wasm_bindgen::JsCast;
-use wasm_bindgen_futures::{JsFuture, spawn_local};
+use wasm_bindgen_futures::{spawn_local, JsFuture};
 use web_sys::{
     AudioBufferSourceNode, AudioContext, AudioContextOptions, AudioWorkletNode,
     AudioWorkletNodeOptions, ChannelCountMode, MediaStream, MediaStreamAudioSourceNode,
@@ -65,7 +65,12 @@ pub struct AudioGraph {
 
 impl AudioGraph {
     pub fn new() -> Self {
-        AudioGraph { context: None, mic: None, play_head: 0.0, scheduled: Vec::new() }
+        AudioGraph {
+            context: None,
+            mic: None,
+            play_head: 0.0,
+            scheduled: Vec::new(),
+        }
     }
 
     pub fn has_context(&self) -> bool {
@@ -94,8 +99,17 @@ impl AudioGraph {
         Ok(context)
     }
 
-    fn attach(&mut self, stream: MediaStream, source: MediaStreamAudioSourceNode, node: AudioWorkletNode) {
-        self.mic = Some(Mic { stream, source, node });
+    fn attach(
+        &mut self,
+        stream: MediaStream,
+        source: MediaStreamAudioSourceNode,
+        node: AudioWorkletNode,
+    ) {
+        self.mic = Some(Mic {
+            stream,
+            source,
+            node,
+        });
     }
 
     /// Schedule one chunk of the answer at the head of the queue.
@@ -195,9 +209,13 @@ pub async fn open_mic(
 ) -> Result<(), String> {
     let context = { graph.borrow_mut().ensure_context()? };
 
-    JsFuture::from(context.resume().map_err(|error| format!("cannot resume audio: {error:?}"))?)
-        .await
-        .map_err(|error| format!("cannot resume audio: {error:?}"))?;
+    JsFuture::from(
+        context
+            .resume()
+            .map_err(|error| format!("cannot resume audio: {error:?}"))?,
+    )
+    .await
+    .map_err(|error| format!("cannot resume audio: {error:?}"))?;
 
     // A context that reports a different rate means the browser ignored the
     // request; say so on the page, because the alternative reading is that the
@@ -238,7 +256,9 @@ pub async fn open_mic(
     )
     .await
     .map_err(|_| "拿不到麦克风权限，无法说话".to_string())?;
-    let stream: MediaStream = permission.dyn_into().map_err(|_| "getUserMedia returned garbage")?;
+    let stream: MediaStream = permission
+        .dyn_into()
+        .map_err(|_| "getUserMedia returned garbage")?;
 
     let source = context
         .create_media_stream_source(&stream)
@@ -255,7 +275,9 @@ pub async fn open_mic(
         .connect_with_audio_node(&node)
         .map_err(|error| format!("cannot connect the microphone: {error:?}"))?;
 
-    let port: MessagePort = node.port().map_err(|error| format!("the worklet has no port: {error:?}"))?;
+    let port: MessagePort = node
+        .port()
+        .map_err(|error| format!("the worklet has no port: {error:?}"))?;
     let forward = Rc::clone(&on_frame);
     let listener = Closure::wrap(Box::new(move |event: MessageEvent| {
         // The worklet transfers its buffer, so the payload is an ArrayBuffer.

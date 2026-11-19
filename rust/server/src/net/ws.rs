@@ -48,7 +48,10 @@ pub fn accept_key(sec_key: &str) -> Option<String> {
     }
     // The key is a base64 value; reject anything that is not, so a typo in a
     // client becomes a 400 rather than a signature over garbage.
-    if base64::engine::general_purpose::STANDARD.decode(key).is_err() {
+    if base64::engine::general_purpose::STANDARD
+        .decode(key)
+        .is_err()
+    {
         return None;
     }
     let mut hasher = Sha1::new();
@@ -184,15 +187,13 @@ impl WsDecoder {
                 0x8 => Self::close_frame(&payload)?,
                 0x9 => Frame::Ping(payload),
                 0xA => Frame::Pong(payload),
-                other => {
-                    return Err(WsError::Protocol(format!("unknown opcode {other:#x}")))
-                }
+                other => return Err(WsError::Protocol(format!("unknown opcode {other:#x}"))),
             })));
         }
 
         match (opcode, fin) {
             (0x1 | 0x2, true) if self.fragment_opcode.is_none() => {
-                return Ok(Some(Some(Self::message(opcode, payload)?)))
+                Ok(Some(Some(Self::message(opcode, payload)?)))
             }
             (0x1 | 0x2, _) => {
                 if self.fragment_opcode.is_some() {
@@ -200,7 +201,7 @@ impl WsDecoder {
                 }
                 self.fragment_opcode = Some(opcode);
                 self.fragment_payload = payload;
-                return Ok(Some(None));
+                Ok(Some(None))
             }
             (0x0, _) => {
                 let start = self
@@ -215,11 +216,9 @@ impl WsDecoder {
                 }
                 let assembled = std::mem::take(&mut self.fragment_payload);
                 self.fragment_opcode = None;
-                return Ok(Some(Some(Self::message(start, assembled)?)));
+                Ok(Some(Some(Self::message(start, assembled)?)))
             }
-            (opcode, _) => {
-                return Err(WsError::Protocol(format!("unknown opcode {opcode:#x}")))
-            }
+            (opcode, _) => Err(WsError::Protocol(format!("unknown opcode {opcode:#x}"))),
         }
     }
 
@@ -298,7 +297,7 @@ mod tests {
     /// Builds a frame the way a peer on the wire would, so the decoder is driven
     /// by bytes rather than by this module's own encoder.
     fn raw(fin: bool, opcode: u8, payload: &[u8], mask: Option<[u8; 4]>) -> Vec<u8> {
-        let mut out = vec![u8::from(fin) * 0x80 | opcode];
+        let mut out = vec![(u8::from(fin) * 0x80) | opcode];
         let length = payload.len();
         let (mut marker, extended): (u8, Vec<u8>) = if length <= 125 {
             (length as u8, Vec::new())
@@ -332,21 +331,43 @@ mod tests {
         //   printf '%s' "KEY258EAFA5-E914-47DA-95CA-C5AB0DC85B11" \
         //     | openssl dgst -sha1 -binary | base64
         // The first is the key used in the RFC 6455 handwalk example.
-        assert_eq!(accept_key("x3JJHMbDL1EzLkh9GBhXDw==").as_deref(), Some("HSmrc0sMlYUkAGmm5OPpG2HaGWk="));
-        assert_eq!(accept_key("dGhlIHNhbXBsZSBub25jYXQ=").as_deref(), Some("C0iGEECXJdPQ1Dfevh4d/wLzuZw="));
+        assert_eq!(
+            accept_key("x3JJHMbDL1EzLkh9GBhXDw==").as_deref(),
+            Some("HSmrc0sMlYUkAGmm5OPpG2HaGWk=")
+        );
+        assert_eq!(
+            accept_key("dGhlIHNhbXBsZSBub25jYXQ=").as_deref(),
+            Some("C0iGEECXJdPQ1Dfevh4d/wLzuZw=")
+        );
         assert_eq!(accept_key(""), None);
-        assert_eq!(accept_key("not base64!!"), None, "a typo must not be signed");
+        assert_eq!(
+            accept_key("not base64!!"),
+            None,
+            "a typo must not be signed"
+        );
     }
 
     #[test]
     fn both_directions_round_trip_and_the_mask_rule_is_enforced() {
         let server_side = encode(&Frame::Text("你好, 红隼".into()), false);
-        assert_eq!(decode(&server_side, false).expect("server frame"), vec![Frame::Text("你好, 红隼".into())]);
-        assert!(decode(&server_side, true).is_err(), "a client frame must be masked");
+        assert_eq!(
+            decode(&server_side, false).expect("server frame"),
+            vec![Frame::Text("你好, 红隼".into())]
+        );
+        assert!(
+            decode(&server_side, true).is_err(),
+            "a client frame must be masked"
+        );
 
         let client_side = encode(&Frame::Binary(vec![1, 2, 3, 250]), true);
-        assert_eq!(decode(&client_side, true).expect("client frame"), vec![Frame::Binary(vec![1, 2, 3, 250])]);
-        assert!(decode(&client_side, false).is_err(), "a server frame must not be masked");
+        assert_eq!(
+            decode(&client_side, true).expect("client frame"),
+            vec![Frame::Binary(vec![1, 2, 3, 250])]
+        );
+        assert!(
+            decode(&client_side, false).is_err(),
+            "a server frame must not be masked"
+        );
     }
 
     #[test]
@@ -359,8 +380,16 @@ mod tests {
                 126..=65_535 => 126,
                 _ => 127,
             };
-            assert_eq!(bytes[1] & 0x7f, expected, "length {length} picks the wrong form");
-            assert_eq!(decode(&bytes, false).expect("decoded"), vec![Frame::Binary(payload)], "length {length}");
+            assert_eq!(
+                bytes[1] & 0x7f,
+                expected,
+                "length {length} picks the wrong form"
+            );
+            assert_eq!(
+                decode(&bytes, false).expect("decoded"),
+                vec![Frame::Binary(payload)],
+                "length {length}"
+            );
         }
     }
 
@@ -369,51 +398,121 @@ mod tests {
         let payload: Vec<u8> = (0..64u8).collect();
         let bytes = raw(true, 0x2, &payload, Some([0xAA, 0xBB, 0xCC, 0xDD]));
         assert_ne!(&bytes[10..], payload.as_slice(), "the wire bytes are XORed");
-        assert_eq!(decode(&bytes, true).expect("unmasked"), vec![Frame::Binary(payload)]);
+        assert_eq!(
+            decode(&bytes, true).expect("unmasked"),
+            vec![Frame::Binary(payload)]
+        );
     }
 
     #[test]
     fn fragments_reassemble_into_one_message() {
         let mut bytes = raw(false, 0x1, b"{\"type\"", None);
         bytes.extend(raw(true, 0x0, b": \"start\"}", None));
-        assert_eq!(decode(&bytes, false).expect("assembled"), vec![Frame::Text("{\"type\": \"start\"}".into())]);
+        assert_eq!(
+            decode(&bytes, false).expect("assembled"),
+            vec![Frame::Text("{\"type\": \"start\"}".into())]
+        );
 
-        assert!(matches!(decode(&raw(true, 0x0, b"tail", None), false), Err(WsError::Protocol(_))), "continuation without a start");
+        assert!(
+            matches!(
+                decode(&raw(true, 0x0, b"tail", None), false),
+                Err(WsError::Protocol(_))
+            ),
+            "continuation without a start"
+        );
         let mut twice = raw(false, 0x1, b"a", None);
         twice.extend(raw(false, 0x1, b"b", None));
-        assert!(matches!(decode(&twice, false), Err(WsError::Protocol(_))), "start while fragmenting");
+        assert!(
+            matches!(decode(&twice, false), Err(WsError::Protocol(_))),
+            "start while fragmenting"
+        );
     }
 
     #[test]
     fn control_frames_never_fragment_and_are_capped() {
-        assert_eq!(decode(&raw(true, 0x9, b"hb", None), false).expect("ping"), vec![Frame::Ping(b"hb".to_vec())]);
-        assert_eq!(decode(&raw(true, 0xA, b"hb", None), false).expect("pong"), vec![Frame::Pong(b"hb".to_vec())]);
+        assert_eq!(
+            decode(&raw(true, 0x9, b"hb", None), false).expect("ping"),
+            vec![Frame::Ping(b"hb".to_vec())]
+        );
+        assert_eq!(
+            decode(&raw(true, 0xA, b"hb", None), false).expect("pong"),
+            vec![Frame::Pong(b"hb".to_vec())]
+        );
         assert_eq!(
             decode(&raw(true, 0x8, &1000u16.to_be_bytes(), None), false).expect("close"),
             vec![Frame::Close(Some(1000))]
         );
-        assert_eq!(decode(&raw(true, 0x8, &[], None), false).expect("bare close"), vec![Frame::Close(None)]);
-        assert!(matches!(decode(&raw(true, 0x8, &[0x03], None), false), Err(WsError::Protocol(_))), "one byte is not a code");
-        assert!(matches!(decode(&raw(true, 0x8, &5000u16.to_be_bytes(), None), false), Err(WsError::Protocol(_))), "out of range code");
-        assert!(matches!(decode(&raw(false, 0x9, b"x", None), false), Err(WsError::Protocol(_))), "fragmented control frame");
-        assert!(matches!(decode(&raw(true, 0x9, &vec![9u8; 126], None), false), Err(WsError::Protocol(_))), "control payload over 125");
+        assert_eq!(
+            decode(&raw(true, 0x8, &[], None), false).expect("bare close"),
+            vec![Frame::Close(None)]
+        );
+        assert!(
+            matches!(
+                decode(&raw(true, 0x8, &[0x03], None), false),
+                Err(WsError::Protocol(_))
+            ),
+            "one byte is not a code"
+        );
+        assert!(
+            matches!(
+                decode(&raw(true, 0x8, &5000u16.to_be_bytes(), None), false),
+                Err(WsError::Protocol(_))
+            ),
+            "out of range code"
+        );
+        assert!(
+            matches!(
+                decode(&raw(false, 0x9, b"x", None), false),
+                Err(WsError::Protocol(_))
+            ),
+            "fragmented control frame"
+        );
+        assert!(
+            matches!(
+                decode(&raw(true, 0x9, &[9u8; 126], None), false),
+                Err(WsError::Protocol(_))
+            ),
+            "control payload over 125"
+        );
     }
 
     #[test]
     fn malformed_headers_are_protocol_errors_and_oversize_is_refused_early() {
         let mut rsv = raw(true, 0x1, b"x", None);
         rsv[0] |= 0x40;
-        assert!(matches!(decode(&rsv, false), Err(WsError::Protocol(_))), "RSV bits must be zero");
-        assert!(matches!(decode(&raw(true, 0x3, b"x", None), false), Err(WsError::Protocol(_))), "unknown opcode");
-        assert!(matches!(decode(&raw(true, 0x1, &[0xFF, 0xFE], None), false), Err(WsError::Protocol(_))), "text must be UTF-8");
+        assert!(
+            matches!(decode(&rsv, false), Err(WsError::Protocol(_))),
+            "RSV bits must be zero"
+        );
+        assert!(
+            matches!(
+                decode(&raw(true, 0x3, b"x", None), false),
+                Err(WsError::Protocol(_))
+            ),
+            "unknown opcode"
+        );
+        assert!(
+            matches!(
+                decode(&raw(true, 0x1, &[0xFF, 0xFE], None), false),
+                Err(WsError::Protocol(_))
+            ),
+            "text must be UTF-8"
+        );
 
         let mut wide = vec![0x82u8, 127];
         wide.extend((1u64 << 63).to_be_bytes());
-        assert!(matches!(decode(&wide, false), Err(WsError::Protocol(_))), "top bit of a 64-bit length is reserved");
+        assert!(
+            matches!(decode(&wide, false), Err(WsError::Protocol(_))),
+            "top bit of a 64-bit length is reserved"
+        );
 
         let mut big = vec![0x82u8, 127];
         big.extend(((MAX_MESSAGE_BYTES + 1) as u64).to_be_bytes());
-        assert_eq!(decode(&big, false), Err(WsError::TooLarge), "refused before the body arrives");
+        assert_eq!(
+            decode(&big, false),
+            Err(WsError::TooLarge),
+            "refused before the body arrives"
+        );
     }
 
     #[test]
@@ -423,7 +522,11 @@ mod tests {
         for (index, byte) in bytes.iter().enumerate() {
             let got = decoder.push(&[*byte], false).expect("no error mid-frame");
             if index + 1 == bytes.len() {
-                assert_eq!(got, vec![Frame::Text("slow".into())], "the last byte completes it");
+                assert_eq!(
+                    got,
+                    vec![Frame::Text("slow".into())],
+                    "the last byte completes it"
+                );
             } else {
                 assert!(got.is_empty(), "byte {index} produced a frame too early");
             }
@@ -433,8 +536,14 @@ mod tests {
         batch.extend(encode(&Frame::Ping(vec![1]), false));
         batch.extend(&raw(true, 0x1, b"hang", None)[..2]);
         let mut second = WsDecoder::new();
-        assert_eq!(second.push(&batch, false).expect("two frames"), vec![Frame::Text("a".into()), Frame::Ping(vec![1])]);
-        assert!(second.push(b"ing", false).expect("incomplete").is_empty(), "three of four payload bytes are not a message");
+        assert_eq!(
+            second.push(&batch, false).expect("two frames"),
+            vec![Frame::Text("a".into()), Frame::Ping(vec![1])]
+        );
+        assert!(
+            second.push(b"ing", false).expect("incomplete").is_empty(),
+            "three of four payload bytes are not a message"
+        );
         assert_eq!(
             second.push(b"!", false).expect("message"),
             vec![Frame::Text("ing!".into())],

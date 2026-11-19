@@ -12,10 +12,12 @@ pub struct InputItem {
 impl InputItem {
     #[cfg(test)]
     pub fn user(content: &str) -> Self {
-        Self { role: "user".to_string(), content: content.to_string() }
+        Self {
+            role: "user".to_string(),
+            content: content.to_string(),
+        }
     }
 }
 
 pub mod responses;
 pub mod token;
-

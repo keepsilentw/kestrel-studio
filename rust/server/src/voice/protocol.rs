@@ -23,15 +23,38 @@ mod tests {
 
     #[test]
     fn the_five_client_frames_parse_and_nothing_else_does() {
-        assert_eq!(parse_client_frame(r#"{"type":"start"}"#), Some(ClientFrame::Start));
-        assert_eq!(parse_client_frame(r#"{"type":"commit"}"#), Some(ClientFrame::Commit));
-        assert_eq!(parse_client_frame(r#"{"type":"cancel"}"#), Some(ClientFrame::Cancel));
-        assert_eq!(parse_client_frame(r#"{"type":"stop"}"#), Some(ClientFrame::Stop));
+        assert_eq!(
+            parse_client_frame(r#"{"type":"start"}"#),
+            Some(ClientFrame::Start)
+        );
+        assert_eq!(
+            parse_client_frame(r#"{"type":"commit"}"#),
+            Some(ClientFrame::Commit)
+        );
+        assert_eq!(
+            parse_client_frame(r#"{"type":"cancel"}"#),
+            Some(ClientFrame::Cancel)
+        );
+        assert_eq!(
+            parse_client_frame(r#"{"type":"stop"}"#),
+            Some(ClientFrame::Stop)
+        );
         assert_eq!(
             parse_client_frame(r#"{"type":"audio","pcm":"AAA="}"#),
-            Some(ClientFrame::Audio { pcm: "AAA=".to_string() })
+            Some(ClientFrame::Audio {
+                pcm: "AAA=".to_string()
+            })
         );
-        for raw in ["", "not json", "[]", "null", r#"{"type":"nope"}"#, r#"{"type":"audio"}"#, r#"{"type":"audio","pcm":""}"#, r#"{"pcm":"AAA="}"#] {
+        for raw in [
+            "",
+            "not json",
+            "[]",
+            "null",
+            r#"{"type":"nope"}"#,
+            r#"{"type":"audio"}"#,
+            r#"{"type":"audio","pcm":""}"#,
+            r#"{"pcm":"AAA="}"#,
+        ] {
             assert_eq!(parse_client_frame(raw), None, "{raw}");
         }
     }
@@ -41,9 +64,26 @@ mod tests {
         // Each one is a `type` discriminant plus its fields, in the camelCase the
         // client script reads.
         let cases: Vec<(ServerFrame, &str, &str)> = vec![
-            (ServerFrame::Ready { conversation_id: 7 }, "ready", "\"conversationId\":7"),
-            (ServerFrame::Transcript { text: "一只红隼".into() }, "transcript", "\"text\":\"一只红隼\""),
-            (ServerFrame::ToolCall { name: "generate_image".into(), status: "running".into() }, "tool_call", "\"status\":\"running\""),
+            (
+                ServerFrame::Ready { conversation_id: 7 },
+                "ready",
+                "\"conversationId\":7",
+            ),
+            (
+                ServerFrame::Transcript {
+                    text: "一只红隼".into(),
+                },
+                "transcript",
+                "\"text\":\"一只红隼\"",
+            ),
+            (
+                ServerFrame::ToolCall {
+                    name: "generate_image".into(),
+                    status: "running".into(),
+                },
+                "tool_call",
+                "\"status\":\"running\"",
+            ),
             (
                 ServerFrame::Asset {
                     id: 3,
@@ -55,10 +95,26 @@ mod tests {
                 "asset",
                 "\"url\":\"/api/v1/assets/3/download\"",
             ),
-            (ServerFrame::Audio { pcm: "AAA=".into() }, "audio", "\"pcm\":\"AAA=\""),
-            (ServerFrame::AssistantText { text: "看好".into() }, "assistant_text", "\"text\":\"看好\""),
+            (
+                ServerFrame::Audio { pcm: "AAA=".into() },
+                "audio",
+                "\"pcm\":\"AAA=\"",
+            ),
+            (
+                ServerFrame::AssistantText {
+                    text: "看好".into(),
+                },
+                "assistant_text",
+                "\"text\":\"看好\"",
+            ),
             (ServerFrame::Done, "done", ""),
-            (ServerFrame::Error { message: "上游断开".into() }, "error", "\"message\":\"上游断开\""),
+            (
+                ServerFrame::Error {
+                    message: "上游断开".into(),
+                },
+                "error",
+                "\"message\":\"上游断开\"",
+            ),
         ];
         for (frame, name, fragment) in cases {
             let json = frame.to_json();
@@ -84,6 +140,9 @@ mod tests {
         let json = frame.to_json();
         assert!(json.contains("\"kind\":\"video\""), "{json}");
         assert!(json.contains("\"bytes\":8"), "{json}");
-        assert!(!json.contains("messageId"), "no turn id on this channel: {json}");
+        assert!(
+            !json.contains("messageId"),
+            "no turn id on this channel: {json}"
+        );
     }
 }

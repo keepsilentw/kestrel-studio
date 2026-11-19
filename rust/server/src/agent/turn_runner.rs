@@ -45,14 +45,14 @@ impl TurnRunner {
             .await?
         {
             if self.is_running(conversation_id) {
-                return Ok(self
+                return self
                     .state
                     .events
                     .seq_before_turn(conversation_id, unfinished)
-                    .await?);
+                    .await;
             }
         }
-        Ok(self.state.events.latest_seq(conversation_id).await?)
+        self.state.events.latest_seq(conversation_id).await
     }
 
     /// Starts a turn and returns its assistant message id — the turn's identity,
@@ -84,17 +84,28 @@ impl TurnRunner {
             .create_assistant_placeholder(conversation_id, Some(mode))
             .await?;
 
-        if let Some(view) = self.state.conversations.message_view(user_message_id).await? {
+        if let Some(view) = self
+            .state
+            .conversations
+            .message_view(user_message_id)
+            .await?
+        {
             self.state
                 .events
-                .publish(conversation_id, ConversationEvent::UserMessage { message: view })
+                .publish(
+                    conversation_id,
+                    ConversationEvent::UserMessage { message: view },
+                )
                 .await?;
         }
         self.state
             .events
             .publish(
                 conversation_id,
-                ConversationEvent::TurnStarted { message_id, mode: Some(mode) },
+                ConversationEvent::TurnStarted {
+                    message_id,
+                    mode: Some(mode),
+                },
             )
             .await?;
 

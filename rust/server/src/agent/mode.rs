@@ -86,7 +86,10 @@ mod tests {
         assert!(Mode::Chat.tool_names().is_empty());
         assert_eq!(Mode::Auto.tool_names().len(), 3);
         assert_eq!(Mode::Image.tool_names(), ["generate_image"]);
-        assert_eq!(Mode::Video.tool_names(), ["generate_video", "get_video_task"]);
+        assert_eq!(
+            Mode::Video.tool_names(),
+            ["generate_video", "get_video_task"]
+        );
     }
 
     #[test]
@@ -95,12 +98,17 @@ mod tests {
         assert!(auto.starts_with("你是一个生成式媒体助手"));
         assert!(auto.contains("当前是智能模式"));
         assert!(!auto.contains("当前是视频模式"));
-        assert!(Mode::Video.build_instructions().contains("提交后不要反复调用 get_video_task"));
+        assert!(Mode::Video
+            .build_instructions()
+            .contains("提交后不要反复调用 get_video_task"));
     }
 
     #[test]
     fn a_mode_round_trips_through_json_as_its_wire_name() {
-        assert_eq!(serde_json::to_string(&Mode::Image).expect("encode"), "\"image\"");
+        assert_eq!(
+            serde_json::to_string(&Mode::Image).expect("encode"),
+            "\"image\""
+        );
         assert_eq!(
             serde_json::from_str::<Mode>("\"chat\"").expect("decode"),
             Mode::Chat

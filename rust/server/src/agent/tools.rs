@@ -55,11 +55,19 @@ pub struct ToolOutcome {
 
 impl ToolOutcome {
     fn failure(output: impl Into<String>) -> Self {
-        Self { ok: false, output: output.into(), assets: vec![] }
+        Self {
+            ok: false,
+            output: output.into(),
+            assets: vec![],
+        }
     }
 
     fn success(output: impl Into<String>) -> Self {
-        Self { ok: true, output: output.into(), assets: vec![] }
+        Self {
+            ok: true,
+            output: output.into(),
+            assets: vec![],
+        }
     }
 }
 
@@ -187,7 +195,10 @@ impl ToolRegistry {
     /// returns the same three today but would silently shrink if `auto` is ever
     /// narrowed.
     pub fn all_specs() -> Vec<FunctionTool> {
-        TOOL_NAMES.iter().filter_map(|name| Self::spec(name)).collect()
+        TOOL_NAMES
+            .iter()
+            .filter_map(|name| Self::spec(name))
+            .collect()
     }
 
     /// Runs one tool by name under a hard timeout.
@@ -204,7 +215,9 @@ impl ToolRegistry {
         }
         let api_key = match state.require_key().await {
             Ok(key) => key,
-            Err(error) => return ToolOutcome::failure(format!("Tool failed: {}", error.describe())),
+            Err(error) => {
+                return ToolOutcome::failure(format!("Tool failed: {}", error.describe()))
+            }
         };
         let future = async move {
             match name {
@@ -250,7 +263,9 @@ async fn generate_image(
     for url in urls {
         match state.media.store(TaskKind::Image, &url).await {
             Ok(stored) => assets.push(stored),
-            Err(error) => return ToolOutcome::failure(format!("Tool failed: {}", error.describe())),
+            Err(error) => {
+                return ToolOutcome::failure(format!("Tool failed: {}", error.describe()))
+            }
         }
     }
 
@@ -285,22 +300,24 @@ async fn generate_video(
 
     // Scoped to the conversation, so an asset id cannot point at another user's
     // image.
-    let first_frame = match requested_asset_id {
-        None => None,
-        Some(asset_id) => state
+    let first_frame = if let Some(asset_id) = requested_asset_id {
+        match state
             .conversations
             .image_asset_in(context.conversation_id, asset_id)
             .await
             .ok()
-            .flatten(),
+            .flatten()
+        {
+            Some(frame) => Some(frame),
+            None => {
+                return ToolOutcome::failure(format!(
+                    "first_frame_asset_id {asset_id} is not an image in this conversation."
+                ))
+            }
+        }
+    } else {
+        None
     };
-
-    if requested_asset_id.is_some() && first_frame.is_none() {
-        return ToolOutcome::failure(format!(
-            "first_frame_asset_id {} is not an image in this conversation.",
-            requested_asset_id.expect("checked above")
-        ));
-    }
     if first_frame.is_some() && !state.config.is_publicly_reachable() {
         return ToolOutcome::failure(
             "Image-to-video needs a publicly reachable frame URL, but PUBLIC_BASE_URL points at localhost. Generate the video from the prompt alone, or configure a public base URL.",
@@ -311,9 +328,9 @@ async fn generate_video(
     // Text-to-video and image-to-video are the same model: which one this is
     // depends only on whether a first frame is attached below.
     let model = bailian.video_model.clone();
-    let frame_url = first_frame
-        .as_ref()
-        .map(|(id, _path)| build_signed_frame_url(&state.config, *id, chrono::Utc::now().timestamp_millis()));
+    let frame_url = first_frame.as_ref().map(|(id, _path)| {
+        build_signed_frame_url(&state.config, *id, chrono::Utc::now().timestamp_millis())
+    });
 
     let provider_task_id = match state
         .media
@@ -420,19 +437,25 @@ mod tests {
         value
     }
 
-    const CONTEXT: ToolContext = ToolContext { conversation_id: 1, message_id: 2 };
+    const CONTEXT: ToolContext = ToolContext {
+        conversation_id: 1,
+        message_id: 2,
+    };
 
     #[test]
     fn each_mode_advertises_its_own_slice_of_the_registry() {
         let names = |mode: Mode| -> Vec<String> {
-            ToolRegistry::specs_for(mode).iter().map(|spec| spec.name.clone()).collect()
+            ToolRegistry::specs_for(mode)
+                .iter()
+                .map(|spec| spec.name.clone())
+                .collect()
         };
-        assert!(names(Mode::Chat).is_empty(), "a chat turn cannot spend money");
-        assert_eq!(names(Mode::Image), vec!["generate_image"]);
-        assert_eq!(
-            names(Mode::Video),
-            vec!["generate_video", "get_video_task"]
+        assert!(
+            names(Mode::Chat).is_empty(),
+            "a chat turn cannot spend money"
         );
+        assert_eq!(names(Mode::Image), vec!["generate_image"]);
+        assert_eq!(names(Mode::Video), vec!["generate_video", "get_video_task"]);
         assert_eq!(
             names(Mode::Auto),
             vec!["generate_image", "generate_video", "get_video_task"]
@@ -443,14 +466,23 @@ mod tests {
     #[test]
     fn specs_carry_the_schema_the_model_needs_to_call_them() {
         let specs = ToolRegistry::all_specs();
-        let image = specs.iter().find(|spec| spec.name == "generate_image").expect("spec");
+        let image = specs
+            .iter()
+            .find(|spec| spec.name == "generate_image")
+            .expect("spec");
         assert_eq!(image.r#type, "function");
         assert!(image.description.contains("bitmap asset"));
         assert_eq!(image.parameters["required"], json!(["prompt"]));
         assert_eq!(image.parameters["additionalProperties"], json!(false));
 
-        let video = specs.iter().find(|spec| spec.name == "generate_video").expect("spec");
-        assert!(video.description.contains("do not poll"), "the text is what stops the model polling");
+        let video = specs
+            .iter()
+            .find(|spec| spec.name == "generate_video")
+            .expect("spec");
+        assert!(
+            video.description.contains("do not poll"),
+            "the text is what stops the model polling"
+        );
         assert!(video.parameters["properties"]["duration"]["description"]
             .as_str()
             .expect("description")
@@ -462,9 +494,14 @@ mod tests {
             json!(["1080P", "720P", "480P"])
         );
         assert!(video.parameters["properties"].get("ratio").is_some());
-        assert!(video.parameters["properties"].get("first_frame_asset_id").is_some());
+        assert!(video.parameters["properties"]
+            .get("first_frame_asset_id")
+            .is_some());
 
-        let task = specs.iter().find(|spec| spec.name == "get_video_task").expect("spec");
+        let task = specs
+            .iter()
+            .find(|spec| spec.name == "get_video_task")
+            .expect("spec");
         assert_eq!(task.parameters["required"], json!(["task_id"]));
     }
 
@@ -512,7 +549,13 @@ mod tests {
         )
         .await;
         assert!(!outcome.ok);
-        assert!(outcome.output.contains("PUBLIC_BASE_URL points at localhost"), "{}", outcome.output);
+        assert!(
+            outcome
+                .output
+                .contains("PUBLIC_BASE_URL points at localhost"),
+            "{}",
+            outcome.output
+        );
         assert!(outcome.assets.is_empty());
     }
 
@@ -578,12 +621,22 @@ mod tests {
 
         state
             .tasks
-            .finish(task_id, TaskStatus::Failed, None, None, Some("供应商返回状态 FAILED"))
+            .finish(
+                task_id,
+                TaskStatus::Failed,
+                None,
+                None,
+                Some("供应商返回状态 FAILED"),
+            )
             .await
             .expect("finish");
         let failed = get_video_task(&state, &args(json!({ "task_id": task_id })), CONTEXT).await;
         assert!(failed.output.contains("失败 (failed)"), "{}", failed.output);
-        assert!(failed.output.contains("原因：供应商返回状态 FAILED"), "{}", failed.output);
+        assert!(
+            failed.output.contains("原因：供应商返回状态 FAILED"),
+            "{}",
+            failed.output
+        );
 
         // Another conversation's task is not visible here, and vice versa.
         sqlx::query("INSERT INTO conversations (id, user_id, title, created_at, updated_at) VALUES (2,1,'other',1,1)")
@@ -593,7 +646,10 @@ mod tests {
         let elsewhere = get_video_task(
             &state,
             &args(json!({ "task_id": task_id })),
-            ToolContext { conversation_id: 2, message_id: 3 },
+            ToolContext {
+                conversation_id: 2,
+                message_id: 3,
+            },
         )
         .await;
         assert!(!elsewhere.ok);

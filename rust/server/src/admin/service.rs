@@ -22,7 +22,8 @@ fn is_acceptable_username(name: &str) -> bool {
 }
 
 pub fn is_acceptable_password(password: &str) -> bool {
-    password.trim().chars().count() >= MIN_PASSWORD_LENGTH && password.chars().count() <= MAX_PASSWORD_LENGTH
+    password.trim().chars().count() >= MIN_PASSWORD_LENGTH
+        && password.chars().count() <= MAX_PASSWORD_LENGTH
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -75,7 +76,10 @@ pub struct AdminService {
 
 impl AdminService {
     pub fn new(pool: SqlitePool, conversations: Arc<ConversationService>) -> Self {
-        Self { pool, conversations }
+        Self {
+            pool,
+            conversations,
+        }
     }
 
     pub async fn list(&self) -> Result<Vec<AccountView>, AppError> {
@@ -138,7 +142,11 @@ impl AdminService {
     }
 
     /// New accounts are always plain users; promotion is not part of this surface.
-    pub async fn create(&self, username: &str, password_plain: &str) -> Result<CreateAccountResult, AppError> {
+    pub async fn create(
+        &self,
+        username: &str,
+        password_plain: &str,
+    ) -> Result<CreateAccountResult, AppError> {
         let name = username.trim();
         if !is_acceptable_username(name) {
             return Ok(CreateAccountResult::InvalidUsername);
@@ -173,7 +181,11 @@ impl AdminService {
         }
     }
 
-    pub async fn reset_password(&self, id: i64, password_plain: &str) -> Result<ResetPasswordResult, AppError> {
+    pub async fn reset_password(
+        &self,
+        id: i64,
+        password_plain: &str,
+    ) -> Result<ResetPasswordResult, AppError> {
         if !is_acceptable_password(password_plain) {
             return Ok(ResetPasswordResult::InvalidPassword);
         }
@@ -199,7 +211,11 @@ impl AdminService {
     ///
     /// Refuses to remove the acting account (which would end the session mid-flight)
     /// and the last super admin (which would leave nobody able to manage accounts).
-    pub async fn remove(&self, id: i64, actor: &Principal) -> Result<RemoveAccountResult, AppError> {
+    pub async fn remove(
+        &self,
+        id: i64,
+        actor: &Principal,
+    ) -> Result<RemoveAccountResult, AppError> {
         if id == actor.id {
             return Ok(RemoveAccountResult::SelfAccount);
         }
@@ -210,7 +226,9 @@ impl AdminService {
         let Some(target) = target else {
             return Ok(RemoveAccountResult::Missing);
         };
-        if parse_role(target.try_get("role").ok()) == Role::Super && self.super_admin_count().await? <= 1 {
+        if parse_role(target.try_get("role").ok()) == Role::Super
+            && self.super_admin_count().await? <= 1
+        {
             return Ok(RemoveAccountResult::LastSuperAdmin);
         }
 
@@ -218,7 +236,10 @@ impl AdminService {
             .bind(id)
             .fetch_all(&self.pool)
             .await?;
-        let ids: Vec<i64> = rows.iter().filter_map(|row| row.try_get("id").ok()).collect();
+        let ids: Vec<i64> = rows
+            .iter()
+            .filter_map(|row| row.try_get("id").ok())
+            .collect();
 
         let (conversations, assets) = self.conversations.delete_conversations(&ids).await?;
         // Device tokens reference the account, so they go before the user row or the
@@ -232,13 +253,19 @@ impl AdminService {
             .bind(id)
             .execute(&self.pool)
             .await?;
-        Ok(RemoveAccountResult::Removed { conversations, assets })
+        Ok(RemoveAccountResult::Removed {
+            conversations,
+            assets,
+        })
     }
 
-    async fn grouped_conversation_counts(&self) -> Result<std::collections::HashMap<i64, i64>, AppError> {
-        let rows = sqlx::query("SELECT user_id, COUNT(*) AS total FROM conversations GROUP BY user_id")
-            .fetch_all(&self.pool)
-            .await?;
+    async fn grouped_conversation_counts(
+        &self,
+    ) -> Result<std::collections::HashMap<i64, i64>, AppError> {
+        let rows =
+            sqlx::query("SELECT user_id, COUNT(*) AS total FROM conversations GROUP BY user_id")
+                .fetch_all(&self.pool)
+                .await?;
         Ok(grouped(&rows))
     }
 
@@ -261,11 +288,21 @@ impl AdminService {
 
 fn grouped(rows: &[sqlx::sqlite::SqliteRow]) -> std::collections::HashMap<i64, i64> {
     rows.iter()
-        .filter_map(|row| Some((row.try_get::<i64, _>("user_id").ok()?, row.try_get::<i64, _>("total").ok()?)))
+        .filter_map(|row| {
+            Some((
+                row.try_get::<i64, _>("user_id").ok()?,
+                row.try_get::<i64, _>("total").ok()?,
+            ))
+        })
         .collect()
 }
 
-fn to_account(row: &sqlx::sqlite::SqliteRow, id: i64, conversation_count: i64, asset_count: i64) -> AccountView {
+fn to_account(
+    row: &sqlx::sqlite::SqliteRow,
+    id: i64,
+    conversation_count: i64,
+    asset_count: i64,
+) -> AccountView {
     let role = parse_role(row.try_get("role").ok());
     AccountView {
         id,

@@ -74,8 +74,16 @@ mod tests {
         assert_eq!(read_string(&args, "prompt", "默认"), "一只红隼");
         assert_eq!(read_string(&args, "missing", "默认"), "默认");
         assert_eq!(read_optional_string(&args, "blank"), None);
-        assert_eq!(read_number(&args, "n", 1.0), 1.0, "a JSON string is not a number");
-        assert_eq!(read_number(&args, "neg", 4.0), 4.0, "non-positive falls back");
+        assert_eq!(
+            read_number(&args, "n", 1.0),
+            1.0,
+            "a JSON string is not a number"
+        );
+        assert_eq!(
+            read_number(&args, "neg", 4.0),
+            4.0,
+            "non-positive falls back"
+        );
         assert_eq!(read_optional_number(&args, "neg"), Some(-3));
         assert_eq!(clamp(12.9, 1, 10), 10);
     }

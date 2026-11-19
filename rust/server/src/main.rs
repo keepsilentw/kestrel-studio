@@ -10,14 +10,14 @@ mod env_file;
 mod error;
 mod http;
 mod media;
+mod net;
 mod sse;
 mod state;
 mod task;
-mod voice;
-mod net;
 #[cfg(test)]
 mod test_utils;
 mod view;
+mod voice;
 
 use std::error::Error;
 
@@ -38,10 +38,117 @@ fn log_uses_ansi() -> bool {
     std::io::stderr().is_terminal()
 }
 
+/// `docker compose` healthcheck entry point. The runtime image is `scratch`, so
+/// there is no curl or shell to run one with: the binary probes its own listener
+/// instead and exits 0 only on an HTTP 200 from `/healthz`.
+fn run_healthcheck() -> i32 {
+    use std::io::{Read, Write};
+    use std::net::{SocketAddr, TcpStream};
+    use std::time::Duration;
+
+    let port = match std::env::var("PORT")
+        .ok()
+        .and_then(|raw| raw.parse::<u16>().ok())
+    {
+        Some(port) if port > 0 => port,
+        _ => return 2,
+    };
+    let address = SocketAddr::from(([127, 0, 0, 1], port));
+    let Ok(mut stream) = TcpStream::connect_timeout(&address, Duration::from_secs(2)) else {
+        return 1;
+    };
+    stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
+    if stream
+        .write_all(b"GET /healthz HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+        .is_err()
+    {
+        return 1;
+    }
+    let mut response = String::new();
+    if stream.read_to_string(&mut response).is_err() {
+        return 1;
+    }
+    if response.starts_with("HTTP/1.1 200") {
+        0
+    } else {
+        1
+    }
+}
+
+/// Consistent hot backup without a second binary in `scratch`.
+///
+/// `VACUUM INTO` writes a compacted copy of the live database while the server
+/// keeps running; SQLite takes the read snapshot itself, so there is no window
+/// where `-wal` has to be copied alongside the main file. The caller passes a
+/// path on the mounted volume, e.g. `--backup data/backup-20261119.db`.
+async fn run_backup(target: &str) -> i32 {
+    use sqlx::sqlite::{SqliteConnectOptions, SqlitePoolOptions};
+
+    let source =
+        std::env::var("DATABASE_FILE").unwrap_or_else(|_| "data/kestrel-studio.db".to_string());
+    if std::path::Path::new(target).exists() {
+        eprintln!("backup target already exists: {target}");
+        return 2;
+    }
+    if let Some(parent) = std::path::Path::new(target).parent() {
+        if !parent.as_os_str().is_empty() {
+            if let Err(error) = std::fs::create_dir_all(parent) {
+                eprintln!("could not create {}: {error}", parent.display());
+                return 1;
+            }
+        }
+    }
+
+    let options = SqliteConnectOptions::new()
+        .filename(&source)
+        .read_only(true);
+    let pool = match SqlitePoolOptions::new()
+        .max_connections(1)
+        .connect_with(options)
+        .await
+    {
+        Ok(pool) => pool,
+        Err(error) => {
+            eprintln!("could not open {source}: {error}");
+            return 1;
+        }
+    };
+
+    match sqlx::query("VACUUM INTO ?1")
+        .bind(target)
+        .execute(&pool)
+        .await
+    {
+        Ok(_) => {
+            let bytes = std::fs::metadata(target)
+                .map(|meta| meta.len())
+                .unwrap_or_default();
+            println!("backup written path={target} bytes={bytes}");
+            0
+        }
+        Err(error) => {
+            eprintln!("backup failed: {error}");
+            1
+        }
+    }
+}
+
 /// One process, SSR plus streaming, no separate front-end service — the shape the
 /// Nest server had, kept on purpose (it is what makes an 8 GB host work).
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn Error>> {
+    let arguments: Vec<String> = std::env::args().collect();
+    if arguments.iter().any(|argument| argument == "--healthcheck") {
+        std::process::exit(run_healthcheck());
+    }
+    if let Some(index) = arguments.iter().position(|argument| argument == "--backup") {
+        let Some(target) = arguments.get(index + 1) else {
+            eprintln!("usage: kestrel-studio --backup <path>");
+            std::process::exit(2);
+        };
+        std::process::exit(run_backup(target).await);
+    }
+
     // Before any read of the environment: the container gets its values from
     // docker's env_file and has no .env of its own, so this only ever overlays a
     // local developer file, and never over something already exported.
@@ -147,7 +254,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
         Err(error) => tracing::warn!(%error, "asset dimension backfill did not run"),
     }
 
-    tracing::info!(cleared = auth::session::sweep(&state.pool).await?, "expired sessions");
+    tracing::info!(
+        cleared = auth::session::sweep(&state.pool).await?,
+        "expired sessions"
+    );
     let mut expiry = tokio::time::interval(std::time::Duration::from_secs(15 * 60));
     let sweep_state = state.clone();
     tokio::spawn(async move {
@@ -225,7 +335,10 @@ mod tests {
 
     impl Write for Sink {
         fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            captured().lock().expect("capture lock").extend_from_slice(buf);
+            captured()
+                .lock()
+                .expect("capture lock")
+                .extend_from_slice(buf);
             Ok(buf.len())
         }
 
@@ -275,15 +388,24 @@ mod tests {
     #[test]
     fn a_non_terminal_log_is_plain_text_so_access_lines_are_greppable() {
         let plain = render_one_line(false);
-        assert!(plain.contains("method=GET"), "字段名与 = 之间不该有东西：{plain:?}");
-        assert!(plain.contains("uri=/login?probe=1"), "查询串要留在日志里：{plain:?}");
+        assert!(
+            plain.contains("method=GET"),
+            "字段名与 = 之间不该有东西：{plain:?}"
+        );
+        assert!(
+            plain.contains("uri=/login?probe=1"),
+            "查询串要留在日志里：{plain:?}"
+        );
         assert!(!plain.contains('\u{1b}'), "容器里不该有 ANSI：{plain:?}");
     }
 
     #[test]
     fn ansi_mode_is_what_broke_the_ops_grep() {
         let coloured = render_one_line(true);
-        assert!(coloured.contains('\u{1b}'), "开着 ANSI 时应带转义序列：{coloured:?}");
+        assert!(
+            coloured.contains('\u{1b}'),
+            "开着 ANSI 时应带转义序列：{coloured:?}"
+        );
         // 这正是 2026-11-02 第一次取证 0 命中的原因，也是 §13.8 的根因。
         assert!(
             !coloured.contains("method=GET"),

@@ -14,6 +14,7 @@ import { AuthController } from '@/auth/auth.controller';
 import { AuthService } from '@/auth/auth.service';
 import { AuthenticatedGuard } from '@/auth/guards';
 import { LocalStrategy } from '@/auth/local.strategy';
+import { LoginLimiter } from '@/auth/login-limiter.service';
 import { SessionSerializer } from '@/auth/session.serializer';
 import { applySchema, DRIZZLE_INSTANCE } from '@/database/database.module';
 import * as schema from '@/database/schema';
@@ -60,6 +61,16 @@ async function bootstrap(): Promise<void> {
     })
     .run();
   aliceId = Number(created.lastInsertRowid);
+  // A second account keeps the throttling test from inheriting failures other
+  // tests already recorded for alice under the same loopback address.
+  db.insert(schema.users)
+    .values({
+      username: 'bob',
+      passwordHash: await hash(PASSWORD, COST),
+      role: 'user',
+      createdAt: new Date(),
+    })
+    .run();
 
   const moduleRef = await Test.createTestingModule({
     // Mirrors AuthModule: without PassportModule, AuthGuard has no
@@ -68,6 +79,7 @@ async function bootstrap(): Promise<void> {
     controllers: [AuthController, ProbeController],
     providers: [
       AuthService,
+      LoginLimiter,
       LocalStrategy,
       SessionSerializer,
       { provide: DRIZZLE_INSTANCE, useValue: db },
@@ -189,6 +201,17 @@ describe('POST /login — 失败', () => {
   it('失败后受保护路由仍然 401', async () => {
     const cookie = cookieOf(await login('alice', 'wrong-password'));
     expect((await probe(cookie)).status).toBe(401);
+  });
+});
+
+describe('POST /login — 限流', () => {
+  it('同一账号连续失败达到上限后返回 429', async () => {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      const response = await login('bob', 'wrong-password');
+      expect(response.status).toBe(302);
+    }
+    const blocked = await login('bob', 'wrong-password');
+    expect(blocked.status).toBe(429);
   });
 });
 

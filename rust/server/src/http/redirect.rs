@@ -9,7 +9,10 @@ use axum::response::{IntoResponse, Response};
 pub fn found(location: &str) -> Response {
     (
         StatusCode::FOUND,
-        [(LOCATION, HeaderValue::from_str(location).expect("a location"))],
+        [(
+            LOCATION,
+            HeaderValue::from_str(location).expect("a location"),
+        )],
     )
         .into_response()
 }

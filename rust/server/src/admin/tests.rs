@@ -7,9 +7,9 @@ use sqlx::Row;
 use tower::ServiceExt;
 
 use crate::auth::password;
-use crate::state::AppState;
 use crate::auth::roles::Role;
 use crate::media::StoredAsset;
+use crate::state::AppState;
 use crate::task::TaskKind;
 use crate::test_utils::*;
 
@@ -25,7 +25,11 @@ async fn only_a_super_admin_gets_through_and_a_rejected_post_says_403() {
     let (admin_cookie, _admin_id) = boss(&state).await;
 
     // Anonymous: to the login page, like every other HTML route.
-    let anonymous = app.clone().oneshot(get("/admin", None)).await.expect("anonymous");
+    let anonymous = app
+        .clone()
+        .oneshot(get("/admin", None))
+        .await
+        .expect("anonymous");
     assert_eq!(anonymous.status(), StatusCode::FOUND);
     assert_eq!(anonymous.headers()["location"], "/login");
 
@@ -64,12 +68,20 @@ async fn only_a_super_admin_gets_through_and_a_rejected_post_says_403() {
         "the form did not get past the guard"
     );
 
-    let page = text_body(app.oneshot(get("/admin", Some(&admin_cookie))).await.expect("admin")).await;
+    let page = text_body(
+        app.oneshot(get("/admin", Some(&admin_cookie)))
+            .await
+            .expect("admin"),
+    )
+    .await;
     assert!(page.contains("账号管理"));
     assert!(page.contains("<span class=\"account-name\">boss</span>"));
     // The menu tuples are (href, label); swapping them made every nav link
     // point at the Chinese label instead of the route.
-    assert!(page.contains("<a class=\"menu-button\" href=\"/\">返回对话</a>"), "{page}");
+    assert!(
+        page.contains("<a class=\"menu-button\" href=\"/\">返回对话</a>"),
+        "{page}"
+    );
     assert!(
         page.contains("<a class=\"menu-button\" href=\"/admin/conversations\">全站会话</a>"),
         "{page}"
@@ -105,9 +117,20 @@ async fn the_create_form_validates_then_lands_the_account_as_a_plain_user() {
         );
     }
 
-    let page = text_body(app.oneshot(get("/admin", Some(&admin_cookie))).await.expect("list")).await;
-    assert!(page.contains("class=\"admin-account-name\">newbie</td>"), "{page}");
-    assert!(page.contains("<td>普通用户</td>"), "new accounts are never privileged");
+    let page = text_body(
+        app.oneshot(get("/admin", Some(&admin_cookie)))
+            .await
+            .expect("list"),
+    )
+    .await;
+    assert!(
+        page.contains("class=\"admin-account-name\">newbie</td>"),
+        "{page}"
+    );
+    assert!(
+        page.contains("<td>普通用户</td>"),
+        "new accounts are never privileged"
+    );
     // Both halves of the password rule are spelled out where the form is.
     assert!(page.contains("用户名 3-32 位字母、数字、下划线或短横线，密码至少 6 位"));
 }
@@ -120,7 +143,10 @@ async fn the_password_form_shows_the_account_it_belongs_to() {
 
     let page = text_body(
         app.clone()
-            .oneshot(get(&format!("/admin/users/{target_id}"), Some(&admin_cookie)))
+            .oneshot(get(
+                &format!("/admin/users/{target_id}"),
+                Some(&admin_cookie),
+            ))
             .await
             .expect("account page"),
     )
@@ -137,10 +163,16 @@ async fn the_password_form_shows_the_account_it_belongs_to() {
         .split("</form>")
         .next()
         .expect("the form body");
-    assert!(form.starts_with(&format!("{target_id}/password\"")), "{form}");
+    assert!(
+        form.starts_with(&format!("{target_id}/password\"")),
+        "{form}"
+    );
     let username_at = form.find("name=\"username\"").expect("a username field");
     let password_at = form.find("name=\"password\"").expect("a password field");
-    assert!(username_at < password_at, "the name is shown before the secret");
+    assert!(
+        username_at < password_at,
+        "the name is shown before the secret"
+    );
     assert!(form.contains("value=\"walker\""), "{form}");
     assert!(form.contains("readonly"), "{form}");
     assert!(page.contains("账号名只作显示，实际按本页地址里的账号重置。"));
@@ -162,7 +194,10 @@ async fn resetting_a_password_rehashes_only_the_target_account() {
         ))
         .await
         .expect("too short");
-    assert_eq!(rejected.headers()["location"], format!("/admin/users/{target_id}?notice=invalid"));
+    assert_eq!(
+        rejected.headers()["location"],
+        format!("/admin/users/{target_id}?notice=invalid")
+    );
     assert_eq!(stored_hash(&state, "walker").await, before, "unchanged");
 
     let accepted = app
@@ -179,8 +214,14 @@ async fn resetting_a_password_rehashes_only_the_target_account() {
         format!("/admin/users/{target_id}?notice=password-reset")
     );
     let after = stored_hash(&state, "walker").await;
-    assert!(password::verify("a-new-secret", &after), "the new one works");
-    assert!(!password::verify("secret", &after), "and the old one does not");
+    assert!(
+        password::verify("a-new-secret", &after),
+        "the new one works"
+    );
+    assert!(
+        !password::verify("secret", &after),
+        "and the old one does not"
+    );
 
     // A password is hashed as typed: trimming it would silently change it.
     let spaced = app
@@ -192,8 +233,14 @@ async fn resetting_a_password_rehashes_only_the_target_account() {
         ))
         .await
         .expect("padded");
-    assert_eq!(spaced.headers()["location"], format!("/admin/users/{target_id}?notice=password-reset"));
-    assert!(password::verify("  padded-secret  ", &stored_hash(&state, "walker").await));
+    assert_eq!(
+        spaced.headers()["location"],
+        format!("/admin/users/{target_id}?notice=password-reset")
+    );
+    assert!(password::verify(
+        "  padded-secret  ",
+        &stored_hash(&state, "walker").await
+    ));
 
     let gone = app
         .clone()
@@ -215,7 +262,11 @@ async fn removing_an_account_takes_its_rows_and_its_files() {
 
     // Give the account something to lose: a conversation, a message, an asset and
     // the mirrored bytes.
-    let conversation_id = state.conversations.create(target_id, "图").await.expect("conversation");
+    let conversation_id = state
+        .conversations
+        .create(target_id, "图")
+        .await
+        .expect("conversation");
     let message_id = state
         .conversations
         .append_assistant_message(conversation_id, "好了", None)
@@ -254,7 +305,10 @@ async fn removing_an_account_takes_its_rows_and_its_files() {
     // The confirm page states the cost before the form exists.
     let confirm = text_body(
         app.clone()
-            .oneshot(get(&format!("/admin/users/{target_id}/delete"), Some(&admin_cookie)))
+            .oneshot(get(
+                &format!("/admin/users/{target_id}/delete"),
+                Some(&admin_cookie),
+            ))
             .await
             .expect("confirm"),
     )
@@ -266,7 +320,11 @@ async fn removing_an_account_takes_its_rows_and_its_files() {
     // Refused cases first: the acting account, and the last super admin.
     let self_removal = app
         .clone()
-        .oneshot(form_post(&format!("/admin/users/{admin_id}/delete"), &admin_cookie, &[]))
+        .oneshot(form_post(
+            &format!("/admin/users/{admin_id}/delete"),
+            &admin_cookie,
+            &[],
+        ))
         .await
         .expect("self");
     assert_eq!(self_removal.headers()["location"], "/admin?notice=self");
@@ -278,7 +336,11 @@ async fn removing_an_account_takes_its_rows_and_its_files() {
     // ordinary case - with two super admins, either can go while one remains.
     let created = app
         .clone()
-        .oneshot(form_post("/admin/users", &admin_cookie, &[("username", "boss2"), ("password", "hunter2")]))
+        .oneshot(form_post(
+            "/admin/users",
+            &admin_cookie,
+            &[("username", "boss2"), ("password", "hunter2")],
+        ))
         .await
         .expect("second account");
     assert_eq!(created.headers()["location"], "/admin?notice=created");
@@ -295,26 +357,49 @@ async fn removing_an_account_takes_its_rows_and_its_files() {
         .expect("promote");
     let removed_other = app
         .clone()
-        .oneshot(form_post(&format!("/admin/users/{second_id}/delete"), &admin_cookie, &[]))
+        .oneshot(form_post(
+            &format!("/admin/users/{second_id}/delete"),
+            &admin_cookie,
+            &[],
+        ))
         .await
         .expect("remove the other super admin");
     assert_eq!(removed_other.headers()["location"], "/admin?notice=removed");
-    assert_eq!(super_count(&state).await, 1, "the actor is still the only super admin");
-
+    assert_eq!(
+        super_count(&state).await,
+        1,
+        "the actor is still the only super admin"
+    );
 
     let removed = app
         .clone()
-        .oneshot(form_post(&format!("/admin/users/{target_id}/delete"), &admin_cookie, &[]))
+        .oneshot(form_post(
+            &format!("/admin/users/{target_id}/delete"),
+            &admin_cookie,
+            &[],
+        ))
         .await
         .expect("remove");
     assert_eq!(removed.headers()["location"], "/admin?notice=removed");
 
     for (table, sql) in [
         ("users", "SELECT COUNT(*) AS n FROM users WHERE id = ?1"),
-        ("conversations", "SELECT COUNT(*) AS n FROM conversations WHERE user_id = ?1"),
-        ("messages", "SELECT COUNT(*) AS n FROM messages WHERE conversation_id = ?1"),
-        ("assets", "SELECT COUNT(*) AS n FROM assets WHERE message_id = ?1"),
-        ("api_tokens", "SELECT COUNT(*) AS n FROM api_tokens WHERE user_id = ?1"),
+        (
+            "conversations",
+            "SELECT COUNT(*) AS n FROM conversations WHERE user_id = ?1",
+        ),
+        (
+            "messages",
+            "SELECT COUNT(*) AS n FROM messages WHERE conversation_id = ?1",
+        ),
+        (
+            "assets",
+            "SELECT COUNT(*) AS n FROM assets WHERE message_id = ?1",
+        ),
+        (
+            "api_tokens",
+            "SELECT COUNT(*) AS n FROM api_tokens WHERE user_id = ?1",
+        ),
     ] {
         let n: i64 = sqlx::query(sql)
             .bind(
@@ -331,7 +416,10 @@ async fn removing_an_account_takes_its_rows_and_its_files() {
             .expect("count");
         assert_eq!(n, 0, "{table} rows survived");
     }
-    assert!(!std::path::Path::new(&file).exists(), "the mirrored bytes go too");
+    assert!(
+        !std::path::Path::new(&file).exists(),
+        "the mirrored bytes go too"
+    );
 }
 
 #[tokio::test]
@@ -340,35 +428,69 @@ async fn the_site_wide_conversation_view_is_read_only() {
     let (admin_cookie, _admin_id) = boss(&state).await;
     let (_, walker_id) = account(&state, "walker", Role::User).await;
 
-    let conversation_id = state.conversations.create(walker_id, "红隼俯冲").await.expect("conversation");
+    let conversation_id = state
+        .conversations
+        .create(walker_id, "红隼俯冲")
+        .await
+        .expect("conversation");
     state
         .conversations
         .append_user_message(conversation_id, "红隼俯冲", None)
         .await
         .expect("message");
-    let other = state.conversations.create(walker_id, "另一条").await.expect("conversation");
-    state.conversations.soft_delete_conversations(&[other]).await.expect("hide");
+    let other = state
+        .conversations
+        .create(walker_id, "另一条")
+        .await
+        .expect("conversation");
+    state
+        .conversations
+        .soft_delete_conversations(&[other])
+        .await
+        .expect("hide");
 
-    let list = text_body(app.clone().oneshot(get("/admin/conversations", Some(&admin_cookie))).await.expect("list")).await;
+    let list = text_body(
+        app.clone()
+            .oneshot(get("/admin/conversations", Some(&admin_cookie)))
+            .await
+            .expect("list"),
+    )
+    .await;
     assert!(list.contains("共 2 个会话"), "{list}");
     assert!(list.contains("查看他人会话是只读的"), "{list}");
-    assert!(list.contains("已删除 ·"), "a hidden conversation is shown, not filtered out: {list}");
-    assert!(list.contains(&format!("/admin/conversations?user={walker_id}")), "the row links to its owner: {list}");
+    assert!(
+        list.contains("已删除 ·"),
+        "a hidden conversation is shown, not filtered out: {list}"
+    );
+    assert!(
+        list.contains(&format!("/admin/conversations?user={walker_id}")),
+        "the row links to its owner: {list}"
+    );
 
     // Narrowed to one account, and the chip that selects it reads as active.
     let scoped = text_body(
         app.clone()
-            .oneshot(get(&format!("/admin/conversations?user={walker_id}"), Some(&admin_cookie)))
+            .oneshot(get(
+                &format!("/admin/conversations?user={walker_id}"),
+                Some(&admin_cookie),
+            ))
             .await
             .expect("scoped"),
     )
     .await;
     assert!(scoped.contains("当前只看 walker 的"), "{scoped}");
-    assert_eq!(scoped.matches("admin-chip is-active").count(), 1, "exactly one active chip");
+    assert_eq!(
+        scoped.matches("admin-chip is-active").count(),
+        1,
+        "exactly one active chip"
+    );
 
     let page = text_body(
         app.clone()
-            .oneshot(get(&format!("/admin/conversations/{conversation_id}"), Some(&admin_cookie)))
+            .oneshot(get(
+                &format!("/admin/conversations/{conversation_id}"),
+                Some(&admin_cookie),
+            ))
             .await
             .expect("conversation"),
     )
@@ -378,15 +500,51 @@ async fn the_site_wide_conversation_view_is_read_only() {
     // Nothing here talks to /api: no composer, no client script.
     assert!(!page.contains("id=\"composer-form\""), "{page}");
     assert!(!page.contains("/assets/main.js"), "{page}");
-    assert!(page.contains("data-message-id=\"1\""), "the turn is rendered by the server: {page}");
+    assert!(
+        page.contains("data-message-id=\"1\""),
+        "the turn is rendered by the server: {page}"
+    );
 
     // The admin's own conversation reads differently, and a bad id is bounced.
-    let own = state.conversations.create(state.conversations.owner_of(conversation_id).await.expect("owner").expect("owner"), "自留").await.expect("own");
-    let own_page = text_body(app.clone().oneshot(get(&format!("/admin/conversations/{own}"), Some(&admin_cookie))).await.expect("own")).await;
-    assert!(own_page.contains("这是你自己的会话") || own_page.contains("只读视图"), "{own_page}");
+    let own = state
+        .conversations
+        .create(
+            state
+                .conversations
+                .owner_of(conversation_id)
+                .await
+                .expect("owner")
+                .expect("owner"),
+            "自留",
+        )
+        .await
+        .expect("own");
+    let own_page = text_body(
+        app.clone()
+            .oneshot(get(
+                &format!("/admin/conversations/{own}"),
+                Some(&admin_cookie),
+            ))
+            .await
+            .expect("own"),
+    )
+    .await;
+    assert!(
+        own_page.contains("这是你自己的会话") || own_page.contains("只读视图"),
+        "{own_page}"
+    );
 
-    let bad = app.oneshot(get("/admin/conversations/not-a-number", Some(&admin_cookie))).await.expect("bad");
-    assert_eq!(bad.headers()["location"], "/admin/conversations?notice=missing");
+    let bad = app
+        .oneshot(get(
+            "/admin/conversations/not-a-number",
+            Some(&admin_cookie),
+        ))
+        .await
+        .expect("bad");
+    assert_eq!(
+        bad.headers()["location"],
+        "/admin/conversations?notice=missing"
+    );
 }
 
 async fn super_count(state: &AppState) -> i64 {
@@ -421,7 +579,11 @@ async fn the_token_page_lists_active_tokens_with_their_owner() {
     .await
     .expect("revoked token");
 
-    let anonymous = app.clone().oneshot(get("/admin/tokens", None)).await.expect("anonymous");
+    let anonymous = app
+        .clone()
+        .oneshot(get("/admin/tokens", None))
+        .await
+        .expect("anonymous");
     assert_eq!(anonymous.status(), StatusCode::FOUND);
     assert_eq!(anonymous.headers()["location"], "/login");
 
@@ -441,7 +603,10 @@ async fn the_token_page_lists_active_tokens_with_their_owner() {
     assert!(page.contains("walker"), "{page}");
     assert!(page.contains("phone"), "{page}");
     assert!(page.contains("从未使用"), "{page}");
-    assert!(!page.contains("old-laptop"), "revoked rows stay out of the list: {page}");
+    assert!(
+        !page.contains("old-laptop"),
+        "revoked rows stay out of the list: {page}"
+    );
 }
 
 async fn stored_hash(state: &AppState, username: &str) -> String {

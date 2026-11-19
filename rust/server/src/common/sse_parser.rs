@@ -81,7 +81,10 @@ mod tests {
             b":HTTP_STATUS/200\nid: 42\nevent: response.output_text.delta\ndata: {\"delta\":\"hi\"}\n\n",
         );
         assert_eq!(frames.len(), 1);
-        assert_eq!(frames[0].event.as_deref(), Some("response.output_text.delta"));
+        assert_eq!(
+            frames[0].event.as_deref(),
+            Some("response.output_text.delta")
+        );
         assert_eq!(frames[0].data, "{\"delta\":\"hi\"}");
     }
 

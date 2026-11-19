@@ -4,10 +4,10 @@ use axum::http::request::Parts;
 use axum::http::Method;
 use axum::response::{IntoResponse, Response};
 
-use super::roles::Principal;
 use super::roles::is_super_admin;
-use super::session;
+use super::roles::Principal;
 use super::service::AuthService;
+use super::session;
 use super::tokens;
 use crate::error::AppError;
 use crate::state::AppState;
@@ -24,7 +24,9 @@ pub async fn principal_from(state: &AppState, headers: &HeaderMap) -> Option<Pri
     {
         return principal_from_bearer(state, raw).await;
     }
-    let raw = headers.get(header::COOKIE).and_then(|value| value.to_str().ok());
+    let raw = headers
+        .get(header::COOKIE)
+        .and_then(|value| value.to_str().ok());
     principal_from_cookie(state, raw).await
 }
 
@@ -75,7 +77,10 @@ pub struct Authed(pub Principal);
 impl FromRequestParts<AppState> for Authed {
     type Rejection = AppError;
 
-    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
         let headers = parts.headers.clone();
         principal_from(state, &headers)
             .await
@@ -90,7 +95,10 @@ pub struct ViewAuthed(pub Principal);
 impl FromRequestParts<AppState> for ViewAuthed {
     type Rejection = Response;
 
-    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
         let headers = parts.headers.clone();
         principal_from(state, &headers)
             .await
@@ -109,7 +117,10 @@ pub struct SuperAdmin(pub Principal);
 impl FromRequestParts<AppState> for SuperAdmin {
     type Rejection = Response;
 
-    async fn from_request_parts(parts: &mut Parts, state: &AppState) -> Result<Self, Self::Rejection> {
+    async fn from_request_parts(
+        parts: &mut Parts,
+        state: &AppState,
+    ) -> Result<Self, Self::Rejection> {
         let Some(principal) = principal_from(state, &parts.headers).await else {
             return Err(crate::http::redirect::found("/login"));
         };

@@ -37,7 +37,10 @@ pub fn frame(event: &str, data: &Value, seq: Option<i64>) -> String {
         Some(value) => format!("id: {value}\n"),
         None => String::new(),
     };
-    format!("{id}event: {event}\ndata: {}\n\n", serde_json::to_string(data).unwrap_or_else(|_| "\"{}\"".to_string()))
+    format!(
+        "{id}event: {event}\ndata: {}\n\n",
+        serde_json::to_string(data).unwrap_or_else(|_| "\"{}\"".to_string())
+    )
 }
 
 /// A stream that keeps its own comment frame on an interval: image generation

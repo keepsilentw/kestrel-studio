@@ -115,7 +115,9 @@ pub fn open(slot: &SocketSlot, emit: Rc<dyn Fn(WireEvent)>) {
         let socket = match WebSocket::new(&url) {
             Ok(socket) => socket,
             Err(error) => {
-                emit(WireEvent::Failed(format!("cannot open the voice socket: {error:?}")));
+                emit(WireEvent::Failed(format!(
+                    "cannot open the voice socket: {error:?}"
+                )));
                 return;
             }
         };
@@ -131,12 +133,13 @@ pub fn open(slot: &SocketSlot, emit: Rc<dyn Fn(WireEvent)>) {
         on_open.forget();
 
         let scoped = Rc::clone(&emit);
-        let on_message = Closure::wrap(Box::new(move |event: MessageEvent| {
-            match event.data().as_string() {
-                Some(text) => scoped(WireEvent::Frame(text)),
-                None => report("a non-text frame arrived on the voice socket"),
-            }
-        }) as Box<dyn Fn(MessageEvent)>);
+        let on_message =
+            Closure::wrap(
+                Box::new(move |event: MessageEvent| match event.data().as_string() {
+                    Some(text) => scoped(WireEvent::Frame(text)),
+                    None => report("a non-text frame arrived on the voice socket"),
+                }) as Box<dyn Fn(MessageEvent)>,
+            );
         socket.set_onmessage(Some(on_message.as_ref().unchecked_ref()));
         on_message.forget();
 
@@ -154,7 +157,10 @@ fn socket_url(ticket: &str) -> String {
     let window = web_sys::window().expect("no window");
     let location = window.location();
     let host = location.host().unwrap_or_default();
-    let secure = location.protocol().map(|scheme| scheme == "https:").unwrap_or(false);
+    let secure = location
+        .protocol()
+        .map(|scheme| scheme == "https:")
+        .unwrap_or(false);
     let scheme = if secure { "wss" } else { "ws" };
     format!("{scheme}://{host}/api/voice?ticket={ticket}")
 }
@@ -173,17 +179,20 @@ async fn fetch_ticket() -> Result<String, String> {
     let response_value = JsFuture::from(window.fetch_with_request(&request))
         .await
         .map_err(|_| "the ticket request failed")?;
-    let response: Response = response_value.dyn_into().map_err(|_| "malformed ticket response")?;
+    let response: Response = response_value
+        .dyn_into()
+        .map_err(|_| "malformed ticket response")?;
     if !response.ok() {
         return Err(format!("无法开始语音会话（HTTP {}）", response.status()));
     }
 
-    let body = response.text().map_err(|_| "the ticket response has no body")?;
-    let text_value = JsFuture::from(body)
-        .await
-        .map_err(|_| "no ticket body")?;
+    let body = response
+        .text()
+        .map_err(|_| "the ticket response has no body")?;
+    let text_value = JsFuture::from(body).await.map_err(|_| "no ticket body")?;
     let body = text_value.as_string().ok_or("ticket body is not text")?;
-    let parsed: serde_json::Value = serde_json::from_str(&body).map_err(|_| "ticket body is not JSON")?;
+    let parsed: serde_json::Value =
+        serde_json::from_str(&body).map_err(|_| "ticket body is not JSON")?;
     let ticket = urlencoding_ticket(&parsed);
     if ticket.is_empty() {
         return Err("服务器没有签发语音票据".to_string());
@@ -194,7 +203,9 @@ async fn fetch_ticket() -> Result<String, String> {
 /// The ticket goes into a query string, so it is percent-encoded here rather
 /// than relying on whatever characters the server happened to produce.
 fn urlencoding_ticket(parsed: &serde_json::Value) -> String {
-    let raw = parsed.get("ticket").and_then(serde_json::Value::as_str).unwrap_or_default();
+    let raw = parsed
+        .get("ticket")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
     js_sys::encode_uri_component(raw).into()
 }
-

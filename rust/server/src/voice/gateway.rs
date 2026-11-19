@@ -1,21 +1,22 @@
 use axum::extract::{Query, Request, State};
-use axum::http::header::{HeaderValue, CONNECTION, SEC_WEBSOCKET_ACCEPT, SEC_WEBSOCKET_KEY, SEC_WEBSOCKET_VERSION, UPGRADE};
+use axum::http::header::{
+    HeaderValue, CONNECTION, SEC_WEBSOCKET_ACCEPT, SEC_WEBSOCKET_KEY, SEC_WEBSOCKET_VERSION,
+    UPGRADE,
+};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
 use hyper_util::rt::TokioIo;
 
-use crate::net::ws::{accept_key};
+use crate::net::ws::accept_key;
 use crate::state::AppState;
 
-
-/// The voice transport's entrance: a WebSocket on the same origin as the pages.
-///
-/// `axum`'s `ws` feature is not available in this build (it pulls
-/// `tokio-tungstenite`, which is not in the local registry), but the upgrade does
-/// not need it: `hyper::upgrade::on` is generic over the request body type, so
-/// the handler that already holds an `axum::extract::Request` can take over the
-/// connection itself. That is what this module does.
-
+// The voice transport's entrance: a WebSocket on the same origin as the pages.
+//
+// `axum`'s `ws` feature is not available in this build (it pulls
+// `tokio-tungstenite`, which is not in the local registry), but the upgrade does
+// not need it: `hyper::upgrade::on` is generic over the request body type, so
+// the handler that already holds an `axum::extract::Request` can take over the
+// connection itself. That is what this module does.
 /// A browser cannot set a header on a `WebSocket` handshake, so the credential is
 /// a one-time ticket in the query string (`voice::ticket`). The name is `ticket`
 /// because `nest/client/scripts/voice.ts` builds the URL with it and is unchanged.
@@ -40,7 +41,9 @@ impl Reject {
                 "this endpoint speaks WebSocket",
             )
                 .into_response(),
-            Self::MissingKey => (StatusCode::BAD_REQUEST, "missing Sec-WebSocket-Key").into_response(),
+            Self::MissingKey => {
+                (StatusCode::BAD_REQUEST, "missing Sec-WebSocket-Key").into_response()
+            }
             // 401, as in the Nest gateway: the socket is refused before it exists,
             // so this is authentication, not authorisation.
             Self::Unauthorized => (StatusCode::UNAUTHORIZED, "票据无效或已过期").into_response(),
@@ -65,10 +68,16 @@ fn header_flag(headers: &HeaderMap, name: &str, wanted: &str) -> bool {
 /// (`keep-alive, Upgrade` is what a browser behind a proxy sends), so the check
 /// splits rather than compares whole strings.
 pub fn parse_upgrade(headers: &HeaderMap) -> Result<String, Reject> {
-    if !header_flag(headers, "connection", "upgrade") || !header_flag(headers, "upgrade", "websocket") {
+    if !header_flag(headers, "connection", "upgrade")
+        || !header_flag(headers, "upgrade", "websocket")
+    {
         return Err(Reject::NotAnUpgrade);
     }
-    if headers.get(SEC_WEBSOCKET_VERSION).and_then(|value| value.to_str().ok()) != Some("13") {
+    if headers
+        .get(SEC_WEBSOCKET_VERSION)
+        .and_then(|value| value.to_str().ok())
+        != Some("13")
+    {
         return Err(Reject::BadVersion);
     }
     headers
@@ -133,10 +142,14 @@ pub async fn handle(
         let (outbound_tx, mut outbound_rx) = tokio::sync::mpsc::channel(64);
 
         let reader_task = tokio::spawn(async move {
-            crate::voice::relay::pump_in(&mut { reader }, &inbound_tx).await.ok();
+            crate::voice::relay::pump_in(&mut { reader }, &inbound_tx)
+                .await
+                .ok();
         });
         let writer_task = tokio::spawn(async move {
-            crate::voice::relay::pump_out(&mut { writer }, &mut outbound_rx).await.ok();
+            crate::voice::relay::pump_out(&mut { writer }, &mut outbound_rx)
+                .await
+                .ok();
         });
 
         let call = crate::voice::session::VoiceCall::new(state, user_id, outbound_tx);

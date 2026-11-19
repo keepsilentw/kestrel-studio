@@ -3,7 +3,7 @@ use std::path::Path;
 
 use axum::extract::{Path as UrlPath, Query, State};
 use axum::http::header::{
-    CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE, HeaderMap, HeaderValue,
+    HeaderMap, HeaderValue, CACHE_CONTROL, CONTENT_DISPOSITION, CONTENT_LENGTH, CONTENT_TYPE,
 };
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -22,20 +22,20 @@ use crate::error::AppError;
 use crate::sse;
 use crate::state::AppState;
 
-/// The product API (`/api/v1`), one surface for every client — the web page
-/// today, App and mini-program later.
-///
-/// Two rules it is built around:
-///
-/// - Submit and subscribe are separate calls. `POST .../turns` answers 202
-///   immediately; the turn runs in the process and its events land on the
-///   conversation journal. `GET .../stream` is the only stream, resumable via
-///   Last-Event-ID over the journal's `seq`.
-/// - Read endpoints gate on `can_read` and write endpoints on `is_owned_by`: a
-///   super admin may look at any normal account's conversation, but never post
-///   into one.
-///
-/// Voice stays on its own entrance: a continuous two-way socket is not a turn.
+// The product API (`/api/v1`), one surface for every client — the web page
+// today, App and mini-program later.
+//
+// Two rules it is built around:
+//
+// - Submit and subscribe are separate calls. `POST .../turns` answers 202
+//   immediately; the turn runs in the process and its events land on the
+//   conversation journal. `GET .../stream` is the only stream, resumable via
+//   Last-Event-ID over the journal's `seq`.
+// - Read endpoints gate on `can_read` and write endpoints on `is_owned_by`: a
+//   super admin may look at any normal account's conversation, but never post
+//   into one.
+//
+// Voice stays on its own entrance: a continuous two-way socket is not a turn.
 
 /// Opens a conversation. `prompt` only seeds the title from its prefix.
 pub async fn create_conversation(
@@ -249,7 +249,11 @@ pub async fn stream(
                 &json!({ "conversationId": conversation_id, "cursor": requested.unwrap_or(cursor) }),
                 None,
             ),
-            sse::frame(sse::CONNECTED, &json!({ "conversationId": conversation_id }), None),
+            sse::frame(
+                sse::CONNECTED,
+                &json!({ "conversationId": conversation_id }),
+                None,
+            ),
         ]
     } else {
         vec![sse::frame(
@@ -264,9 +268,15 @@ pub async fn stream(
         let mut last_written = replayed_through.unwrap_or(cursor);
         // Replay frames carry the journal's own bytes; live frames carry what was
         // journaled when they were published, so both are the same string.
-        let frames = handshake.into_iter().chain(replay.into_iter().map(|published| {
-            sse::raw_frame(published.event.type_name(), &published.payload, Some(published.seq))
-        }));
+        let frames = handshake
+            .into_iter()
+            .chain(replay.into_iter().map(|published| {
+                sse::raw_frame(
+                    published.event.type_name(),
+                    &published.payload,
+                    Some(published.seq),
+                )
+            }));
         for frame in frames {
             if sender.send(frame).await.is_err() {
                 cleanup.events.release(conversation_id);
@@ -322,7 +332,15 @@ pub async fn download(
     else {
         return Err(AppError::not_found("not found"));
     };
-    serve_file(&file_path, &asset.mime, disposition(&file_path), "public, max-age=0").await
+    // The answer is scoped to the session guard above, so a shared cache must
+    // never store it. The bytes are local and cheap to re-read.
+    serve_file(
+        &file_path,
+        &asset.mime,
+        disposition(&file_path),
+        "private, no-store",
+    )
+    .await
 }
 
 /// Streams a stored asset. `Content-Length` comes from the file itself so the

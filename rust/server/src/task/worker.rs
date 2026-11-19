@@ -120,8 +120,7 @@ impl TaskWorker {
                     .await?;
                 // The status stays whatever the row already said: a transient poll
                 // failure is not a state change.
-                self.publish(task, task.status, Some(&reason))
-                    .await?;
+                self.publish(task, task.status, Some(&reason)).await?;
                 return Ok(());
             }
         };
@@ -186,10 +185,20 @@ impl TaskWorker {
                 Some(RESULT_MODE),
             )
             .await?;
-        let asset_id = self.state.conversations.add_asset(message_id, &stored).await?;
+        let asset_id = self
+            .state
+            .conversations
+            .add_asset(message_id, &stored)
+            .await?;
         self.state
             .tasks
-            .finish(task.id, TaskStatus::Succeeded, Some(asset_id), Some(message_id), None)
+            .finish(
+                task.id,
+                TaskStatus::Succeeded,
+                Some(asset_id),
+                Some(message_id),
+                None,
+            )
             .await?;
         self.publish(task, TaskStatus::Succeeded, None).await?;
         self.publish_message(task.conversation_id, message_id).await
@@ -209,7 +218,13 @@ impl TaskWorker {
             .await?;
         self.state
             .tasks
-            .finish(task.id, TaskStatus::Failed, None, Some(message_id), Some(reason))
+            .finish(
+                task.id,
+                TaskStatus::Failed,
+                None,
+                Some(message_id),
+                Some(reason),
+            )
             .await?;
         self.publish(task, TaskStatus::Failed, Some(reason)).await?;
         self.publish_message(task.conversation_id, message_id).await

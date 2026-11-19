@@ -5,6 +5,7 @@ import { AuthModule } from '@/auth/auth.module';
 import { ChatModule } from '@/chat/chat.module';
 import { ConversationModule } from '@/conversation/conversation.module';
 import { DatabaseModule } from '@/database/database.module';
+import { HealthModule } from '@/health/health.module';
 import { MediaModule } from '@/media/media.module';
 import { TaskModule } from '@/task/task.module';
 import { ViewModule } from '@/view/view.module';
@@ -13,6 +14,7 @@ import { VoiceModule } from '@/voice/voice.module';
 @Module({
   imports: [
     DatabaseModule,
+    HealthModule,
     AuthModule,
     ConversationModule,
     MediaModule,

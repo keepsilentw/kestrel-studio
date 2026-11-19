@@ -35,13 +35,15 @@ pub(crate) async fn app() -> (axum::Router, AppState) {
 
 /// Creates an account and returns `(cookie header value, principal id)`.
 pub(crate) async fn account(state: &AppState, username: &str, role: Role) -> (String, i64) {
-    sqlx::query("INSERT INTO users (username, password_hash, role, created_at) VALUES (?1, ?2, ?3, 1)")
-        .bind(username)
-        .bind(password::hash("secret"))
-        .bind(role.as_str())
-        .execute(&state.pool)
-        .await
-        .expect("insert user");
+    sqlx::query(
+        "INSERT INTO users (username, password_hash, role, created_at) VALUES (?1, ?2, ?3, 1)",
+    )
+    .bind(username)
+    .bind(password::hash("secret"))
+    .bind(role.as_str())
+    .execute(&state.pool)
+    .await
+    .expect("insert user");
     let id: i64 = sqlx::query("SELECT id FROM users WHERE username = ?1")
         .bind(username)
         .fetch_one(&state.pool)
@@ -109,9 +111,7 @@ pub(crate) fn post_form(path: &str, form: &str) -> Request<Body> {
 }
 
 pub(crate) async fn json_body(response: Response<Body>) -> Value {
-    let bytes = to_bytes(response.into_body(), LIMIT)
-        .await
-        .expect("body");
+    let bytes = to_bytes(response.into_body(), LIMIT).await.expect("body");
     serde_json::from_slice(&bytes).expect("json body")
 }
 

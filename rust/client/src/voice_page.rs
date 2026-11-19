@@ -91,7 +91,10 @@ pub fn init_voice() -> Result<(), JsValue> {
             &shared,
             vec![
                 Effect::SetButtonEnabled(false),
-                Effect::AppendEntry { kind: "error", text: "拿不到麦克风权限，无法说话".to_string() },
+                Effect::AppendEntry {
+                    kind: "error",
+                    text: "拿不到麦克风权限，无法说话".to_string(),
+                },
             ],
         );
         return Ok(());
@@ -219,7 +222,11 @@ fn open_socket(shared: &Handle) {
             apply(&scoped, effects);
         }
         WireEvent::Frame(raw) => {
-            let effects = scoped.page.borrow_mut().session.on_server_frame(&raw, now_ms());
+            let effects = scoped
+                .page
+                .borrow_mut()
+                .session
+                .on_server_frame(&raw, now_ms());
             apply(&scoped, effects);
         }
         WireEvent::Closed => {
@@ -300,17 +307,34 @@ fn conversation_stream(shared: &Handle, id: Option<i64>) {
 
     let scoped = Rc::clone(shared);
     let listener = Closure::wrap(Box::new(move |event: MessageEvent| {
-        let Some(raw) = event.data().as_string() else { return };
-        let Ok(payload) = serde_json::from_str::<serde_json::Value>(&raw) else { return };
-        let Some(message) = payload.get("message") else { return };
+        let Some(raw) = event.data().as_string() else {
+            return;
+        };
+        let Ok(payload) = serde_json::from_str::<serde_json::Value>(&raw) else {
+            return;
+        };
+        let Some(message) = payload.get("message") else {
+            return;
+        };
         if let Some(text) = message.get("content").and_then(serde_json::Value::as_str) {
             if !text.is_empty() {
                 append_entry(&scoped, "assistant", text);
             }
         }
-        for asset in message.get("assets").and_then(serde_json::Value::as_array).into_iter().flatten() {
-            let kind = asset.get("kind").and_then(serde_json::Value::as_str).unwrap_or_default();
-            let url = asset.get("url").and_then(serde_json::Value::as_str).unwrap_or_default();
+        for asset in message
+            .get("assets")
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let kind = asset
+                .get("kind")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            let url = asset
+                .get("url")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
             if !kind.is_empty() && !url.is_empty() {
                 append_asset(&scoped, kind, url);
             }
@@ -319,7 +343,9 @@ fn conversation_stream(shared: &Handle, id: Option<i64>) {
     if let Err(error) =
         source.add_event_listener_with_callback("message_added", listener.as_ref().unchecked_ref())
     {
-        wire::report(&format!("cannot listen on the conversation stream: {error:?}"));
+        wire::report(&format!(
+            "cannot listen on the conversation stream: {error:?}"
+        ));
         return;
     }
     listener.forget();
@@ -335,7 +361,9 @@ fn append_entry(shared: &Handle, kind: &str, text: &str) {
         )
     };
     let Some(document) = document else { return };
-    let Ok(entry) = document.create_element("li") else { return };
+    let Ok(entry) = document.create_element("li") else {
+        return;
+    };
     entry.set_class_name(&format!("voice-entry voice-entry-{kind}"));
     entry.set_text_content(Some(text));
     append_and_scroll(&log, &entry);
@@ -353,14 +381,20 @@ fn append_asset(shared: &Handle, kind: &str, url: &str) {
         )
     };
     let Some(document) = document else { return };
-    let Ok(entry) = document.create_element("li") else { return };
+    let Ok(entry) = document.create_element("li") else {
+        return;
+    };
     entry.set_class_name("voice-entry voice-entry-assistant");
-    let Ok(figure) = document.create_element("figure") else { return };
+    let Ok(figure) = document.create_element("figure") else {
+        return;
+    };
     figure.set_class_name("asset");
 
     let video = kind == "video";
     let tag = if video { "video" } else { "img" };
-    let Ok(media) = document.create_element(tag) else { return };
+    let Ok(media) = document.create_element(tag) else {
+        return;
+    };
     media.set_class_name(if video { "asset-video" } else { "asset-image" });
     if let Err(error) = media.set_attribute("src", url) {
         wire::report(&format!("cannot set the asset source: {error:?}"));
@@ -375,9 +409,13 @@ fn append_asset(shared: &Handle, kind: &str, url: &str) {
         let _ = media.set_attribute("alt", "生成的图片");
     }
 
-    let Ok(caption) = document.create_element("figcaption") else { return };
+    let Ok(caption) = document.create_element("figcaption") else {
+        return;
+    };
     caption.set_class_name("asset-actions");
-    let Ok(link) = document.create_element("a") else { return };
+    let Ok(link) = document.create_element("a") else {
+        return;
+    };
     link.set_class_name("asset-download");
     let _ = link.set_attribute("href", url);
     let _ = link.set_attribute("download", "");

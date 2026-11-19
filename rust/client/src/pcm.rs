@@ -17,7 +17,7 @@ const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwx
 
 /// Standard base64 with padding, as the voice protocol's frames carry it.
 pub fn to_base64(bytes: &[u8]) -> String {
-    let mut out = String::with_capacity((bytes.len() + 2) / 3 * 4);
+    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
     for chunk in bytes.chunks(3) {
         let b0 = chunk[0] as u32;
         let b1 = *chunk.get(1).unwrap_or(&0) as u32;
@@ -25,8 +25,16 @@ pub fn to_base64(bytes: &[u8]) -> String {
         let triple = (b0 << 16) | (b1 << 8) | b2;
         out.push(ALPHABET[(triple >> 18) as usize & 0x3f] as char);
         out.push(ALPHABET[(triple >> 12) as usize & 0x3f] as char);
-        out.push(if chunk.len() > 1 { ALPHABET[(triple >> 6) as usize & 0x3f] as char } else { '=' });
-        out.push(if chunk.len() > 2 { ALPHABET[triple as usize & 0x3f] as char } else { '=' });
+        out.push(if chunk.len() > 1 {
+            ALPHABET[(triple >> 6) as usize & 0x3f] as char
+        } else {
+            '='
+        });
+        out.push(if chunk.len() > 2 {
+            ALPHABET[triple as usize & 0x3f] as char
+        } else {
+            '='
+        });
     }
     out
 }
@@ -55,7 +63,7 @@ pub fn from_base64(text: &str) -> Option<Vec<u8>> {
         bits += 6;
         if bits >= 8 {
             bits -= 8;
-            out.push((buffer >> bits) as u8 & 0xff);
+            out.push((buffer >> bits) as u8);
         }
     }
     Some(out)
@@ -85,7 +93,11 @@ pub fn f32_to_pcm16_le(samples: &[f32]) -> Vec<u8> {
     let mut out = Vec::with_capacity(samples.len() * 2);
     for sample in samples {
         let clamped = sample.clamp(-1.0, 1.0);
-        let scaled = if clamped < 0.0 { clamped * 32768.0 } else { clamped * 32767.0 };
+        let scaled = if clamped < 0.0 {
+            clamped * 32768.0
+        } else {
+            clamped * 32767.0
+        };
         let value = scaled.round().clamp(-32768.0, 32767.0) as i16;
         out.extend_from_slice(&value.to_le_bytes());
     }
@@ -134,7 +146,10 @@ mod tests {
         assert_eq!(bytes, vec![0x00, 0x80, 0xff, 0x7f, 0x00, 0xc0, 0x00, 0x40]);
         let back = pcm16_le_to_f32(&bytes);
         assert_eq!(back.len(), samples.len());
-        assert!((back[0] + 1.0).abs() < 1e-4, "the floor of the range stays -1.0");
+        assert!(
+            (back[0] + 1.0).abs() < 1e-4,
+            "the floor of the range stays -1.0"
+        );
         assert!((back[1] - 1.0).abs() < 1e-4);
     }
 
@@ -157,7 +172,11 @@ mod tests {
         // 1024 samples, which is the worklet's message size at 24 kHz.
         let samples = vec![0.25f32; 1024];
         let frame = to_base64(&f32_to_pcm16_le(&samples));
-        assert_eq!(frame.len(), 1024 * 2 * 4 / 3 + 2, "2048 bytes padded to base64");
+        assert_eq!(
+            frame.len(),
+            1024 * 2 * 4 / 3 + 2,
+            "2048 bytes padded to base64"
+        );
         let bytes = from_base64(&frame).expect("valid base64");
         assert_eq!(bytes.len(), 2048);
         assert_eq!(pcm16_le_to_f32(&bytes).len(), 1024);

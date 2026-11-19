@@ -128,7 +128,11 @@ fn header(page: &ChatPage) -> String {
         items.push_str("          <li class=\"conversation-empty\">暂无会话</li>\n");
     } else {
         for conversation in &page.conversations {
-            let active = if conversation.is_active { " is-active" } else { "" };
+            let active = if conversation.is_active {
+                " is-active"
+            } else {
+                ""
+            };
             items.push_str(&format!(
                 "            <li class=\"conversation-item\">\n              <a class=\"conversation-link{active}\" href=\"/?c={}\">{title}</a>\n",
                 conversation.id,
@@ -191,12 +195,18 @@ pub fn turn(message: &RenderedMessage) -> String {
     }
 
     if !message.content_html.is_empty() {
-        out.push_str(&format!("      <div class=\"content\">{}</div>\n", message.content_html));
+        out.push_str(&format!(
+            "      <div class=\"content\">{}</div>\n",
+            message.content_html
+        ));
     } else if !view.content.is_empty() {
         // The user's words are plain text, printed escaped — the same thing
         // textContent does on the live path. Keeping the bubble free of block
         // children is also what makes its height hug the text.
-        out.push_str(&format!("      <div class=\"content\">{}</div>\n", escape(&view.content)));
+        out.push_str(&format!(
+            "      <div class=\"content\">{}</div>\n",
+            escape(&view.content)
+        ));
     }
 
     for asset in &view.assets {
@@ -396,9 +406,7 @@ pub fn tokens_page(username: &str, is_super: bool) -> String {
     } else {
         ""
     };
-    let menu = format!(
-        "      <a class=\"menu-button\" href=\"/\">返回对话</a>\n{admin}"
-    );
+    let menu = format!("      <a class=\"menu-button\" href=\"/\">返回对话</a>\n{admin}");
     let main = r#"  <main class="admin-main">
     <section class="admin-card">
       <h2 class="admin-title">设备令牌</h2>

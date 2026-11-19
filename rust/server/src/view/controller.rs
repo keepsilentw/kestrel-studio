@@ -14,10 +14,9 @@ use crate::state::AppState;
 use super::render::{build_turn_anchors, render_messages};
 use super::templates::{ChatPage, ConversationEntry};
 
-/// SSR renders the first paint only: login state, the history sidebar, the page
-/// shell and the mode picker. From the first token on, the main column is built by
-/// the client - the two render paths do not overlap, and nothing here streams.
-
+// SSR renders the first paint only: login state, the history sidebar, the page
+// shell and the mode picker. From the first token on, the main column is built by
+// the client - the two render paths do not overlap, and nothing here streams.
 const HTML: &str = "text/html; charset=utf-8";
 
 fn html(body: String) -> Response {
@@ -42,7 +41,9 @@ pub async fn login_page(
     if principal_from_cookie(&state, cookie).await.is_some() {
         return found("/");
     }
-    html(super::templates::login_page(params.get("error").map(String::as_str) == Some("1")))
+    html(super::templates::login_page(
+        params.get("error").map(String::as_str) == Some("1"),
+    ))
 }
 
 /// `GET /` — the first paint of one conversation, or of an empty shell.
@@ -111,9 +112,11 @@ pub async fn chat(
 
     let start_seq = match active {
         None => None,
-        Some(id) => {
-            Some(crate::agent::turn_runner::TurnRunner::new(state.clone()).catch_up_cursor(id).await?)
-        }
+        Some(id) => Some(
+            crate::agent::turn_runner::TurnRunner::new(state.clone())
+                .catch_up_cursor(id)
+                .await?,
+        ),
     };
 
     // Deleting from the history list is a normal account's affordance: a super

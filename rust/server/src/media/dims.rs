@@ -105,7 +105,8 @@ fn webp_dims(bytes: &[u8]) -> Option<(u32, u32)> {
     while at + 8 <= bytes.len() {
         let tag = &bytes[at..at + 4];
         // Chunk headers are little-endian, unlike everything else in this file.
-        let size = u32::from_le_bytes([bytes[at + 4], bytes[at + 5], bytes[at + 6], bytes[at + 7]]) as usize;
+        let size = u32::from_le_bytes([bytes[at + 4], bytes[at + 5], bytes[at + 6], bytes[at + 7]])
+            as usize;
         let data = at + 8;
         let end = data + size;
         if end > bytes.len() {
@@ -225,7 +226,10 @@ mod tests {
         assert_eq!(image_dims(&[0u8; 4]), None);
         // An MP4 is a video: this file is only asked about images, and even if it
         // were, guessing from a `moov` box is not what this is for.
-        assert_eq!(image_dims(b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom"), None);
+        assert_eq!(
+            image_dims(b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x00mp42isom"),
+            None
+        );
     }
 
     #[test]

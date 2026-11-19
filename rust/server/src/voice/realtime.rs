@@ -5,8 +5,8 @@
 //! response parser is what decides whether a connection is actually usable. What
 //! is left over is the TLS dial itself, which cannot be tested here at all.
 
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use base64::Engine;
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 use crate::config::random_bytes;
 use crate::net::ws::accept_key;
@@ -24,8 +24,12 @@ use crate::net::ws::accept_key;
 pub fn realtime_url(base_url: &str, model: &str) -> Option<String> {
     let mut parsed = url::Url::parse(base_url).ok()?;
     match parsed.scheme() {
-        "https" => { let _ = parsed.set_scheme("wss"); }
-        "http" => { let _ = parsed.set_scheme("ws"); }
+        "https" => {
+            let _ = parsed.set_scheme("wss");
+        }
+        "http" => {
+            let _ = parsed.set_scheme("ws");
+        }
         _ => return None,
     }
     parsed.set_path("/api-ws/v1/realtime");
@@ -43,7 +47,9 @@ fn percent_encode(value: &str) -> String {
     let mut out = String::new();
     for byte in value.as_bytes() {
         match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => out.push(*byte as char),
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
+                out.push(*byte as char)
+            }
             other => out.push_str(&format!("%{other:02X}")),
         }
     }
@@ -57,7 +63,12 @@ pub fn client_key() -> String {
 }
 
 /// The upgrade request, as bytes on the wire.
-pub fn build_handshake_request(path_and_query: &str, host: &str, key: &str, bearer: &str) -> Vec<u8> {
+pub fn build_handshake_request(
+    path_and_query: &str,
+    host: &str,
+    key: &str,
+    bearer: &str,
+) -> Vec<u8> {
     format!(
         "GET {path_and_query} HTTP/1.1\r\n\
          Host: {host}\r\n\
@@ -111,13 +122,16 @@ pub fn parse_handshake_response(head: &str, sent_key: &str) -> Result<(), Upstre
     if upgrade.as_deref() != Some("websocket") {
         return Err(UpstreamError::Malformed("no Upgrade: websocket".into()));
     }
-    let connection = connection.ok_or_else(|| UpstreamError::Malformed("no Connection header".into()))?;
+    let connection =
+        connection.ok_or_else(|| UpstreamError::Malformed("no Connection header".into()))?;
     // `Connection` is a list; proxies append to it.
     if !connection.split(',').any(|part| part.trim() == "upgrade") {
-        return Err(UpstreamError::Malformed(format!("Connection: {connection}")));
+        return Err(UpstreamError::Malformed(format!(
+            "Connection: {connection}"
+        )));
     }
-    let expected =
-        accept_key(sent_key).ok_or_else(|| UpstreamError::Malformed("our own key was refused".into()))?;
+    let expected = accept_key(sent_key)
+        .ok_or_else(|| UpstreamError::Malformed("our own key was refused".into()))?;
     if accept.as_deref() != Some(expected.as_str()) {
         return Err(UpstreamError::BadAccept);
     }
@@ -144,7 +158,11 @@ mod tests {
             Some("wss://example.test/api-ws/v1/realtime?model=a%20b"),
             "a space in a model name must not break the request line"
         );
-        assert_eq!(realtime_url("ftp://example.test", "m"), None, "no such scheme");
+        assert_eq!(
+            realtime_url("ftp://example.test", "m"),
+            None,
+            "no such scheme"
+        );
         assert_eq!(realtime_url("not a url", "m"), None);
     }
 
@@ -154,8 +172,14 @@ mod tests {
         let second = client_key();
         assert_eq!(first.len(), 24, "16 bytes in standard base64");
         assert_ne!(first, second);
-        assert!(accept_key(&first).is_some(), "the key we send must be signable");
-        assert!(accept_key(&format!("{first}!")).is_none(), "a corrupt key is refused");
+        assert!(
+            accept_key(&first).is_some(),
+            "the key we send must be signable"
+        );
+        assert!(
+            accept_key(&format!("{first}!")).is_none(),
+            "a corrupt key is refused"
+        );
     }
 
     #[test]
@@ -179,7 +203,10 @@ mod tests {
             "Sec-WebSocket-Version: 13",
             "Authorization: Bearer sk-test",
         ] {
-            assert!(request.contains(&format!("{line}\r\n")), "missing {line} in {request}");
+            assert!(
+                request.contains(&format!("{line}\r\n")),
+                "missing {line} in {request}"
+            );
         }
         assert!(request.ends_with("\r\n\r\n"), "the head must terminate");
     }
@@ -210,7 +237,10 @@ mod tests {
     fn anything_that_is_not_101_is_rejected_with_the_status_kept_for_the_log() {
         let key = "dGVzdA==";
         assert_eq!(
-            parse_handshake_response("HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n", key),
+            parse_handshake_response(
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\r\n",
+                key
+            ),
             Err(UpstreamError::Rejected("HTTP/1.1 200 OK".into())),
             "a provider that answers a request instead of upgrading is not a socket"
         );
@@ -244,9 +274,11 @@ mod tests {
             "Connection: Upgrade",
             "Sec-WebSocket-Accept: aW52YWxpZA==",
         ]);
-        assert_eq!(parse_handshake_response(&wrong_accept, key), Err(UpstreamError::BadAccept));
+        assert_eq!(
+            parse_handshake_response(&wrong_accept, key),
+            Err(UpstreamError::BadAccept)
+        );
     }
-
 }
 /// Outbound message shapes. Field names are copied from `realtime-client.ts`;
 /// several of them are load-bearing in ways a guess would not be - `turn_detection`
@@ -313,7 +345,11 @@ pub enum RealtimeEvent {
     Transcript(String),
     AssistantText(String),
     Audio(String),
-    FunctionCall { call_id: String, name: String, arguments: String },
+    FunctionCall {
+        call_id: String,
+        name: String,
+        arguments: String,
+    },
     /// The model finished a turn; the browser may press the button again.
     ResponseDone,
     /// A `conversation.item.created` ack: the tool result landed, so
@@ -321,7 +357,10 @@ pub enum RealtimeEvent {
     /// re-issuing the identical tool call.
     ItemCreated,
     Failed(String),
-    Closed { code: u16, reason: String },
+    Closed {
+        code: u16,
+        reason: String,
+    },
 }
 
 /// The upstream event switch, with the state the Nest client keeps.
@@ -355,11 +394,19 @@ impl UpstreamStitch {
             return Vec::new();
         };
         let text = |key: &str| -> String {
-            parsed.get(key).and_then(serde_json::Value::as_str).unwrap_or_default().to_string()
+            parsed
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_string()
         };
         let item = |key: &str| -> Option<serde_json::Value> { parsed.get(key).cloned() };
         let field = |value: &serde_json::Value, key: &str| -> String {
-            value.get(key).and_then(serde_json::Value::as_str).unwrap_or_default().to_string()
+            value
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_string()
         };
 
         match kind {
@@ -374,7 +421,10 @@ impl UpstreamStitch {
             }
             "response.audio.delta" => {
                 let delta = text("delta");
-                (!delta.is_empty()).then_some(RealtimeEvent::Audio(delta)).into_iter().collect()
+                (!delta.is_empty())
+                    .then_some(RealtimeEvent::Audio(delta))
+                    .into_iter()
+                    .collect()
             }
             "response.audio_transcript.delta" => {
                 self.assistant_text.push_str(&text("delta"));
@@ -382,9 +432,16 @@ impl UpstreamStitch {
             }
             "response.audio_transcript.done" => {
                 let done = text("transcript");
-                let message = if done.is_empty() { std::mem::take(&mut self.assistant_text) } else { done };
+                let message = if done.is_empty() {
+                    std::mem::take(&mut self.assistant_text)
+                } else {
+                    done
+                };
                 self.assistant_text.clear();
-                (!message.is_empty()).then_some(RealtimeEvent::AssistantText(message)).into_iter().collect()
+                (!message.is_empty())
+                    .then_some(RealtimeEvent::AssistantText(message))
+                    .into_iter()
+                    .collect()
             }
             "response.output_item.added" => {
                 if let Some(item) = item("item") {
@@ -406,7 +463,9 @@ impl UpstreamStitch {
                 Vec::new()
             }
             "response.output_item.done" => {
-                let Some(item) = item("item") else { return Vec::new() };
+                let Some(item) = item("item") else {
+                    return Vec::new();
+                };
                 if field(&item, "type") != "function_call" {
                     return Vec::new();
                 }
@@ -417,11 +476,19 @@ impl UpstreamStitch {
                 }
                 let arguments = if streamed.is_empty() {
                     let own = field(&item, "arguments");
-                    if own.is_empty() { "{}".to_string() } else { own }
+                    if own.is_empty() {
+                        "{}".to_string()
+                    } else {
+                        own
+                    }
                 } else {
                     streamed
                 };
-                vec![RealtimeEvent::FunctionCall { call_id, name: field(&item, "name"), arguments }]
+                vec![RealtimeEvent::FunctionCall {
+                    call_id,
+                    name: field(&item, "name"),
+                    arguments,
+                }]
             }
             "conversation.item.created" => vec![RealtimeEvent::ItemCreated],
             "response.done" => vec![RealtimeEvent::ResponseDone],
@@ -429,7 +496,9 @@ impl UpstreamStitch {
                 // The message may ride either the nested error object or the frame
                 // itself; the fixed sentence is the last resort, as in the Nest
                 // client, so a failure never reaches the browser as an empty string.
-                let nested = item("error").map(|value| field(&value, "message")).unwrap_or_default();
+                let nested = item("error")
+                    .map(|value| field(&value, "message"))
+                    .unwrap_or_default();
                 let message = if !nested.is_empty() {
                     nested
                 } else if !text("message").is_empty() {
@@ -472,17 +541,35 @@ mod vocabulary {
         assert_eq!(update["session"]["tool_choice"], json!("auto"));
         // null, not "none": the string form is rejected by the endpoint.
         assert!(update["session"]["turn_detection"].is_null());
-        assert_eq!(update["session"]["input_audio_transcription"]["model"], json!("fun-asr"));
+        assert_eq!(
+            update["session"]["input_audio_transcription"]["model"],
+            json!("fun-asr")
+        );
         assert_eq!(update["session"]["instructions"], json!("说中文"));
-        assert_eq!(update["session"]["tools"].as_array().expect("tools").len(), 1);
+        assert_eq!(
+            update["session"]["tools"].as_array().expect("tools").len(),
+            1
+        );
     }
 
     #[test]
     fn the_audio_and_call_messages_use_the_upstream_names() {
-        assert_eq!(message::append_audio("AAA="), json!({"type":"input_audio_buffer.append","audio":"AAA="}));
-        assert_eq!(message::commit(), json!({"type":"input_audio_buffer.commit"}));
-        assert_eq!(message::response_create(), json!({"type":"response.create"}));
-        assert_eq!(message::response_cancel(), json!({"type":"response.cancel"}));
+        assert_eq!(
+            message::append_audio("AAA="),
+            json!({"type":"input_audio_buffer.append","audio":"AAA="})
+        );
+        assert_eq!(
+            message::commit(),
+            json!({"type":"input_audio_buffer.commit"})
+        );
+        assert_eq!(
+            message::response_create(),
+            json!({"type":"response.create"})
+        );
+        assert_eq!(
+            message::response_cancel(),
+            json!({"type":"response.cancel"})
+        );
         assert_eq!(
             message::function_call_output("c1", "asset 7"),
             json!({"type":"conversation.item.create","item":{"type":"function_call_output","call_id":"c1","output":"asset 7"}})
@@ -492,8 +579,12 @@ mod vocabulary {
     #[test]
     fn assistant_text_accumulates_and_the_done_frame_wins_over_the_deltas() {
         let mut stitch = UpstreamStitch::default();
-        assert!(stitch.handle(r#"{"type":"response.audio_transcript.delta","delta":"你看"}"#).is_empty());
-        assert!(stitch.handle(r#"{"type":"response.audio_transcript.delta","delta":"这只鸟"}"#).is_empty());
+        assert!(stitch
+            .handle(r#"{"type":"response.audio_transcript.delta","delta":"你看"}"#)
+            .is_empty());
+        assert!(stitch
+            .handle(r#"{"type":"response.audio_transcript.delta","delta":"这只鸟"}"#)
+            .is_empty());
         // The done frame carries its own transcript when the endpoint provides one.
         assert_eq!(
             stitch.handle(r#"{"type":"response.audio_transcript.done","transcript":"你看这只鸟"}"#),
@@ -505,7 +596,12 @@ mod vocabulary {
             stitch.handle(r#"{"type":"response.audio_transcript.done"}"#),
             vec![RealtimeEvent::AssistantText("第二段".into())]
         );
-        assert!(stitch.handle(r#"{"type":"response.audio_transcript.done"}"#).is_empty(), "the buffer was cleared");
+        assert!(
+            stitch
+                .handle(r#"{"type":"response.audio_transcript.done"}"#)
+                .is_empty(),
+            "the buffer was cleared"
+        );
     }
 
     #[test]
@@ -515,18 +611,23 @@ mod vocabulary {
             stitch.handle(r#"{"type":"response.audio.delta","delta":"AAA="}"#),
             vec![RealtimeEvent::Audio("AAA=".into())]
         );
-        assert!(stitch.handle(r#"{"type":"response.audio.delta","delta":""}"#).is_empty());
+        assert!(stitch
+            .handle(r#"{"type":"response.audio.delta","delta":""}"#)
+            .is_empty());
     }
 
     #[test]
     fn function_call_arguments_stitch_onto_the_call_that_was_opened_last() {
         let mut stitch = UpstreamStitch::default();
         // A delta before any call was opened is dropped, not attributed to nothing.
-        assert!(stitch.handle(r#"{"type":"response.function_call_arguments.delta","delta":"{}"}"#).is_empty());
+        assert!(stitch
+            .handle(r#"{"type":"response.function_call_arguments.delta","delta":"{}"}"#)
+            .is_empty());
 
         stitch.handle(r#"{"type":"response.output_item.added","item":{"type":"function_call","call_id":"c1","name":"generate_image"}}"#);
         assert_eq!(stitch.active_call(), Some("c1"));
-        stitch.handle(r#"{"type":"response.function_call_arguments.delta","delta":"{\"prompt\":"}"#);
+        stitch
+            .handle(r#"{"type":"response.function_call_arguments.delta","delta":"{\"prompt\":"}"#);
         stitch.handle(r#"{"type":"response.function_call_arguments.delta","delta":"\"红隼\"}"}"#);
         assert_eq!(
             stitch.handle(r#"{"type":"response.output_item.done","item":{"type":"function_call","call_id":"c1","name":"generate_image","arguments":"{}"}}"#),
@@ -548,13 +649,22 @@ mod vocabulary {
         // ...and if it carries none either, the model gets an empty object.
         stitch.handle(r#"{"type":"response.output_item.added","item":{"type":"function_call","call_id":"c3","name":"x"}}"#);
         let last = stitch.handle(r#"{"type":"response.output_item.done","item":{"type":"function_call","call_id":"c3","name":"x"}}"#);
-        assert_eq!(last, vec![RealtimeEvent::FunctionCall { call_id: "c3".into(), name: "x".into(), arguments: "{}".into() }]);
+        assert_eq!(
+            last,
+            vec![RealtimeEvent::FunctionCall {
+                call_id: "c3".into(),
+                name: "x".into(),
+                arguments: "{}".into()
+            }]
+        );
     }
 
     #[test]
     fn non_function_call_items_and_unparsable_frames_produce_nothing() {
         let mut stitch = UpstreamStitch::default();
-        assert!(stitch.handle(r#"{"type":"response.output_item.done","item":{"type":"message"}}"#).is_empty());
+        assert!(stitch
+            .handle(r#"{"type":"response.output_item.done","item":{"type":"message"}}"#)
+            .is_empty());
         assert!(stitch.handle("not json").is_empty());
         assert!(stitch.handle("[]").is_empty());
         assert!(stitch.handle(r#"{"noType":1}"#).is_empty());
@@ -586,7 +696,10 @@ mod vocabulary {
     #[test]
     fn the_turn_end_and_the_item_ack_are_reported() {
         let mut stitch = UpstreamStitch::default();
-        assert_eq!(stitch.handle(r#"{"type":"response.done"}"#), vec![RealtimeEvent::ResponseDone]);
+        assert_eq!(
+            stitch.handle(r#"{"type":"response.done"}"#),
+            vec![RealtimeEvent::ResponseDone]
+        );
         assert_eq!(
             stitch.handle(r#"{"type":"conversation.item.created","item":{}}"#),
             vec![RealtimeEvent::ItemCreated]
@@ -595,20 +708,33 @@ mod vocabulary {
 
     #[test]
     fn only_the_verifiable_upstream_events_map_and_nothing_else_invents_one() {
-        assert_eq!(map_inbound_event(r#"{"type":"session.created"}"#), Some(RealtimeEvent::SessionCreated));
-        assert_eq!(map_inbound_event(r#"{"type":"session.updated"}"#), Some(RealtimeEvent::Ready));
         assert_eq!(
-            map_inbound_event(r#"{"type":"conversation.item.input_audio_transcription.completed","transcript":"你好"}"#),
+            map_inbound_event(r#"{"type":"session.created"}"#),
+            Some(RealtimeEvent::SessionCreated)
+        );
+        assert_eq!(
+            map_inbound_event(r#"{"type":"session.updated"}"#),
+            Some(RealtimeEvent::Ready)
+        );
+        assert_eq!(
+            map_inbound_event(
+                r#"{"type":"conversation.item.input_audio_transcription.completed","transcript":"你好"}"#
+            ),
             Some(RealtimeEvent::Transcript("你好".into()))
         );
         // An empty transcript is no transcript.
         assert_eq!(
-            map_inbound_event(r#"{"type":"conversation.item.input_audio_transcription.completed","transcript":""}"#),
+            map_inbound_event(
+                r#"{"type":"conversation.item.input_audio_transcription.completed","transcript":""}"#
+            ),
             None
         );
         // Names this port has not read from the Nest client stay unmapped: an
         // unknown upstream event is silently ignored, never renamed into a guess.
-        assert_eq!(map_inbound_event(r#"{"type":"response.content_part.added"}"#), None);
+        assert_eq!(
+            map_inbound_event(r#"{"type":"response.content_part.added"}"#),
+            None
+        );
         assert_eq!(map_inbound_event(r#"{"type":"rate_limits.updated"}"#), None);
         assert_eq!(map_inbound_event("not json"), None);
         assert_eq!(map_inbound_event("[]"), None);
@@ -651,10 +777,9 @@ pub async fn read_response_head<R: AsyncReadExt + Unpin>(
     let mut bytes = Vec::with_capacity(256);
     let mut buf = [0u8; 1];
     loop {
-        let read = reader
-            .read(&mut buf)
-            .await
-            .map_err(|error| UpstreamError::Malformed(format!("reading the response head: {error}")))?;
+        let read = reader.read(&mut buf).await.map_err(|error| {
+            UpstreamError::Malformed(format!("reading the response head: {error}"))
+        })?;
         if read == 0 {
             return Err(UpstreamError::Malformed(format!(
                 "the peer closed the connection mid-head: {}",
@@ -666,7 +791,9 @@ pub async fn read_response_head<R: AsyncReadExt + Unpin>(
             return Ok(String::from_utf8_lossy(&bytes).into_owned());
         }
         if bytes.len() >= MAX_HEAD {
-            return Err(UpstreamError::Malformed("the response head is unreasonably long".into()));
+            return Err(UpstreamError::Malformed(
+                "the response head is unreasonably long".into(),
+            ));
         }
     }
 }
@@ -677,7 +804,11 @@ pub async fn read_response_head<R: AsyncReadExt + Unpin>(
 /// Unverified in this environment: it dials, and this box can neither reach the
 /// provider nor bind a loopback port to fake it. Everything it is built from is
 /// tested, so a failure here is the network or the provider, not the framing.
-pub async fn connect(base_url: &str, model: &str, api_key: &str) -> Result<UpstreamSocket, UpstreamError> {
+pub async fn connect(
+    base_url: &str,
+    model: &str,
+    api_key: &str,
+) -> Result<UpstreamSocket, UpstreamError> {
     use tokio_rustls::rustls::pki_types::ServerName;
     use tokio_rustls::TlsConnector;
 
@@ -698,7 +829,9 @@ pub async fn connect(base_url: &str, model: &str, api_key: &str) -> Result<Upstr
     let opened = tokio::time::timeout(CONNECT_TIMEOUT, async {
         let tcp = tokio::net::TcpStream::connect((host.as_str(), port))
             .await
-            .map_err(|error| UpstreamError::Rejected(format!("connecting to {host}:{port}: {error}")))?;
+            .map_err(|error| {
+                UpstreamError::Rejected(format!("connecting to {host}:{port}: {error}"))
+            })?;
         let name = ServerName::try_from(host.clone())
             .map_err(|error| UpstreamError::Malformed(format!("bad server name: {error}")))?;
         let mut tls = connector
@@ -726,7 +859,13 @@ pub async fn connect(base_url: &str, model: &str, api_key: &str) -> Result<Upstr
 /// loopback port - while this half is only bytes: a test hands it a duplex stream
 /// with a scripted server and checks the request we send and how we treat the
 /// reply. That leaves the dial itself the only unverified step on the upstream leg.
-pub async fn handshake<I>(io: &mut I, host: &str, path_and_query: &str, key: &str, api_key: &str) -> Result<(), UpstreamError>
+pub async fn handshake<I>(
+    io: &mut I,
+    host: &str,
+    path_and_query: &str,
+    key: &str,
+    api_key: &str,
+) -> Result<(), UpstreamError>
 where
     I: AsyncReadExt + AsyncWriteExt + Unpin,
 {
@@ -774,7 +913,14 @@ mod dial_pieces {
         let (client, mut server) = tokio::io::duplex(4 << 10);
         let mut client = client;
         let exchanged = tokio::spawn(async move {
-            handshake(&mut client, "provider.test", "/api-ws/v1/realtime?model=m", key, "sk-test").await
+            handshake(
+                &mut client,
+                "provider.test",
+                "/api-ws/v1/realtime?model=m",
+                key,
+                "sk-test",
+            )
+            .await
         });
 
         let head = read_response_head(&mut server).await.expect("our request");
@@ -782,10 +928,16 @@ mod dial_pieces {
             head.starts_with("GET /api-ws/v1/realtime?model=m HTTP/1.1\r\n"),
             "{head:?}"
         );
-        assert!(head.contains(&format!("Sec-WebSocket-Key: {key}\r\n")), "{head}");
+        assert!(
+            head.contains(&format!("Sec-WebSocket-Key: {key}\r\n")),
+            "{head}"
+        );
         assert!(head.contains("Authorization: Bearer sk-test\r\n"), "{head}");
         assert!(head.contains("Upgrade: websocket\r\n"), "{head}");
-        assert!(head.ends_with("\r\n\r\n"), "the request must terminate: {head:?}");
+        assert!(
+            head.ends_with("\r\n\r\n"),
+            "the request must terminate: {head:?}"
+        );
 
         server
             .write_all(
@@ -796,7 +948,10 @@ mod dial_pieces {
             )
             .await
             .expect("the 101");
-        exchanged.await.expect("join").expect("a matching signature completes the upgrade");
+        exchanged
+            .await
+            .expect("join")
+            .expect("a matching signature completes the upgrade");
     }
 
     #[tokio::test]
@@ -862,12 +1017,18 @@ mod dial_pieces {
 
         // Deliberately split across writes, and with a byte after the head that
         // must be left for the frame decoder.
-        client.write_all(b"HTTP/1.1 101 Switching Proto").await.unwrap();
+        client
+            .write_all(b"HTTP/1.1 101 Switching Proto")
+            .await
+            .unwrap();
         client.write_all(b"cols\r\n\r\n").await.unwrap();
         client.write_all(b"\x81\x02hi").await.unwrap();
         let head = reader.await.unwrap().expect("head");
         assert!(head.ends_with("\r\n\r\n"), "{head:?}");
-        assert!(!head.as_bytes().contains(&0x81), "the first frame byte must not be eaten: {head:?}");
+        assert!(
+            !head.as_bytes().contains(&0x81),
+            "the first frame byte must not be eaten: {head:?}"
+        );
         assert!(
             head.contains("HTTP/1.1 101 Switching Protocols"),
             "the whole head arrives in one piece"
@@ -890,15 +1051,21 @@ mod dial_pieces {
                 }
             }
         });
-        let error = read_response_head(&mut server).await.expect_err("unbounded");
-        assert!(format!("{error:?}").contains("unreasonably long"), "{error:?}");
+        let error = read_response_head(&mut server)
+            .await
+            .expect_err("unbounded");
+        assert!(
+            format!("{error:?}").contains("unreasonably long"),
+            "{error:?}"
+        );
         writer.abort();
     }
 
     #[test]
     fn the_response_must_still_be_a_valid_upgrade_after_the_head_arrives() {
         // The two halves compose: whatever the reader returns goes to the parser.
-        let head = "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n";
+        let head =
+            "HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n";
         assert_eq!(
             parse_handshake_response(head, "dGVzdA=="),
             Err(super::UpstreamError::BadAccept),

@@ -2,9 +2,8 @@ use super::html::markdown;
 use crate::agent::mode::Mode;
 use crate::conversation::MessageView;
 
-/// Template preparation shared by the two surfaces that render stored turns: the
-/// chat page and the super admin's read-only view of someone else's conversation.
-
+// Template preparation shared by the two surfaces that render stored turns: the
+// chat page and the super admin's read-only view of someone else's conversation.
 pub struct RenderedMessage {
     pub view: MessageView,
     pub content_html: String,
@@ -96,10 +95,16 @@ mod tests {
             message(2, "assistant", "**好的**", Some(Mode::Image)),
             message(3, "assistant", "", Some(Mode::Chat)),
         ]);
-        assert_eq!(rendered[0].content_html, "", "the user's words stay plain text");
+        assert_eq!(
+            rendered[0].content_html, "",
+            "the user's words stay plain text"
+        );
         assert_eq!(rendered[1].content_html, "<p><strong>好的</strong></p>");
         assert_eq!(rendered[1].mode_label, Some("图片"));
-        assert_eq!(rendered[2].content_html, "", "an empty body renders nothing");
+        assert_eq!(
+            rendered[2].content_html, "",
+            "an empty body renders nothing"
+        );
         assert_eq!(rendered[0].mode_label, None, "a voice turn has no mode");
     }
 
@@ -113,7 +118,10 @@ mod tests {
         ]);
         let anchors = build_turn_anchors(&rendered);
         assert_eq!(
-            anchors.iter().map(|a| (a.message_id, a.label.as_str())).collect::<Vec<_>>(),
+            anchors
+                .iter()
+                .map(|a| (a.message_id, a.label.as_str()))
+                .collect::<Vec<_>>(),
             vec![(1, "画一只红隼"), (4, "再来一张")],
             "trimmed, and a blank prompt is not a turn"
         );

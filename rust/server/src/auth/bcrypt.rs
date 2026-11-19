@@ -67,7 +67,7 @@ impl Blowfish {
     fn stream_to_word(data: &[u8], offset: &mut usize) -> u32 {
         let mut word = 0u32;
         for _ in 0..4 {
-            word = (word << 8) | u32::from(data[*offset] & 0xff);
+            word = (word << 8) | u32::from(data[*offset]);
             *offset = (*offset + 1) % data.len();
         }
         word
@@ -188,7 +188,7 @@ fn parse_salt(value: &str) -> Result<Salt, String> {
     let cost: u32 = digits
         .parse()
         .map_err(|_| "Missing salt rounds".to_string())?;
-    if cost < MIN_COST || cost > MAX_COST {
+    if !(MIN_COST..=MAX_COST).contains(&cost) {
         return Err(format!("Illegal number of rounds (4-31): {cost}"));
     }
 
@@ -210,7 +210,7 @@ fn parse_salt(value: &str) -> Result<Salt, String> {
 /// `$2b$10$` plus twenty-two salt characters.
 pub fn generate_salt(cost: u32) -> String {
     let mut random = crate::config::random_bytes(BCRYPT_SALT_LEN);
-    if cost < MIN_COST || cost > MAX_COST {
+    if !(MIN_COST..=MAX_COST).contains(&cost) {
         random = crate::config::random_bytes(BCRYPT_SALT_LEN);
     }
     format!(
@@ -235,7 +235,9 @@ pub fn hash_with(password: &str, salt: &str) -> Result<String, String> {
 
     Ok(format!(
         "$2{}${:02}${}{}",
-        parsed.minor.map_or(String::new(), |minor| minor.to_string()),
+        parsed
+            .minor
+            .map_or(String::new(), |minor| minor.to_string()),
         parsed.cost,
         base64_encode(&parsed.bytes, BCRYPT_SALT_LEN),
         // 23 of the 24 digest bytes: the last half-byte is not part of the
@@ -274,7 +276,7 @@ fn base64_encode(bytes: &[u8], len: usize) -> String {
     let mut out = String::new();
     let mut offset = 0usize;
     while offset < len {
-        let mut value = bytes[offset] & 0xff;
+        let mut value = bytes[offset];
         offset += 1;
         out.push(ITOA64[((value >> 2) & 0x3f) as usize] as char);
         value = (value & 0x03) << 4;
@@ -282,7 +284,7 @@ fn base64_encode(bytes: &[u8], len: usize) -> String {
             out.push(ITOA64[(value & 0x3f) as usize] as char);
             break;
         }
-        let next = bytes[offset] & 0xff;
+        let next = bytes[offset];
         offset += 1;
         value |= (next >> 4) & 0x0f;
         out.push(ITOA64[(value & 0x3f) as usize] as char);
@@ -291,7 +293,7 @@ fn base64_encode(bytes: &[u8], len: usize) -> String {
             out.push(ITOA64[(value & 0x3f) as usize] as char);
             break;
         }
-        let last = bytes[offset] & 0xff;
+        let last = bytes[offset];
         offset += 1;
         value |= (last >> 6) & 0x03;
         out.push(ITOA64[(value & 0x3f) as usize] as char);
@@ -347,11 +349,13 @@ mod tests {
     use super::*;
 
     /// Independent references, not self-consistency:
-    ///   * the `$2b$` rows come from `bcryptjs` (the package this project already
-    ///     depends on, and the one that wrote the hashes in `data/`):
-    ///     `node -e "console.log(require('bcryptjs').hashSync(pw, cost))"`
-    ///   * the `$2y$` rows come from `/usr/sbin/htpasswd -nbB <user> <pw>`
-    ///     (Apache crypt_blowfish, a third-party implementation).
+    ///
+    /// - the `$2b$` rows come from `bcryptjs` (the package this project already
+    ///   depends on, and the one that wrote the hashes in `data/`):
+    ///   `node -e "console.log(require('bcryptjs').hashSync(pw, cost))"`
+    /// - the `$2y$` rows come from `/usr/sbin/htpasswd -nbB <user> <pw>`
+    ///   (Apache crypt_blowfish, a third-party implementation).
+    ///
     /// A port that agrees with two unrelated implementations is the point of this
     /// module; agreement with itself would prove nothing.
     const VECTORS: &[(&str, &str)] = &[
@@ -420,9 +424,18 @@ mod tests {
         }
         assert!(!verify("hunter2", "$2b$05$short"));
         assert!(!verify("hunter2", "not-a-hash-at-all"));
-        assert!(!verify("hunter2", "$2z$05$abcdefghijklmnopqrstuvabcdefghijklmnopqrstuvabcdefghi"));
-        assert!(!verify("hunter2", "$2b$03$abcdefghijklmnopqrstuvabcdefghijklmnopqrstuvabcdefghi"));
-        assert!(!verify("hunter2", "$2b$40$abcdefghijklmnopqrstuvabcdefghijklmnopqrstuvabcdefghi"));
+        assert!(!verify(
+            "hunter2",
+            "$2z$05$abcdefghijklmnopqrstuvabcdefghijklmnopqrstuvabcdefghi"
+        ));
+        assert!(!verify(
+            "hunter2",
+            "$2b$03$abcdefghijklmnopqrstuvabcdefghijklmnopqrstuvabcdefghi"
+        ));
+        assert!(!verify(
+            "hunter2",
+            "$2b$40$abcdefghijklmnopqrstuvabcdefghijklmnopqrstuvabcdefghi"
+        ));
     }
 
     #[test]
@@ -437,7 +450,10 @@ mod tests {
     #[test]
     fn the_same_salt_gives_the_same_hash_and_a_different_salt_does_not() {
         let salt = "$2b$04$abcdefghijklmnopqrstuv";
-        assert_eq!(hash_with("abc", salt).expect("a"), hash_with("abc", salt).expect("b"));
+        assert_eq!(
+            hash_with("abc", salt).expect("a"),
+            hash_with("abc", salt).expect("b")
+        );
         assert_ne!(
             hash_with("abc", salt).expect("a"),
             hash_with("abc", "$2b$04$vwutsrqponmlkjihgfedcb").expect("b")
@@ -471,10 +487,22 @@ mod tests {
         assert_eq!(first.chars().count(), 29);
         assert_ne!(first, second, "16 random bytes");
         assert!(parse_salt(&first).is_ok());
-        assert!(parse_salt("$2b$03$abcdefghijklmnopqrstuv").is_err(), "cost below 4");
-        assert!(parse_salt("$2b$32$abcdefghijklmnopqrstuv").is_err(), "cost above 31");
-        assert!(parse_salt("$2x$05$abcdefghijklmnopqrstuv").is_err(), "unknown revision");
-        assert!(parse_salt("x2b$05$abcdefghijklmnopqrstuv").is_err(), "no dollar prefix");
+        assert!(
+            parse_salt("$2b$03$abcdefghijklmnopqrstuv").is_err(),
+            "cost below 4"
+        );
+        assert!(
+            parse_salt("$2b$32$abcdefghijklmnopqrstuv").is_err(),
+            "cost above 31"
+        );
+        assert!(
+            parse_salt("$2x$05$abcdefghijklmnopqrstuv").is_err(),
+            "unknown revision"
+        );
+        assert!(
+            parse_salt("x2b$05$abcdefghijklmnopqrstuv").is_err(),
+            "no dollar prefix"
+        );
         assert!(parse_salt("$2b$05$short").is_err(), "too few salt bytes");
     }
 
@@ -492,11 +520,19 @@ mod tests {
 
     #[test]
     fn only_the_modern_revisions_append_the_nul_byte() {
-        assert!(parse_salt("$2b$05$abcdefghijklmnopqrstuv").expect("2b").appends_nul());
-        assert!(parse_salt("$2y$05$abcdefghijklmnopqrstuv").expect("2y").appends_nul());
-        assert!(parse_salt("$2a$05$abcdefghijklmnopqrstuv").expect("2a").appends_nul());
+        assert!(parse_salt("$2b$05$abcdefghijklmnopqrstuv")
+            .expect("2b")
+            .appends_nul());
+        assert!(parse_salt("$2y$05$abcdefghijklmnopqrstuv")
+            .expect("2y")
+            .appends_nul());
+        assert!(parse_salt("$2a$05$abcdefghijklmnopqrstuv")
+            .expect("2a")
+            .appends_nul());
         assert!(
-            !parse_salt("$2$05$abcdefghijklmnopqrstuv").expect("legacy").appends_nul(),
+            !parse_salt("$2$05$abcdefghijklmnopqrstuv")
+                .expect("legacy")
+                .appends_nul(),
             "the bare $2$ form is what the reference treats as minor 0"
         );
     }

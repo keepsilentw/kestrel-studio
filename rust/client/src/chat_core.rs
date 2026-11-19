@@ -54,19 +54,55 @@ pub fn image_box(width: Option<i64>, height: Option<i64>) -> Option<(i64, i64)> 
 pub enum Paint {
     /// A message the shell did not render: a live user echo, or one the background
     /// worker appended when a video finished.
-    RenderMessage { message: MessageView },
+    RenderMessage {
+        message: MessageView,
+    },
     /// Open an assistant placeholder for a turn that is starting.
-    OpenTurn { message_id: i64, mode: Option<Mode> },
-    Reasoning { message_id: i64, delta: String },
-    Text { message_id: i64, delta: String },
-    ToolCall { message_id: i64, name: String, status: String },
-    ToolResult { message_id: i64, name: String, ok: bool, summary: String },
+    OpenTurn {
+        message_id: i64,
+        mode: Option<Mode>,
+    },
+    Reasoning {
+        message_id: i64,
+        delta: String,
+    },
+    Text {
+        message_id: i64,
+        delta: String,
+    },
+    ToolCall {
+        message_id: i64,
+        name: String,
+        status: String,
+    },
+    ToolResult {
+        message_id: i64,
+        name: String,
+        ok: bool,
+        summary: String,
+    },
     /// `width`/`height` travel with the frame so the live turn reserves the same box
     /// a reload will. `None` when the server could not read them from the file.
-    Asset { message_id: i64, kind: String, url: String, width: Option<i64>, height: Option<i64> },
-    TurnDone { message_id: i64 },
-    TurnError { message_id: i64, message: String },
-    TaskUpdated { task_id: i64, kind: String, status: String, error: Option<String> },
+    Asset {
+        message_id: i64,
+        kind: String,
+        url: String,
+        width: Option<i64>,
+        height: Option<i64>,
+    },
+    TurnDone {
+        message_id: i64,
+    },
+    TurnError {
+        message_id: i64,
+        message: String,
+    },
+    TaskUpdated {
+        task_id: i64,
+        kind: String,
+        status: String,
+        error: Option<String>,
+    },
     /// The cursor is behind the journal's retained window: reload, do not guess.
     Reload,
 }
@@ -78,7 +114,9 @@ pub struct Stream {
 
 impl Stream {
     pub fn new() -> Self {
-        Self { rendered: HashSet::new() }
+        Self {
+            rendered: HashSet::new(),
+        }
     }
 
     /// Seed with the ids the SSR shell put on the page, read from the
@@ -102,29 +140,50 @@ impl Stream {
                     return Vec::new();
                 }
                 self.rendered.insert(message.id);
-                vec![Paint::RenderMessage { message: message.clone() }]
+                vec![Paint::RenderMessage {
+                    message: message.clone(),
+                }]
             }
             ConversationEvent::TurnStarted { message_id, mode } => {
                 if self.rendered.contains(message_id) {
                     return Vec::new();
                 }
                 self.rendered.insert(*message_id);
-                vec![Paint::OpenTurn { message_id: *message_id, mode: *mode }]
+                vec![Paint::OpenTurn {
+                    message_id: *message_id,
+                    mode: *mode,
+                }]
             }
             ConversationEvent::Reasoning { message_id, delta } => {
-                vec![Paint::Reasoning { message_id: *message_id, delta: delta.clone() }]
+                vec![Paint::Reasoning {
+                    message_id: *message_id,
+                    delta: delta.clone(),
+                }]
             }
             ConversationEvent::Text { message_id, delta } => {
-                vec![Paint::Text { message_id: *message_id, delta: delta.clone() }]
+                vec![Paint::Text {
+                    message_id: *message_id,
+                    delta: delta.clone(),
+                }]
             }
-            ConversationEvent::ToolCall { message_id, name, status, .. } => {
+            ConversationEvent::ToolCall {
+                message_id,
+                name,
+                status,
+                ..
+            } => {
                 vec![Paint::ToolCall {
                     message_id: *message_id,
                     name: name.clone(),
                     status: status.clone(),
                 }]
             }
-            ConversationEvent::ToolResult { message_id, name, ok, summary } => {
+            ConversationEvent::ToolResult {
+                message_id,
+                name,
+                ok,
+                summary,
+            } => {
                 vec![Paint::ToolResult {
                     message_id: *message_id,
                     name: name.clone(),
@@ -132,7 +191,14 @@ impl Stream {
                     summary: summary.clone(),
                 }]
             }
-            ConversationEvent::Asset { message_id, kind, url, width, height, .. } => {
+            ConversationEvent::Asset {
+                message_id,
+                kind,
+                url,
+                width,
+                height,
+                ..
+            } => {
                 vec![Paint::Asset {
                     message_id: *message_id,
                     kind: kind.as_str().to_string(),
@@ -142,12 +208,25 @@ impl Stream {
                 }]
             }
             ConversationEvent::TurnDone { message_id } => {
-                vec![Paint::TurnDone { message_id: *message_id }]
+                vec![Paint::TurnDone {
+                    message_id: *message_id,
+                }]
             }
-            ConversationEvent::TurnError { message_id, message } => {
-                vec![Paint::TurnError { message_id: *message_id, message: message.clone() }]
+            ConversationEvent::TurnError {
+                message_id,
+                message,
+            } => {
+                vec![Paint::TurnError {
+                    message_id: *message_id,
+                    message: message.clone(),
+                }]
             }
-            ConversationEvent::TaskUpdated { task_id, kind, status, error } => {
+            ConversationEvent::TaskUpdated {
+                task_id,
+                kind,
+                status,
+                error,
+            } => {
                 vec![Paint::TaskUpdated {
                     task_id: *task_id,
                     kind: kind.as_str().to_string(),
@@ -212,7 +291,11 @@ pub fn plan_download(
     Some(DownloadPlan {
         width: scale_edge(natural_width, size, longest),
         height: scale_edge(natural_height, size, longest),
-        quality: if lossy { (quality_percent.min(100) as f32) / 100.0 } else { 1.0 },
+        quality: if lossy {
+            (quality_percent.min(100) as f32) / 100.0
+        } else {
+            1.0
+        },
         estimates_size: lossy,
     })
 }
@@ -298,7 +381,11 @@ pub struct HistoryRow {
 /// Shape `GET /api/v1/conversations` into rows. The order is the server's (newest
 /// first, ties broken by id) and is preserved untouched — sorting here would
 /// disagree with what the SSR shell painted on the first load.
-pub fn history_rows(items: &[ConversationSummary], active: Option<i64>, can_delete: bool) -> Vec<HistoryRow> {
+pub fn history_rows(
+    items: &[ConversationSummary],
+    active: Option<i64>,
+    can_delete: bool,
+) -> Vec<HistoryRow> {
     items
         .iter()
         .map(|item| HistoryRow {
@@ -321,7 +408,11 @@ mod tests {
     #[test]
     fn image_box_requires_a_pair() {
         assert_eq!(image_box(Some(1024), Some(576)), Some((1024, 576)));
-        assert_eq!(image_box(Some(1024), None), None, "half a pair is not a box");
+        assert_eq!(
+            image_box(Some(1024), None),
+            None,
+            "half a pair is not a box"
+        );
         assert_eq!(image_box(None, Some(576)), None);
         assert_eq!(image_box(None, None), None, "a row predating the columns");
     }
@@ -352,14 +443,18 @@ mod tests {
     fn a_message_the_shell_already_painted_is_not_painted_again() {
         let mut stream = Stream::new();
         stream.note_rendered(7);
-        assert!(stream.on_event(&ConversationEvent::UserMessage { message: stored(7) }).is_empty());
+        assert!(stream
+            .on_event(&ConversationEvent::UserMessage { message: stored(7) })
+            .is_empty());
         assert!(stream.is_rendered(7));
 
         let paints = stream.on_event(&ConversationEvent::UserMessage { message: stored(8) });
         assert_eq!(paints.len(), 1);
         assert!(matches!(&paints[0], Paint::RenderMessage { message } if message.id == 8));
         assert!(
-            stream.on_event(&ConversationEvent::MessageAdded { message: stored(8) }).is_empty(),
+            stream
+                .on_event(&ConversationEvent::MessageAdded { message: stored(8) })
+                .is_empty(),
             "the same message on another event name is still the same message"
         );
     }
@@ -367,14 +462,26 @@ mod tests {
     #[test]
     fn opening_a_turn_twice_paints_once_but_deltas_always_pass_through() {
         let mut stream = Stream::new();
-        let start = ConversationEvent::TurnStarted { message_id: 9, mode: Some(Mode::Image) };
+        let start = ConversationEvent::TurnStarted {
+            message_id: 9,
+            mode: Some(Mode::Image),
+        };
         assert_eq!(
             stream.on_event(&start),
-            vec![Paint::OpenTurn { message_id: 9, mode: Some(Mode::Image) }]
+            vec![Paint::OpenTurn {
+                message_id: 9,
+                mode: Some(Mode::Image)
+            }]
         );
-        assert!(stream.on_event(&start).is_empty(), "a replay must not open a second bubble");
+        assert!(
+            stream.on_event(&start).is_empty(),
+            "a replay must not open a second bubble"
+        );
 
-        let delta = ConversationEvent::Text { message_id: 9, delta: "画".to_string() };
+        let delta = ConversationEvent::Text {
+            message_id: 9,
+            delta: "画".to_string(),
+        };
         assert_eq!(stream.on_event(&delta).len(), 1);
         assert_eq!(
             stream.on_event(&delta).len(),
@@ -435,7 +542,11 @@ mod tests {
     fn the_stored_mode_is_validated_not_defaulted() {
         assert_eq!(stored_mode(Some("video")), Some(Mode::Video));
         assert_eq!(stored_mode(Some("nonsense")), None);
-        assert_eq!(stored_mode(Some("Video")), None, "the selector stores the wire name verbatim");
+        assert_eq!(
+            stored_mode(Some("Video")),
+            None,
+            "the selector stores the wire name verbatim"
+        );
         assert_eq!(stored_mode(None), None);
     }
 
@@ -450,7 +561,11 @@ mod tests {
     #[test]
     fn a_short_edge_never_rounds_to_zero() {
         let plan = plan_download(1000, 10, 100, "image/jpeg", 90).expect("plans");
-        assert_eq!((plan.width, plan.height), (100, 1), "10 px scaled by 0.1 would round to 0");
+        assert_eq!(
+            (plan.width, plan.height),
+            (100, 1),
+            "10 px scaled by 0.1 would round to 0"
+        );
     }
 
     #[test]
@@ -461,8 +576,14 @@ mod tests {
         // The longest edge (4) becomes the requested 8, so the ratio is exactly 2.
         assert_eq!((plan.width, plan.height), (8, 4));
 
-        assert!(plan_download(0, 0, 100, "image/jpeg", 80).is_none(), "still decoding");
-        assert!(plan_download(100, 100, 0, "image/jpeg", 80).is_none(), "no size chosen");
+        assert!(
+            plan_download(0, 0, 100, "image/jpeg", 80).is_none(),
+            "still decoding"
+        );
+        assert!(
+            plan_download(100, 100, 0, "image/jpeg", 80).is_none(),
+            "no size chosen"
+        );
     }
 
     #[test]
@@ -511,7 +632,10 @@ mod tests {
         .expect("serialises");
         let parsed: ConversationEvent = serde_json::from_str(&raw).expect("the client parses it");
         assert_eq!(parsed, ConversationEvent::UserMessage { message });
-        assert!(raw.contains("\"createdAt\""), "camelCase is the published shape: {raw}");
+        assert!(
+            raw.contains("\"createdAt\""),
+            "camelCase is the published shape: {raw}"
+        );
         assert!(raw.contains("\"toolCalls\""));
         assert!(raw.contains("\"type\":\"user_message\""));
     }
@@ -520,7 +644,11 @@ mod tests {
     fn an_unreadable_size_radio_falls_back_instead_of_scaling_by_zero() {
         assert_eq!(selected_size(Some("1024")), 1024);
         assert_eq!(selected_size(None), DEFAULT_EXPORT_SIZE, "no checked row");
-        assert_eq!(selected_size(Some("0")), DEFAULT_EXPORT_SIZE, "a 0 edge scales everything away");
+        assert_eq!(
+            selected_size(Some("0")),
+            DEFAULT_EXPORT_SIZE,
+            "a 0 edge scales everything away"
+        );
         assert_eq!(selected_size(Some("abc")), DEFAULT_EXPORT_SIZE);
     }
 
@@ -528,7 +656,11 @@ mod tests {
     fn the_quality_reading_stays_inside_the_range_the_slider_declares() {
         assert_eq!(quality_percent(None), 90, "the markup's default");
         assert_eq!(quality_percent(Some("45")), 45);
-        assert_eq!(quality_percent(Some("150")), 100, "clamped to the top of the range");
+        assert_eq!(
+            quality_percent(Some("150")),
+            100,
+            "clamped to the top of the range"
+        );
         assert_eq!(quality_percent(Some("3")), 10, "and to the bottom");
     }
 
@@ -540,45 +672,86 @@ mod tests {
         );
         assert!(download_filename("image/png", 50, 1).ends_with(".png"));
         assert!(download_filename("image/webp", 50, 1).ends_with(".webp"));
-        assert!(download_filename("image/unknown", 100, 2).ends_with(".jpg"), "unknown mime exports as JPEG");
+        assert!(
+            download_filename("image/unknown", 100, 2).ends_with(".jpg"),
+            "unknown mime exports as JPEG"
+        );
     }
 
     #[test]
     fn enter_sends_unless_shift_or_the_ime_is_still_composing() {
         assert!(enter_submits(false, false), "plain Enter sends");
         assert!(!enter_submits(true, false), "Shift+Enter is a newline");
-        assert!(!enter_submits(false, true), "Enter that finishes an IME candidate must not send");
-        assert!(!enter_submits(true, true), "and neither does the shift-combination");
+        assert!(
+            !enter_submits(false, true),
+            "Enter that finishes an IME candidate must not send"
+        );
+        assert!(
+            !enter_submits(true, true),
+            "and neither does the shift-combination"
+        );
     }
 
     #[test]
     fn a_data_url_is_measured_by_its_base64_payload_not_its_prefix() {
         // The two padding cases plus a padded and unpadded spelling of the same bytes.
         assert_eq!(decoded_bytes("data:image/png;base64,aGVsbG8="), Some(5));
-        assert_eq!(decoded_bytes("data:image/png;base64,aGVsbG8"), Some(5), "no padding");
+        assert_eq!(
+            decoded_bytes("data:image/png;base64,aGVsbG8"),
+            Some(5),
+            "no padding"
+        );
         assert_eq!(decoded_bytes("data:image/jpeg;base64,aGk="), Some(2));
-        assert_eq!(decoded_bytes("data:image/jpeg;base64,"), Some(0), "an empty export is 0 bytes");
-        assert_eq!(decoded_bytes("not-a-data-url"), None, "no comma means no estimate");
+        assert_eq!(
+            decoded_bytes("data:image/jpeg;base64,"),
+            Some(0),
+            "an empty export is 0 bytes"
+        );
+        assert_eq!(
+            decoded_bytes("not-a-data-url"),
+            None,
+            "no comma means no estimate"
+        );
     }
 
     #[test]
     fn history_rows_mark_one_active_row_and_keep_the_server_order() {
         let items = vec![
-            ConversationSummary { id: 7, title: "一只红隼".to_string(), updated_at: 30 },
-            ConversationSummary { id: 3, title: "占位".to_string(), updated_at: 20 },
+            ConversationSummary {
+                id: 7,
+                title: "一只红隼".to_string(),
+                updated_at: 30,
+            },
+            ConversationSummary {
+                id: 3,
+                title: "占位".to_string(),
+                updated_at: 20,
+            },
         ];
 
         let rows = history_rows(&items, Some(3), true);
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].id, 7, "order is the server's, not re-sorted here");
         assert!(!rows[0].is_active);
-        assert!(rows[1].is_active, "the conversation on screen is the one the shell stamped");
+        assert!(
+            rows[1].is_active,
+            "the conversation on screen is the one the shell stamped"
+        );
         assert!(rows.iter().all(|row| row.can_delete));
 
         let read_only = history_rows(&items, Some(999), false);
-        assert!(read_only.iter().all(|row| !row.is_active), "a current conversation not in the list highlights nothing");
-        assert!(read_only.iter().all(|row| !row.can_delete), "the shell said so, the client obeys");
+        assert!(
+            read_only.iter().all(|row| !row.is_active),
+            "a current conversation not in the list highlights nothing"
+        );
+        assert!(
+            read_only.iter().all(|row| !row.can_delete),
+            "the shell said so, the client obeys"
+        );
 
-        assert!(history_rows(&[], Some(1), true).is_empty(), "an empty list is the page's 暂无会话 row");
+        assert!(
+            history_rows(&[], Some(1), true).is_empty(),
+            "an empty list is the page's 暂无会话 row"
+        );
     }
 }

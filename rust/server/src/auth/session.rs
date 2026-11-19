@@ -51,18 +51,21 @@ pub fn cookie_value(token: &str, secret: &str) -> String {
 }
 
 /// Builds the `Set-Cookie` header. Same attributes express-session used:
-/// HttpOnly, SameSite=Lax, seven days, no `Secure` flag (the TLS termination is
-/// the reverse proxy's, so the app never sees https).
-pub fn set_cookie(token: &str, secret: &str) -> String {
+/// HttpOnly, SameSite=Lax, seven days. `Secure` is added in production even
+/// though TLS terminates at the reverse proxy — that flag describes how the
+/// browser must send the cookie, not what scheme this process sees.
+pub fn set_cookie(token: &str, secret: &str, secure: bool) -> String {
+    let secure = if secure { "; Secure" } else { "" };
     format!(
-        "{COOKIE_NAME}={}; Path=/; HttpOnly; SameSite=Lax; Max-Age={}",
+        "{COOKIE_NAME}={}; Path=/; HttpOnly; SameSite=Lax; Max-Age={}{secure}",
         cookie_value(token, secret),
         MAX_AGE_MS / 1000
     )
 }
 
-pub fn cleared_cookie() -> String {
-    format!("{COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0")
+pub fn cleared_cookie(secure: bool) -> String {
+    let secure = if secure { "; Secure" } else { "" };
+    format!("{COOKIE_NAME}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0{secure}")
 }
 
 /// Reads the token out of a `Cookie` header and checks its signature.
@@ -74,7 +77,8 @@ pub fn token_from_cookie(header: &str, secret: &str) -> Option<String> {
         };
         let body = raw.strip_prefix("s:")?;
         let (token, signature) = body.split_once('.')?;
-        if token.is_empty() || !constant_time_eq(sign(token, secret).as_bytes(), signature.as_bytes())
+        if token.is_empty()
+            || !constant_time_eq(sign(token, secret).as_bytes(), signature.as_bytes())
         {
             return None;
         }
@@ -104,15 +108,22 @@ pub async fn create(pool: &SqlitePool, user_id: i64) -> Result<String, crate::er
 /// The principal id behind a token, or `None` when it is missing or expired.
 /// Expired rows are deleted here rather than by a timer: one less background
 /// task, and a stale row is only ever read at request time anyway.
-pub async fn principal_id(pool: &SqlitePool, token: &str) -> Result<Option<i64>, crate::error::AppError> {
-    let row = sqlx::query("SELECT sess, CAST(expire AS TEXT) AS expire FROM sessions WHERE sid = ?1")
-        .bind(token)
-        .fetch_optional(pool)
-        .await?;
+pub async fn principal_id(
+    pool: &SqlitePool,
+    token: &str,
+) -> Result<Option<i64>, crate::error::AppError> {
+    let row =
+        sqlx::query("SELECT sess, CAST(expire AS TEXT) AS expire FROM sessions WHERE sid = ?1")
+            .bind(token)
+            .fetch_optional(pool)
+            .await?;
     let Some(row) = row else { return Ok(None) };
 
     let expire: String = row.try_get("expire")?;
-    if parse_expire(&expire).map(|ms| ms < now_ms()).unwrap_or(true) {
+    if parse_expire(&expire)
+        .map(|ms| ms < now_ms())
+        .unwrap_or(true)
+    {
         sqlx::query("DELETE FROM sessions WHERE sid = ?1")
             .bind(token)
             .execute(pool)
@@ -126,7 +137,12 @@ pub async fn principal_id(pool: &SqlitePool, token: &str) -> Result<Option<i64>,
     let user_id = parsed
         .get("user")
         .and_then(serde_json::Value::as_i64)
-        .or_else(|| parsed.get("passport").and_then(|value| value.get("user")).and_then(serde_json::Value::as_i64));
+        .or_else(|| {
+            parsed
+                .get("passport")
+                .and_then(|value| value.get("user"))
+                .and_then(serde_json::Value::as_i64)
+        });
     Ok(user_id)
 }
 
@@ -184,12 +200,18 @@ mod tests {
     fn a_signed_cookie_round_trips_only_with_the_right_secret() {
         let value = cookie_value("abc123", SECRET);
         let header = format!("other=1; {COOKIE_NAME}={value}; theme=dark");
-        assert_eq!(token_from_cookie(&header, SECRET).as_deref(), Some("abc123"));
+        assert_eq!(
+            token_from_cookie(&header, SECRET).as_deref(),
+            Some("abc123")
+        );
         assert_eq!(token_from_cookie(&header, "other-secret"), None);
 
         let forged = format!("{COOKIE_NAME}=s:abc123.deadbeef");
         assert_eq!(token_from_cookie(&forged, SECRET), None);
-        assert_eq!(token_from_cookie(&format!("{COOKIE_NAME}=abc123"), SECRET), None);
+        assert_eq!(
+            token_from_cookie(&format!("{COOKIE_NAME}=abc123"), SECRET),
+            None
+        );
         assert_eq!(token_from_cookie("", SECRET), None);
     }
 
@@ -205,6 +227,14 @@ mod tests {
         assert_eq!(parse_expire("not-a-date"), None);
     }
 
+    #[test]
+    fn the_production_cookie_is_secure_and_is_cleared_with_the_same_flag() {
+        assert!(set_cookie("abc123", SECRET, true).contains("; Secure"));
+        assert!(cleared_cookie(true).contains("; Secure"));
+        assert!(!set_cookie("abc123", SECRET, false).contains("Secure"));
+        assert!(!cleared_cookie(false).contains("Secure"));
+    }
+
     #[tokio::test]
     async fn a_session_stores_and_drops_its_principal() {
         let pool = crate::db::open_in_memory().await;
@@ -215,7 +245,10 @@ mod tests {
 
         let token = create(&pool, 1).await.expect("create");
         assert_eq!(principal_id(&pool, &token).await.expect("read"), Some(1));
-        assert_eq!(principal_id(&pool, "nosuchtoken").await.expect("read"), None);
+        assert_eq!(
+            principal_id(&pool, "nosuchtoken").await.expect("read"),
+            None
+        );
 
         destroy(&pool, &token).await.expect("destroy");
         assert_eq!(principal_id(&pool, &token).await.expect("read"), None);
