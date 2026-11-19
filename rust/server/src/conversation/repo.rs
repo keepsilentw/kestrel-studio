@@ -135,6 +135,7 @@ impl ConversationService {
         Ok(row.try_get("id")?)
     }
 
+    #[cfg(test)]
     pub async fn list_by_user(&self, user_id: i64) -> Result<Vec<ConversationSummary>, AppError> {
         self.list_by_user_page(user_id, None, None).await
     }
