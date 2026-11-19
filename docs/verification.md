@@ -3700,8 +3700,29 @@ loader 文件同时含 `initChat` / `initVoice`；CSP 不含 `unsafe-inline`。
 
 ### 62.2 没证的
 
-- 没有在真实浏览器里加载这版页面确认控制台零报错；只有模板与静态检查。
-- 未部署；当前线上仍是内联 loader 的旧前端包。
+- 已于 2026-11-19 11:33 部署并在真实浏览器复验，见 §63。
+
+## 63. 外置 loader 与 CSP 上线（2026-11-19 11:33）
+
+| 项 | 读数 |
+|---|---|
+| 提交 | `f810055`（loader 外置）+ `194f249`（CSP 补 `wasm-unsafe-eval`） |
+| 镜像 | `sha256:4e64692f…` |
+| 容器 | `healthy`，日志 `client="wasm"` |
+| `/assets/wasm-loader.js` | 200，991 B |
+| CSP | `script-src 'self' 'wasm-unsafe-eval'; style-src 'self'`，无 `unsafe-inline` |
+| `/` 浏览器控制台 | 只有既有的 lazy-image issue（count=2），**无 error**；WASM 客户端已完成初始化，页面交互正常 |
+| `/voice` 浏览器控制台 | **no console messages** |
+
+第一次部署时 CSP 只有 `script-src 'self'`，浏览器实测报
+`WebAssembly.instantiateStreaming(): … 'unsafe-eval' is not an allowed source`。补上
+`'wasm-unsafe-eval'` 后重新部署，真实浏览器复验通过；这条窄例外只允许 WebAssembly 编译，
+不开放 JS `eval`。
+
+### 63.1 没证的
+
+- `/` 那条 lazy-image issue 仍在（count=2）；它与布局偏移无关的既有结论见 §42，本轮没有重测。
+- 没有真人按住 `/voice` 验证真实麦克风采集；本轮只确认页面初始化与控制台干净。
 
 ## 56. wasm 预压缩上线（2026-11-19 10:05）
 
