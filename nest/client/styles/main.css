@@ -1266,6 +1266,11 @@ body {
   gap: 4px;
 }
 
+/* The `hidden` attribute loses to the author `display: flex` above; spell it out. */
+.conversation-item[hidden] {
+  display: none;
+}
+
 .conversation-item > .conversation-link {
   flex: 1;
   min-width: 0;
