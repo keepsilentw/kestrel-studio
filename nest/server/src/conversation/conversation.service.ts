@@ -284,23 +284,81 @@ export class ConversationService implements OnApplicationBootstrap {
     return Number(result.lastInsertRowid);
   }
 
-  listByUser(userId: number): ConversationSummary[] {
-    return this.db
+  /**
+   * One page of the history sidebar. `before` is the id of the last row the
+   * caller already has; its `updatedAt` is looked up so the cursor stays a single
+   * integer while the ordering keeps its `(updatedAt, id)` tie-break. Omitting
+   * `limit` keeps the old unbounded read for the SSR shell and existing callers.
+   */
+  listByUser(
+    userId: number,
+    options: { before?: number; limit?: number } = {},
+  ): ConversationSummary[] {
+    // Deleted ones are gone from the owner's history; only a super admin still
+    // sees them, through the admin surface.
+    let where = and(
+      eq(conversations.userId, userId),
+      isNull(conversations.deletedAt),
+    );
+    if (options.before !== undefined) {
+      const cursor = this.db
+        .select({ updatedAt: conversations.updatedAt })
+        .from(conversations)
+        .where(
+          and(
+            eq(conversations.id, options.before),
+            eq(conversations.userId, userId),
+          ),
+        )
+        .get();
+      if (cursor === undefined) {
+        return [];
+      }
+      where = and(
+        where,
+        or(
+          lt(conversations.updatedAt, cursor.updatedAt),
+          and(
+            eq(conversations.updatedAt, cursor.updatedAt),
+            lt(conversations.id, options.before),
+          ),
+        ),
+      );
+    }
+
+    // Tie-broken by id: two conversations can carry the same updatedAt to the
+    // millisecond, and without a second key the sidebar order is whatever the
+    // scan happened to produce — which changes when the query plan does.
+    const ordered = this.db
       .select()
       .from(conversations)
-      // Deleted ones are gone from the owner's history; only a super admin still
-      // sees them, through the admin surface.
-      .where(and(eq(conversations.userId, userId), isNull(conversations.deletedAt)))
-      // Tie-broken by id: two conversations can carry the same updatedAt to the
-      // millisecond, and without a second key the sidebar order is whatever the
-      // scan happened to produce — which changes when the query plan does.
-      .orderBy(desc(conversations.updatedAt), desc(conversations.id))
-      .all()
-      .map((row) => ({
-        id: row.id,
-        title: row.title,
-        updatedAt: row.updatedAt.getTime(),
-      }));
+      .where(where)
+      .orderBy(desc(conversations.updatedAt), desc(conversations.id));
+    const rows =
+      options.limit === undefined ? ordered.all() : ordered.limit(options.limit).all();
+    return rows.map((row) => ({
+      id: row.id,
+      title: row.title,
+      updatedAt: row.updatedAt.getTime(),
+    }));
+  }
+
+  /** One summary owned by `userId`; null when hidden, missing, or someone else's. */
+  summaryByOwner(id: number, userId: number): ConversationSummary | null {
+    const row = this.db
+      .select()
+      .from(conversations)
+      .where(
+        and(
+          eq(conversations.id, id),
+          eq(conversations.userId, userId),
+          isNull(conversations.deletedAt),
+        ),
+      )
+      .get();
+    return row === undefined
+      ? null
+      : { id: row.id, title: row.title, updatedAt: row.updatedAt.getTime() };
   }
 
   /**

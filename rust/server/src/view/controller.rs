@@ -18,6 +18,8 @@ use super::templates::{ChatPage, ConversationEntry};
 // shell and the mode picker. From the first token on, the main column is built by
 // the client - the two render paths do not overlap, and nothing here streams.
 const HTML: &str = "text/html; charset=utf-8";
+/// The sidebar's first paint. The client can append older pages from here.
+const HISTORY_PAGE_SIZE: i64 = 50;
 
 fn html(body: String) -> Response {
     (
@@ -52,7 +54,10 @@ pub async fn chat(
     State(state): State<AppState>,
     Query(params): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    let list = state.conversations.list_by_user(user.id).await?;
+    let mut list = state
+        .conversations
+        .list_by_user_page(user.id, None, Some(HISTORY_PAGE_SIZE))
+        .await?;
     let requested = read_positive_int(params.get("c").map(String::as_str));
     // A `?c=` that is not the caller's own live conversation is ignored, not an
     // error: the page falls back to the most recent one, and if there is none it
@@ -71,6 +76,16 @@ pub async fn chat(
             _ => list.first().map(|item| item.id),
         }
     };
+
+    // An older conversation opened by `?c=` may sit past the first page. Add its
+    // row so the sidebar still highlights what the main column is showing.
+    if let Some(id) = active {
+        if list.iter().all(|item| item.id != id) {
+            if let Some(summary) = state.conversations.summary_by_owner(id, user.id).await? {
+                list.insert(0, summary);
+            }
+        }
+    }
 
     let conversations: Vec<ConversationEntry> = list
         .iter()

@@ -150,9 +150,25 @@ export class ChatController {
   }
 
   @Get('conversations')
-  list(@Req() req: Request): ConversationSummary[] {
+  list(
+    @Req() req: Request,
+    @Query('limit') limitRaw?: string,
+    @Query('before') beforeRaw?: string,
+  ): ConversationSummary[] {
     const user = req.user;
-    return user === undefined ? [] : this.conversations.listByUser(user.id);
+    if (user === undefined) {
+      return [];
+    }
+    const limit = readPositiveInt(limitRaw);
+    const before = readPositiveInt(beforeRaw);
+    const options: { before?: number; limit?: number } = {};
+    if (before !== null) {
+      options.before = before;
+    }
+    if (limit !== null) {
+      options.limit = Math.min(limit, 100);
+    }
+    return this.conversations.listByUser(user.id, options);
   }
 
   @Get('conversations/:id/messages')

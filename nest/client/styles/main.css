@@ -1242,6 +1242,28 @@ body {
   font-size: 13px;
 }
 
+.conversation-more {
+  padding: 4px 0;
+}
+
+.conversation-more-button {
+  width: 100%;
+  padding: 6px 10px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.conversation-more-button:hover,
+.conversation-more-button:focus-visible {
+  background: var(--surface);
+  color: var(--text);
+}
+
 /* What the WASM bootstrap prints when the module does not start
    (`WASM_LOADER` in rust/server/src/view/templates.rs). The stylesheet is shared by
    both clients while the CLIENT_BUNDLE switch exists, so the class lives here —

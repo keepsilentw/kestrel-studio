@@ -823,25 +823,131 @@ function buildEmptyConversationItem(): HTMLLIElement {
   return empty;
 }
 
-async function refreshConversationList(): Promise<void> {
-  const response = await fetch('/api/v1/conversations');
-  if (!response.ok) {
-    return;
+interface HistoryEntry {
+  id: number;
+  title: string;
+}
+
+/** Validates the list body instead of trusting a cast; null means "leave the DOM alone". */
+function readHistoryEntries(value: unknown): HistoryEntry[] | null {
+  if (!Array.isArray(value)) {
+    return null;
   }
-  const items = (await response.json()) as { id: number; title: string }[];
+  const entries: HistoryEntry[] = [];
+  for (const item of value) {
+    if (
+      typeof item !== 'object' ||
+      item === null ||
+      !('id' in item) ||
+      !('title' in item) ||
+      typeof item.id !== 'number' ||
+      typeof item.title !== 'string'
+    ) {
+      return null;
+    }
+    entries.push({ id: item.id, title: item.title });
+  }
+  return entries;
+}
+
+/** One history request; the sidebar is the only list that grows without bound. */
+const HISTORY_PAGE_SIZE = 50;
+
+let historyEntries: HistoryEntry[] = [];
+let historyCursor: number | null = null;
+let historyHasMore = false;
+
+/**
+ * Paints the rows the dropdown currently holds. Kept separate from the request so
+ * "load more" can append without re-fetching the first page and losing the
+ * rows already on screen.
+ */
+function paintConversationList(): void {
   const list = document.querySelector<HTMLUListElement>('.conversation-list');
   if (list === null) {
     return;
   }
   list.replaceChildren();
-  if (items.length === 0) {
+  if (historyEntries.length === 0) {
     list.append(buildEmptyConversationItem());
     return;
   }
   const activeId = body.dataset.conversationId ?? '';
-  for (const item of items) {
+  for (const item of historyEntries) {
     list.append(buildConversationItem(item.id, item.title, String(item.id) === activeId));
   }
+  if (historyHasMore) {
+    const row = document.createElement('li');
+    row.className = 'conversation-more';
+    const more = document.createElement('button');
+    more.type = 'button';
+    more.className = 'conversation-more-button';
+    more.dataset.historyMore = '';
+    more.textContent = '加载更多';
+    row.append(more);
+    list.append(row);
+  }
+}
+
+async function refreshConversationList(): Promise<void> {
+  // The shell may hold an active row older than the first page; carry its title
+  // over so it does not vanish from the sidebar.
+  const activeLink = document.querySelector<HTMLAnchorElement>(
+    '.conversation-link.is-active',
+  );
+  const activeTitle = activeLink?.textContent ?? null;
+
+  const response = await fetch(
+    `/api/v1/conversations?limit=${HISTORY_PAGE_SIZE}`,
+  );
+  if (!response.ok) {
+    return;
+  }
+  const items = readHistoryEntries(await response.json());
+  if (items === null) {
+    return;
+  }
+  historyEntries = items;
+  historyCursor = items.length > 0 ? items[items.length - 1].id : null;
+  historyHasMore = items.length >= HISTORY_PAGE_SIZE;
+
+  const activeId = Number(body.dataset.conversationId);
+  if (
+    Number.isInteger(activeId) &&
+    activeId > 0 &&
+    activeTitle !== null &&
+    !historyEntries.some((item) => item.id === activeId)
+  ) {
+    historyEntries.unshift({ id: activeId, title: activeTitle });
+  }
+
+  paintConversationList();
+}
+
+async function loadMoreConversationList(): Promise<void> {
+  if (!historyHasMore || historyCursor === null) {
+    return;
+  }
+  const response = await fetch(
+    `/api/v1/conversations?limit=${HISTORY_PAGE_SIZE}&before=${historyCursor}`,
+  );
+  if (!response.ok) {
+    return;
+  }
+  const items = readHistoryEntries(await response.json());
+  if (items === null) {
+    return;
+  }
+  const seen = new Set(historyEntries.map((item) => item.id));
+  for (const item of items) {
+    if (!seen.has(item.id)) {
+      seen.add(item.id);
+      historyEntries.push(item);
+    }
+  }
+  historyCursor = items.length > 0 ? items[items.length - 1].id : null;
+  historyHasMore = items.length >= HISTORY_PAGE_SIZE;
+  paintConversationList();
 }
 
 /** Surfaces a failure inside the dropdown, where the action came from. */
@@ -1037,6 +1143,12 @@ const historyDropdown = document.querySelector<HTMLElement>('.menu-dropdown');
 historyDropdown?.addEventListener('click', (event) => {
   const target = event.target;
   if (!(target instanceof Element)) {
+    return;
+  }
+
+  const more = target.closest('button[data-history-more]');
+  if (more instanceof HTMLButtonElement) {
+    void loadMoreConversationList();
     return;
   }
 

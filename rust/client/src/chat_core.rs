@@ -397,6 +397,20 @@ pub fn history_rows(
         .collect()
 }
 
+/// Appends one older page to the rows already on screen. The server order is
+/// preserved; an id already present is dropped because a conversation that was
+/// touched between two requests can move from the next page back into the first.
+pub fn append_history_page(
+    existing: &mut Vec<ConversationSummary>,
+    page: Vec<ConversationSummary>,
+) {
+    for item in page {
+        if existing.iter().all(|row| row.id != item.id) {
+            existing.push(item);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -752,6 +766,35 @@ mod tests {
         assert!(
             history_rows(&[], Some(1), true).is_empty(),
             "an empty list is the page's 暂无会话 row"
+        );
+    }
+
+    #[test]
+    fn a_second_history_page_appends_once_and_keeps_the_server_order() {
+        let mut rows = vec![ConversationSummary {
+            id: 7,
+            title: "新".to_string(),
+            updated_at: 30,
+        }];
+        append_history_page(
+            &mut rows,
+            vec![
+                ConversationSummary {
+                    id: 7,
+                    title: "新".to_string(),
+                    updated_at: 30,
+                },
+                ConversationSummary {
+                    id: 3,
+                    title: "旧".to_string(),
+                    updated_at: 20,
+                },
+            ],
+        );
+        assert_eq!(
+            rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+            [7, 3],
+            "a duplicate from an overlapping page stays out"
         );
     }
 }

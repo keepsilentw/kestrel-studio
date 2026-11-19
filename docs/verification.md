@@ -3467,3 +3467,38 @@ cargo run --manifest-path rust/server/Cargo.toml -- \
 - rustfmt 把若干 `dataset()` 链拆成多行后，`dataset_keys` 的源码扫描器原来只认单行写法，测试
   立刻转红（`only found 5 dataset lookups`）。扫描器已改成跳过空白，并重新通过；这条是格式门
   抓到的真实回归，不是测试本身的问题。
+
+## 53. 历史侧栏分页（2026-11-19）
+
+`GET /api/v1/conversations` 新增可选 `limit`（1..100）与 `before`（上一页最后一行的会话 id）。
+两套后端同形，响应仍是原来的数组，省略参数时行为不变。
+
+### 53.1 契约
+
+- 排序保持 `updated_at DESC, id DESC`；`before` 指向的行由服务端查回它的 `updated_at`，
+  所以客户端游标只是一个整数，并列时间戳仍按 id 继续。
+- `before` 指向别人账号或不存在的行时返回空数组，不泄露那一行是否存在。
+- SSR 首屏取 50 条；`?c=` 指向更早的会话时把那一行补进列表，侧栏仍高亮主栏显示的会话。
+- 两个客户端下拉打开时取 50 条，底部「加载更多」按 `before` 追加；重复 id 丢弃，
+  已删除/已隐藏的行不会因为翻页重新出现。
+
+### 53.2 质量门
+
+| 命令 | 读数 |
+|---|---|
+| `make check` | 通过（含 fmt、clippy 与 client 的 `wasm32-unknown-unknown` check） |
+| `make test` | Nest server **517 passed**；Nest client **72 passed**；Rust server **213 passed + 2 ignored**；Rust client **51 passed** |
+| `cargo check --target wasm32-unknown-unknown`（client） | 通过；DOM 半边的 `chat_page.rs` 只在 wasm 目标下编译，单靠 host test 覆盖不到。这条已并入 `make check`，避免下一轮再漏 |
+
+新增测试覆盖：Rust repo 的跨页与跨账号游标、Rust HTTP 的 `limit`/`before` 解析、
+Nest service 的 `(updatedAt, id)` 翻页、Rust client 的重复页合并。
+
+Nest client 第一次跑时 3 个用例失败，原因是测试里的 fetch mock 只匹配裸
+`/api/v1/conversations`，不认新的 `?limit=50`；同时暴露了一个真实问题：`historyEntries`
+被赋成了 mock 的兜底对象。mock 已改为匹配带查询串的路径，页面代码也只在拿到的确实是数组时
+才继续。
+
+### 53.3 没证的
+
+- 浏览器里实际滚动/点击「加载更多」的表现：未起服务，未验。
+- 消息内容本身还没有分页，`views()` 仍一次取完一个会话的全部消息与资产；这一轮只做了侧栏。

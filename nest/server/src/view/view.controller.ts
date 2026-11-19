@@ -28,6 +28,9 @@ const TASK_STATUS_LABEL: Record<string, string> = {
   running: '渲染中',
 };
 
+/** The sidebar's first paint; the client appends older pages on demand. */
+const HISTORY_PAGE_SIZE = 50;
+
 @Controller()
 export class ViewController {
   constructor(
@@ -93,7 +96,7 @@ export class ViewController {
       return;
     }
 
-    const list = this.conversations.listByUser(user.id);
+    let list = this.conversations.listByUser(user.id, { limit: HISTORY_PAGE_SIZE });
     const requested = readPositiveInt(c);
     // `?new=1` names the empty shell explicitly. The fallback below is not
     // query-driven, so an absent `?c=` cannot mean "start fresh" — see
@@ -104,6 +107,15 @@ export class ViewController {
         : requested !== null && this.conversations.isOwnedBy(requested, user.id)
           ? requested
           : (list[0]?.id ?? null);
+
+    // An older `?c=` conversation may sit past the first page; keep its row so the
+    // sidebar highlights what the main column shows.
+    if (active !== null && !list.some((item) => item.id === active)) {
+      const summary = this.conversations.summaryByOwner(active, user.id);
+      if (summary !== null) {
+        list = [summary, ...list];
+      }
+    }
 
     const conversations: RenderedConversation[] = list.map((item) => ({
       ...item,

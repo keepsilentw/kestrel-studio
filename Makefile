@@ -236,6 +236,7 @@ check:
 	$(PNPM) --dir $(NEST_CLIENT_DIR) run typecheck
 	$(CARGO) check $(CARGO_SERVER_ARGS) --tests
 	$(CARGO) check $(CARGO_CLIENT_ARGS) --tests
+	$(CARGO) check $(CARGO_CLIENT_ARGS) --target wasm32-unknown-unknown
 	$(CARGO) fmt $(CARGO_SERVER_ARGS) -- --check
 	$(CARGO) fmt $(CARGO_CLIENT_ARGS) -- --check
 	$(RUSTFMT) --edition 2021 --check $(SHARED_RUST_FILES)

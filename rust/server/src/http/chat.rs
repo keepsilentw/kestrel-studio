@@ -133,8 +133,15 @@ pub async fn delete_conversation(
 pub async fn list_conversations(
     Authed(user): Authed,
     State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
 ) -> Result<Response, AppError> {
-    let list = state.conversations.list_by_user(user.id).await?;
+    let before = read_positive_int(params.get("before").map(String::as_str));
+    let limit =
+        read_positive_int(params.get("limit").map(String::as_str)).map(|value| value.min(100));
+    let list = state
+        .conversations
+        .list_by_user_page(user.id, before, limit)
+        .await?;
     Ok(Json(json!(list)).into_response())
 }
 

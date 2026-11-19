@@ -1071,3 +1071,42 @@ async fn repeated_wrong_passwords_are_throttled() {
         .expect("blocked");
     assert_eq!(blocked.status(), StatusCode::TOO_MANY_REQUESTS);
 }
+
+#[tokio::test]
+async fn the_history_endpoint_pages_with_limit_and_before() {
+    let (app, state) = app().await;
+    let (cookie, owner) = account(&state, "walker", Role::User).await;
+    let first = state
+        .conversations
+        .create(owner, "第一条")
+        .await
+        .expect("first");
+    let second = state
+        .conversations
+        .create(owner, "第二条")
+        .await
+        .expect("second");
+
+    let page = app
+        .clone()
+        .oneshot(get("/api/v1/conversations?limit=1", Some(&cookie)))
+        .await
+        .expect("page");
+    assert_eq!(page.status(), StatusCode::OK);
+    let body = json_body(page).await;
+    let items = body.as_array().expect("array");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["id"], second);
+
+    let older = app
+        .oneshot(get(
+            &format!("/api/v1/conversations?limit=1&before={second}"),
+            Some(&cookie),
+        ))
+        .await
+        .expect("older");
+    let body = json_body(older).await;
+    let items = body.as_array().expect("array");
+    assert_eq!(items.len(), 1);
+    assert_eq!(items[0]["id"], first);
+}

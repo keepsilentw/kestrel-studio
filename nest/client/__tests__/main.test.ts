@@ -166,7 +166,7 @@ function stubApi(
     'fetch',
     vi.fn(async (url: string, init?: { method?: string }) => {
       const path = String(url);
-      if (path === '/api/v1/conversations') {
+      if (path === '/api/v1/conversations' || path.startsWith('/api/v1/conversations?')) {
         if ((init?.method ?? 'GET') === 'POST' && create !== undefined) {
           return { ok: true, status: 201, json: async () => ({ conversationId: create.conversationId }) };
         }
@@ -217,7 +217,10 @@ function stubDeleteFetch(options: { ok?: boolean; remaining?: { id: number; titl
   vi.stubGlobal(
     'fetch',
     vi.fn(async (url: string) => {
-      if (String(url) === '/api/v1/conversations') {
+      if (
+        String(url) === '/api/v1/conversations' ||
+        String(url).startsWith('/api/v1/conversations?')
+      ) {
         return { ok: true, status: 200, json: async () => remaining };
       }
       return { ok, status: ok ? 200 : 500, json: async () => ({ ok }) };
@@ -574,6 +577,7 @@ describe('发送一轮 — POST 只提交，画面由事件流绘制', () => {
 
     const urls = vi.mocked(fetch).mock.calls.map((call) => String(call[0]));
     expect(urls[0]).toBe('/api/v1/conversations');
+    expect(urls).toContain('/api/v1/conversations?limit=50');
     // 流在提交轮次之前就开、且游标从 0 起：否则提交后立刻发布的事件会掉进
     // “还没连上”与“从最新开始”之间的缝里（POST 响应与 EventSource 连接赛跑）。
     expect(openedStreams.map((source) => source.url)).toEqual([
@@ -590,7 +594,7 @@ describe('发送一轮 — POST 只提交，画面由事件流绘制', () => {
       'fetch',
       vi.fn(async (url: string, init?: { method?: string }) => {
         const path = String(url);
-        if (path === '/api/v1/conversations') {
+        if (path === '/api/v1/conversations' || path.startsWith('/api/v1/conversations?')) {
           if ((init?.method ?? 'GET') === 'POST') {
             return { ok: true, status: 201, json: async () => ({ conversationId: 42 }) };
           }
@@ -764,7 +768,7 @@ describe('历史会话删除', () => {
 
     const requested = vi.mocked(fetch).mock.calls.map((call) => String(call[0]));
     expect(requested).toContain('/api/v1/conversations/6/delete');
-    expect(requested).toContain('/api/v1/conversations');
+    expect(requested).toContain('/api/v1/conversations?limit=50');
     // 删的不是当前会话，页面不该被重置
     expect(document.body.dataset.conversationId).toBe('5');
   });

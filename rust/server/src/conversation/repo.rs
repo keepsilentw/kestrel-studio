@@ -130,18 +130,50 @@ impl ConversationService {
     }
 
     pub async fn list_by_user(&self, user_id: i64) -> Result<Vec<ConversationSummary>, AppError> {
+        self.list_by_user_page(user_id, None, None).await
+    }
+
+    /// One page of the history sidebar. `before` is the id of the last row the
+    /// caller already has; the row's own `updated_at` is looked up so the cursor
+    /// stays a single integer while the ordering keeps its `(updated_at, id)`
+    /// tie-break. `limit = None` is the old unbounded read.
+    pub async fn list_by_user_page(
+        &self,
+        user_id: i64,
+        before: Option<i64>,
+        limit: Option<i64>,
+    ) -> Result<Vec<ConversationSummary>, AppError> {
         // Deleted ones are gone from the owner's history; only a super admin still
         // sees them, through the admin surface.
         //
         // Tie-broken by id: two conversations can carry the same updatedAt to the
         // millisecond, and without a second key the sidebar order is whatever the
         // scan happened to produce — which changes when the query plan does.
-        let rows = sqlx::query(
-            "SELECT id, title, updated_at FROM conversations WHERE user_id = ?1 AND deleted_at IS NULL ORDER BY updated_at DESC, id DESC",
-        )
-        .bind(user_id)
-        .fetch_all(&self.pool)
-        .await?;
+        let limit = limit.unwrap_or(-1);
+        let rows = if let Some(before) = before {
+            sqlx::query(
+                "SELECT id, title, updated_at FROM conversations
+                 WHERE user_id = ?1 AND deleted_at IS NULL
+                   AND (
+                     updated_at < (SELECT updated_at FROM conversations WHERE id = ?2 AND user_id = ?1)
+                     OR (updated_at = (SELECT updated_at FROM conversations WHERE id = ?2 AND user_id = ?1) AND id < ?2)
+                   )
+                 ORDER BY updated_at DESC, id DESC LIMIT ?3",
+            )
+            .bind(user_id)
+            .bind(before)
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await?
+        } else {
+            sqlx::query(
+                "SELECT id, title, updated_at FROM conversations WHERE user_id = ?1 AND deleted_at IS NULL ORDER BY updated_at DESC, id DESC LIMIT ?2",
+            )
+            .bind(user_id)
+            .bind(limit)
+            .fetch_all(&self.pool)
+            .await?
+        };
         Ok(rows
             .into_iter()
             .map(|row| ConversationSummary {
@@ -247,6 +279,27 @@ impl ConversationService {
                 to_message_view(row, grouped.get(&id).map(Vec::as_slice).unwrap_or(&[]))
             })
             .collect())
+    }
+
+    /// One conversation summary owned by `user_id`, or `None` when it is hidden,
+    /// missing, or belongs to someone else.
+    pub async fn summary_by_owner(
+        &self,
+        id: i64,
+        user_id: i64,
+    ) -> Result<Option<ConversationSummary>, AppError> {
+        let row = sqlx::query(
+            "SELECT id, title, updated_at FROM conversations WHERE id = ?1 AND user_id = ?2 AND deleted_at IS NULL",
+        )
+        .bind(id)
+        .bind(user_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        Ok(row.map(|row| ConversationSummary {
+            id: row.try_get("id").expect("id"),
+            title: row.try_get("title").expect("title"),
+            updated_at: row.try_get("updated_at").expect("updated_at"),
+        }))
     }
 
     /// `mode` is nullable because a voice turn runs in none of the four modes —
@@ -1002,6 +1055,35 @@ mod tests {
         assert_eq!(one.owner_id, 2);
         assert_eq!(service.owner_of(20).await.expect("owner"), Some(2));
         assert_eq!(service.owner_of(999).await.expect("missing"), None);
+    }
+
+    #[tokio::test]
+    async fn a_history_page_resumes_before_the_cursor_the_client_holds() {
+        let (service, _) = seeded().await;
+        let first = service
+            .list_by_user_page(1, None, Some(1))
+            .await
+            .expect("first page");
+        assert_eq!(first.iter().map(|item| item.id).collect::<Vec<_>>(), [10]);
+
+        let second = service
+            .list_by_user_page(1, Some(10), Some(1))
+            .await
+            .expect("second page");
+        assert_eq!(second.iter().map(|item| item.id).collect::<Vec<_>>(), [11]);
+
+        let exhausted = service
+            .list_by_user_page(1, Some(11), Some(1))
+            .await
+            .expect("tail");
+        assert!(exhausted.is_empty());
+
+        // A cursor from another account is not a way to read that account's rows.
+        let foreign = service
+            .list_by_user_page(1, Some(20), Some(10))
+            .await
+            .expect("foreign cursor");
+        assert!(foreign.is_empty());
     }
 
     #[tokio::test]

@@ -177,6 +177,27 @@ describe('ConversationService 归属', () => {
 
     expect(harness.service.listByUser(alice).map((c) => c.id)).toEqual([second, first]);
   });
+
+  it('limit 与 before 按 (updatedAt, id) 翻页，跨账号游标读不到别人的行', () => {
+    const alice = harness.seedUser('alice');
+    const bob = harness.seedUser('bob');
+    const first = harness.service.create(alice, '第一个');
+    const second = harness.service.create(alice, '第二个');
+    const third = harness.service.create(alice, '第三个');
+    const foreign = harness.service.create(bob, '别人的');
+
+    expect(harness.service.listByUser(alice, { limit: 2 }).map((c) => c.id)).toEqual([
+      third,
+      second,
+    ]);
+    expect(
+      harness.service.listByUser(alice, { limit: 2, before: second }).map((c) => c.id),
+    ).toEqual([first]);
+    expect(harness.service.listByUser(alice, { before: 9999 })).toEqual([]);
+    expect(harness.service.listByUser(alice, { before: foreign }).map((c) => c.id)).toEqual(
+      [],
+    );
+  });
 });
 
 describe('ConversationService.buildInputItems', () => {

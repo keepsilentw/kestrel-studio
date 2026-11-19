@@ -41,6 +41,10 @@ use kestrel_proto::event::{ConversationEvent, ConversationSummary, MessageView, 
 /// The mode the selector starts in is remembered across visits.
 pub const MODE_STORAGE_KEY: &str = "kestrel-studio:mode";
 
+/// One history request. The sidebar is the only place this grows without bound;
+/// the page fetches the first page on open and appends older ones on demand.
+const HISTORY_PAGE_SIZE: i64 = 50;
+
 /// The journaled names. Listed here so an event the server adds and this page does
 /// not handle is a visible gap in one place, not a silently unpainted turn.
 pub const EVENT_NAMES: [&str; 11] = [
@@ -123,6 +127,11 @@ struct Page {
     /// refuses a second concurrent turn with 409 on purpose.
     turn_running: bool,
     submitting: bool,
+    /// The sidebar rows currently shown, newest first.
+    history_items: Vec<ConversationSummary>,
+    /// Id of the last row from the server, used as the next `before` cursor.
+    history_cursor: Option<i64>,
+    history_has_more: bool,
     /// The image the dialog is about: the `<img class="asset-image">` already on the
     /// page. `None` means nothing is loaded, and the estimate says so rather than
     /// showing a size it did not compute.
@@ -182,6 +191,9 @@ pub fn init_chat() -> Result<(), JsValue> {
         pending_delete: None,
         turn_running: false,
         submitting: false,
+        history_items: Vec::new(),
+        history_cursor: None,
+        history_has_more: false,
         anchors: Vec::new(),
         active_anchor: None,
         scroll_scheduled: Cell::new(false),
@@ -462,6 +474,10 @@ fn bind(page: &Handle, dom: &Dom) -> Result<(), JsValue> {
             else {
                 return;
             };
+            if find_closest(&target, "[data-history-more]").is_some() {
+                load_more_history(&scoped);
+                return;
+            }
             if let Some(button) = find_closest(&target, "[data-delete-conversation]") {
                 let Some(raw) = button
                     .dataset()
@@ -1625,8 +1641,23 @@ fn bind_history(page: &Handle, dom: &Dom) {
 /// that answers 404.
 fn refresh_history(page: &Handle) {
     let dom = { page.borrow().dom.clone() };
+    let scoped = Rc::clone(page);
+    // The shell may already show an active row that the first page no longer
+    // contains (a conversation older than the page window). Keep its title so the
+    // row can be carried over instead of disappearing.
+    let active_title = dom
+        .body
+        .owner_document()
+        .and_then(|document| {
+            document
+                .query_selector(".conversation-link.is-active")
+                .ok()
+                .flatten()
+        })
+        .and_then(|node| node.text_content());
     spawn_local(async move {
-        let items = match get_json("/api/v1/conversations").await {
+        let path = format!("/api/v1/conversations?limit={HISTORY_PAGE_SIZE}");
+        let items = match get_json(&path).await {
             Ok(value) => value,
             Err(message) => {
                 show_history_error(&dom, &message);
@@ -1635,6 +1666,64 @@ fn refresh_history(page: &Handle) {
         };
         // A body that does not parse is a failure, not an empty history: painting
         // 暂无会话 here would erase rows that still exist on the server.
+        let mut rows: Vec<ConversationSummary> = match serde_json::from_value(items) {
+            Ok(rows) => rows,
+            Err(_) => {
+                show_history_error(&dom, "历史列表读不出来");
+                return;
+            }
+        };
+        let has_more = rows.len() as i64 >= HISTORY_PAGE_SIZE;
+        let cursor = rows.last().map(|row| row.id);
+
+        let active = conversation_id(&dom.body).and_then(|id| id.parse::<i64>().ok());
+        if let (Some(id), Some(title)) = (active, active_title) {
+            if rows.iter().all(|row| row.id != id) {
+                rows.insert(
+                    0,
+                    ConversationSummary {
+                        id,
+                        title,
+                        updated_at: 0,
+                    },
+                );
+            }
+        }
+        {
+            let mut borrow = scoped.borrow_mut();
+            borrow.history_items = rows;
+            borrow.history_cursor = cursor;
+            borrow.history_has_more = has_more;
+        }
+        repaint_history(&scoped);
+    });
+}
+
+/// Appends the next page; the cursor is the last row the server returned, never
+/// the synthetic active row added by a refresh.
+fn load_more_history(page: &Handle) {
+    let (cursor, has_more) = {
+        let borrow = page.borrow();
+        (borrow.history_cursor, borrow.history_has_more)
+    };
+    let Some(cursor) = cursor else {
+        return;
+    };
+    if !has_more {
+        return;
+    }
+
+    let scoped = Rc::clone(page);
+    let dom = { page.borrow().dom.clone() };
+    spawn_local(async move {
+        let path = format!("/api/v1/conversations?limit={HISTORY_PAGE_SIZE}&before={cursor}");
+        let items = match get_json(&path).await {
+            Ok(value) => value,
+            Err(message) => {
+                show_history_error(&dom, &message);
+                return;
+            }
+        };
         let rows: Vec<ConversationSummary> = match serde_json::from_value(items) {
             Ok(rows) => rows,
             Err(_) => {
@@ -1642,24 +1731,46 @@ fn refresh_history(page: &Handle) {
                 return;
             }
         };
-
-        let active = conversation_id(&dom.body).and_then(|id| id.parse::<i64>().ok());
-        let can_delete = dom
-            .body
-            .dataset()
-            .get("canDeleteConversations")
-            .is_some_and(|flag| flag == "true");
-        let document = match dom.body.owner_document() {
-            Some(document) => document,
-            None => return,
-        };
-        paint_history(&document, &history_rows(&rows, active, can_delete));
+        let has_more = rows.len() as i64 >= HISTORY_PAGE_SIZE;
+        let next = rows.last().map(|row| row.id);
+        {
+            let mut borrow = scoped.borrow_mut();
+            crate::chat_core::append_history_page(&mut borrow.history_items, rows);
+            borrow.history_cursor = next;
+            borrow.history_has_more = has_more;
+        }
+        repaint_history(&scoped);
     });
+}
+
+fn repaint_history(page: &Handle) {
+    let (dom, rows, has_more) = {
+        let borrow = page.borrow();
+        (
+            borrow.dom.clone(),
+            borrow.history_items.clone(),
+            borrow.history_has_more,
+        )
+    };
+    let active = conversation_id(&dom.body).and_then(|id| id.parse::<i64>().ok());
+    let can_delete = dom
+        .body
+        .dataset()
+        .get("canDeleteConversations")
+        .is_some_and(|flag| flag == "true");
+    let Some(document) = dom.body.owner_document() else {
+        return;
+    };
+    paint_history(
+        &document,
+        &history_rows(&rows, active, can_delete),
+        has_more,
+    );
 }
 
 /// Rebuild `.conversation-list` to match the shell's markup for it, element for
 /// element — a reloaded page and a refreshed dropdown have to look the same.
-fn paint_history(document: &Document, rows: &[crate::chat_core::HistoryRow]) {
+fn paint_history(document: &Document, rows: &[crate::chat_core::HistoryRow], has_more: bool) {
     let Some(list) = document.query_selector(".conversation-list").ok().flatten() else {
         return;
     };
@@ -1702,6 +1813,16 @@ fn paint_history(document: &Document, rows: &[crate::chat_core::HistoryRow]) {
             remove.set_text_content(Some("删除"));
             item.append_child(&remove).ok();
         }
+        list.append_child(&item).ok();
+    }
+
+    if has_more {
+        let item = build(document, "li", "conversation-more");
+        let button = build(document, "button", "conversation-more-button");
+        button.set_attribute("type", "button").ok();
+        button.set_attribute("data-history-more", "").ok();
+        button.set_text_content(Some("加载更多"));
+        item.append_child(&button).ok();
         list.append_child(&item).ok();
     }
 }
