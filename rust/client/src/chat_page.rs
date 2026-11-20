@@ -1155,7 +1155,7 @@ async fn run_turn(dom: &Dom, page: &Handle, prompt: &str, mode: Mode) -> Result<
     if id.is_empty() {
         id = create_conversation(dom, page, prompt).await?;
     }
-    let status = post_json(
+    let response = post_send(
         &format!("/api/v1/conversations/{id}/turns"),
         &serde_json::json!({
             "prompt": prompt,
@@ -1163,13 +1163,14 @@ async fn run_turn(dom: &Dom, page: &Handle, prompt: &str, mode: Mode) -> Result<
         }),
     )
     .await?;
+    let status = response.status();
 
     if status == 404 {
         // The conversation went away since the shell was painted (another tab
         // deleted it). The prompt was never stored, so recreating and retrying
         // once is safe; a second failure is reported rather than looped on.
         let id = create_conversation(dom, page, prompt).await?;
-        let retried = post_json(
+        let retried = post_send(
             &format!("/api/v1/conversations/{id}/turns"),
             &serde_json::json!({
                 "prompt": prompt,
@@ -1177,15 +1178,41 @@ async fn run_turn(dom: &Dom, page: &Handle, prompt: &str, mode: Mode) -> Result<
             }),
         )
         .await?;
-        if retried != 202 {
-            return Err(format!("提交轮次失败（HTTP {retried}）"));
+        if retried.status() != 202 {
+            let code = retried.status();
+            return Err(refusal_message(&retried, code).await);
         }
         return Ok(());
     }
     if status != 202 {
-        return Err(format!("提交轮次失败（HTTP {status}）"));
+        return Err(refusal_message(&response, status).await);
     }
     Ok(())
+}
+
+/// The server's own sentence for a refusal (409, 429), because a person now meets
+/// those on the submit path and "HTTP 429" is not something to show them. Falls
+/// back to the status when the body is missing or is not our JSON shape.
+async fn refusal_message(response: &Response, status: u16) -> String {
+    let fallback = format!("提交轮次失败（HTTP {status}）");
+    let Ok(promise) = response.text() else {
+        return fallback;
+    };
+    let Ok(value) = JsFuture::from(promise).await else {
+        return fallback;
+    };
+    let Some(raw) = value.as_string() else {
+        return fallback;
+    };
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&raw) else {
+        return fallback;
+    };
+    parsed
+        .get("message")
+        .and_then(|message| message.as_str())
+        .filter(|message| !message.is_empty())
+        .map(str::to_string)
+        .unwrap_or(fallback)
 }
 
 async fn create_conversation(dom: &Dom, page: &Handle, prompt: &str) -> Result<String, String> {
@@ -1220,11 +1247,6 @@ async fn create_conversation(dom: &Dom, page: &Handle, prompt: &str) -> Result<S
 }
 
 /// POST with a JSON body and return the status code.
-async fn post_json(path: &str, body: &serde_json::Value) -> Result<u16, String> {
-    let response = post_send(path, body).await?;
-    Ok(response.status())
-}
-
 /// The same request, with the parsed body when the endpoint returns one.
 async fn post_json_value(
     path: &str,

@@ -107,13 +107,23 @@ export class ChatController {
       return;
     }
 
-    const messageId = this.runner.start({ conversationId, prompt, mode: parseMode(body.mode) });
-    if (messageId === null) {
-      // One turn per conversation: a second submit would double-bill the first.
-      res.status(409).json({ message: '该会话已有轮次在进行中' });
+    const started = this.runner.start({
+      conversationId,
+      userId: user.id,
+      prompt,
+      mode: parseMode(body.mode),
+    });
+    if ('busy' in started) {
+      if (started.busy === 'conversation') {
+        // One turn per conversation: a second submit would double-bill the first.
+        res.status(409).json({ message: '该会话已有轮次在进行中' });
+      } else {
+        // The account is already running the maximum number of paid turns.
+        res.status(429).json({ message: '当前进行中的轮次太多，请等其中一轮结束再试' });
+      }
       return;
     }
-    res.status(202).json({ conversationId, messageId });
+    res.status(202).json({ conversationId, messageId: started.started });
   }
 
   /**

@@ -1,7 +1,7 @@
 use crate::agent::mode::Mode;
 use crate::conversation::ConversationEvent;
 use crate::error::AppError;
-use crate::state::AppState;
+use crate::state::{AppState, TurnClaim};
 
 use super::service::AgentService;
 
@@ -57,7 +57,8 @@ impl TurnRunner {
 
     /// Starts a turn and returns its assistant message id — the turn's identity,
     /// which the stream also calls it by (`turn_started`, deltas, assets). Returns
-    /// None when a turn is already running for that conversation.
+    /// None when a turn is already running for that conversation, and 429 when the
+    /// account already has `MAX_TURNS_PER_USER` turns in flight.
     ///
     /// Everything durable happens synchronously before returning: the submit
     /// endpoint must not answer 202 and then have the turn's rows appear "later",
@@ -66,13 +67,49 @@ impl TurnRunner {
     pub async fn start(
         &self,
         conversation_id: i64,
+        user_id: i64,
         prompt: &str,
         mode: Mode,
     ) -> Result<Option<i64>, AppError> {
-        if !self.state.claim_turn(conversation_id) {
-            return Ok(None);
+        match self.state.claim_turn(conversation_id, user_id) {
+            TurnClaim::Started => {}
+            TurnClaim::ConversationBusy => return Ok(None),
+            TurnClaim::UserBusy => {
+                return Err(AppError::too_many_requests(
+                    "当前进行中的轮次太多，请等其中一轮结束再试",
+                ))
+            }
         }
 
+        let message_id = match self.begin(conversation_id, prompt, mode).await {
+            Ok(message_id) => message_id,
+            Err(error) => {
+                // A failed submit must not keep the slot: it would block this
+                // conversation — and count against the account — until a restart.
+                self.state.release_turn(conversation_id);
+                return Err(error);
+            }
+        };
+
+        let state = self.state.clone();
+        let agent = AgentService::new(state.clone());
+        tokio::spawn(async move {
+            // `AgentService::run` finalizes in every path it can reach. Should this
+            // task ever be cancelled mid-flight, the slot is still released and the
+            // boot recovery (`abandon_stale_placeholders`) ends the row.
+            agent.run(conversation_id, message_id, mode).await;
+            state.release_turn(conversation_id);
+            if let Err(error) = state.events.prune(conversation_id).await {
+                tracing::warn!(%error, "journal could not be pruned");
+            }
+        });
+
+        Ok(Some(message_id))
+    }
+
+    /// The durable half of a submit: both rows and both opening frames, in the
+    /// order replaying clients depend on.
+    async fn begin(&self, conversation_id: i64, prompt: &str, mode: Mode) -> Result<i64, AppError> {
         let user_message_id = self
             .state
             .conversations
@@ -109,19 +146,6 @@ impl TurnRunner {
             )
             .await?;
 
-        let state = self.state.clone();
-        let agent = AgentService::new(state.clone());
-        tokio::spawn(async move {
-            // `AgentService::run` finalizes in every path it can reach. Should this
-            // task ever be cancelled mid-flight, the slot is still released and the
-            // boot recovery (`abandon_stale_placeholders`) ends the row.
-            agent.run(conversation_id, message_id, mode).await;
-            state.release_turn(conversation_id);
-            if let Err(error) = state.events.prune(conversation_id).await {
-                tracing::warn!(%error, "journal could not be pruned");
-            }
-        });
-
-        Ok(Some(message_id))
+        Ok(message_id)
     }
 }

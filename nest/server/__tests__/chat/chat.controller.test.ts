@@ -62,30 +62,33 @@ let runner: TurnRunner;
 let runCalls: RunCall[];
 let filesDir: string;
 
-let pendingResolve: (() => void) | null = null;
+const pendingResolvers: Array<() => void> = [];
 
 /**
  * The stubbed `AgentService.run`: records the call and waits for the test.
  * Real run() journals its own outcome; releasing the stub runs the runner's
  * finally (slot released, journal pruned) without any provider anywhere.
+ *
+ * One resolver per call, not one global: the per-account cap allows two turns
+ * in flight, so a test can leave two here and both must be released.
  */
 const stubAgent = {
   run: (call: RunCall): Promise<void> =>
     new Promise<void>((resolve) => {
       runCalls.push(call);
-      pendingResolve = resolve;
+      pendingResolvers.push(resolve);
     }),
 };
 
-/** Completes the running turn and lets the runner's finally settle. */
+/** Completes every running turn and lets the runners' finally settle. */
 async function finishRunningTurn(): Promise<void> {
-  const resolve = pendingResolve;
-  pendingResolve = null;
-  if (resolve === null) {
-    return;
+  const resolvers = pendingResolvers.splice(0);
+  for (const resolve of resolvers) {
+    resolve();
   }
-  resolve();
-  await new Promise((r) => setTimeout(r, 0));
+  if (resolvers.length > 0) {
+    await new Promise((r) => setTimeout(r, 0));
+  }
 }
 
 async function bootstrap(): Promise<void> {
@@ -136,12 +139,17 @@ async function bootstrap(): Promise<void> {
 }
 
 let previousStorageDir: string | undefined;
+let previousMaxTurns: string | undefined;
 
 beforeAll(async () => {
   filesDir = mkdtempSync(join(tmpdir(), 'kestrel-chat-'));
   // Asset rows hold a file name; the download endpoint resolves it against this.
   previousStorageDir = process.env.STORAGE_DIR;
   process.env.STORAGE_DIR = filesDir;
+  // TurnRunner reads the cap once, at construction; pin it so a developer's
+  // shell cannot change what these tests assert.
+  previousMaxTurns = process.env.MAX_TURNS_PER_USER;
+  process.env.MAX_TURNS_PER_USER = '2';
   await bootstrap();
 });
 
@@ -153,13 +161,17 @@ afterAll(async () => {
   } else {
     process.env.STORAGE_DIR = previousStorageDir;
   }
+  if (previousMaxTurns === undefined) {
+    delete process.env.MAX_TURNS_PER_USER;
+  } else {
+    process.env.MAX_TURNS_PER_USER = previousMaxTurns;
+  }
   rmSync(filesDir, { recursive: true, force: true });
 });
 
 beforeEach(async () => {
   await finishRunningTurn();
   runCalls = [];
-  pendingResolve = null;
   // The app instance stays up across tests, so clear the history instead of
   // rebooting it. Children first: foreign keys are on.
   connection.exec(
@@ -370,6 +382,26 @@ describe('POST /api/v1/conversations/:id/turns — 提交即返回', () => {
 
     await finishRunningTurn();
     expect((await post(`/api/v1/conversations/${mine}/turns`, { prompt: '第二问' })).status).toBe(202);
+  });
+
+  it('同一账号第三条并发轮次 429，不调用供应商', async () => {
+    const a = conversations.create(ALICE, 'a');
+    const b = conversations.create(ALICE, 'b');
+    const c = conversations.create(ALICE, 'c');
+    expect((await post(`/api/v1/conversations/${a}/turns`, { prompt: '一' })).status).toBe(202);
+    expect((await post(`/api/v1/conversations/${b}/turns`, { prompt: '二' })).status).toBe(202);
+
+    const third = await post(`/api/v1/conversations/${c}/turns`, { prompt: '三' });
+    expect(third.status).toBe(429);
+    await expect(third.json()).resolves.toEqual({
+      message: '当前进行中的轮次太多，请等其中一轮结束再试',
+    });
+    // Refused before anything durable happened, so no provider call either.
+    expect(runCalls).toHaveLength(2);
+
+    // The cap is per account: another one is unaffected.
+    const d = conversations.create(BOB, 'd');
+    expect((await post(`/api/v1/conversations/${d}/turns`, { prompt: '四' }, BOB)).status).toBe(202);
   });
 
   it('不同会话各自跑，互不 409', async () => {

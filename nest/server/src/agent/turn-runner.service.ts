@@ -1,5 +1,6 @@
 import { Injectable, Logger, type OnApplicationBootstrap } from '@nestjs/common';
 import { describeError } from '@/common/errors';
+import { loadConfig } from '@/config/configuration';
 import { ConversationEventsService } from '@/conversation/conversation-events.service';
 import { ConversationService } from '@/conversation/conversation.service';
 import type { Mode } from './mode';
@@ -19,12 +20,16 @@ import { AgentService } from './agent.service';
  * - One running turn per conversation, answered with 409 on the second
  *   attempt: the old guard was the single POST connection; with send and
  *   subscribe split, nothing else stops a double submit from billing twice.
+ * - At most `MAX_TURNS_PER_USER` turns in flight per account, answered with
+ *   429 past it. The per-conversation rule alone still let one account open N
+ *   conversations and run N paid turns at once; `0` disables this bound.
  */
 @Injectable()
 export class TurnRunner implements OnApplicationBootstrap {
   private readonly logger = new Logger(TurnRunner.name);
-  /** conversationId -> the assistant message of its running turn. */
-  private readonly running = new Map<number, number>();
+  /** conversationId -> whose turn it is and which assistant message it is. */
+  private readonly running = new Map<number, { userId: number; messageId: number }>();
+  private readonly maxTurnsPerUser = loadConfig().maxTurnsPerUser;
 
   constructor(
     private readonly agent: AgentService,
@@ -81,23 +86,39 @@ export class TurnRunner implements OnApplicationBootstrap {
 
   /**
    * Starts a turn and returns its assistant message id — the turn's identity,
-   * which the stream also calls it by (`turn_started`, deltas, assets).
-   * Returns null when a turn is already running for that conversation.
+   * which the stream also calls it by (`turn_started`, deltas, assets). Refuses
+   * with the conversation's 409 or the account's 429 instead.
    *
    * Everything durable happens synchronously before returning: the submit
    * endpoint must not answer 202 and then have the turn's rows appear
    * "later", and the journal order user_message -> turn_started -> deltas is
    * what replaying clients depend on.
    */
-  start(options: { conversationId: number; prompt: string; mode: Mode }): number | null {
-    const { conversationId, prompt, mode } = options;
+  start(options: {
+    conversationId: number;
+    userId: number;
+    prompt: string;
+    mode: Mode;
+  }): TurnStart {
+    const { conversationId, userId, prompt, mode } = options;
     if (this.running.has(conversationId)) {
-      return null;
+      return { busy: 'conversation' };
+    }
+    if (this.maxTurnsPerUser > 0) {
+      let inFlight = 0;
+      for (const entry of this.running.values()) {
+        if (entry.userId === userId) {
+          inFlight += 1;
+        }
+      }
+      if (inFlight >= this.maxTurnsPerUser) {
+        return { busy: 'user' };
+      }
     }
 
     const userMessageId = this.conversations.appendUserMessage(conversationId, prompt, mode);
     const messageId = this.conversations.createAssistantPlaceholder(conversationId, mode);
-    this.running.set(conversationId, messageId);
+    this.running.set(conversationId, { userId, messageId });
 
     const userView = this.conversations.messageView(userMessageId);
     if (userView !== null) {
@@ -130,6 +151,12 @@ export class TurnRunner implements OnApplicationBootstrap {
         this.events.prune(conversationId);
       });
 
-    return messageId;
+    return { started: messageId };
   }
 }
+
+/** What `start` decided: a started turn, or the bound that refused it. */
+export type TurnStart =
+  | { started: number }
+  | { busy: 'conversation' }
+  | { busy: 'user' };

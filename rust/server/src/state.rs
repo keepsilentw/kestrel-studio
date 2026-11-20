@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -25,12 +25,25 @@ pub struct AppState {
     /// Failed-login counters, keyed by address and address+account.
     pub login_limiter: Arc<crate::auth::login_limit::LoginLimiter>,
     pub tasks: Arc<TaskService>,
-    /// Conversations with a turn running in this process. One turn at a time per
-    /// conversation, so a double submit cannot bill the provider twice.
-    pub running_turns: Arc<Mutex<HashSet<i64>>>,
+    /// Conversations with a turn running in this process, keyed to the account
+    /// that owns the turn. Two rules come out of one map: one turn at a time per
+    /// conversation (409), and at most `MAX_TURNS_PER_USER` per account (429) —
+    /// the second is the cost guard, because a turn is a paid model call.
+    pub running_turns: Arc<Mutex<HashMap<i64, i64>>>,
     /// The provider key, resolved once at boot (env, then cc-switch, then the
     /// codex config). `None` means every generation path must fail loudly.
     pub api_key: Arc<Option<String>>,
+}
+
+/// The three answers `claim_turn` can give; the handler maps the two refusals to
+/// 409 and 429 and says why.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TurnClaim {
+    Started,
+    /// A turn is already running in this conversation (409).
+    ConversationBusy,
+    /// The account already has `MAX_TURNS_PER_USER` turns in flight (429).
+    UserBusy,
 }
 
 impl AppState {
@@ -45,7 +58,7 @@ impl AppState {
         let media = Arc::new(MediaService::new(http.clone(), Arc::clone(&config)));
         let tasks = Arc::new(TaskService::new(pool.clone(), Arc::clone(&events)));
         Self {
-            running_turns: Arc::new(Mutex::new(HashSet::new())),
+            running_turns: Arc::new(Mutex::new(HashMap::new())),
             conversations,
             events,
             tickets: Arc::new(crate::voice::ticket::TicketStore::new()),
@@ -78,12 +91,21 @@ impl AppState {
     }
 
     /// Whether a turn may start on this conversation right now. Takes the slot in
-    /// the same step so two concurrent submits cannot both pass the check.
-    pub fn claim_turn(&self, conversation_id: i64) -> bool {
-        self.running_turns
-            .lock()
-            .expect("turn registry")
-            .insert(conversation_id)
+    /// the same step so two concurrent submits cannot both pass the check — for
+    /// both bounds: the conversation's own, and the account's.
+    pub fn claim_turn(&self, conversation_id: i64, user_id: i64) -> TurnClaim {
+        let limit = self.config.max_turns_per_user;
+        let mut running = self.running_turns.lock().expect("turn registry");
+        if running.contains_key(&conversation_id) {
+            return TurnClaim::ConversationBusy;
+        }
+        if limit > 0
+            && running.values().filter(|owner| **owner == user_id).count() >= limit as usize
+        {
+            return TurnClaim::UserBusy;
+        }
+        running.insert(conversation_id, user_id);
+        TurnClaim::Started
     }
 
     pub fn release_turn(&self, conversation_id: i64) {
@@ -95,7 +117,7 @@ impl AppState {
     pub fn is_turn_running(&self, conversation_id: i64) -> bool {
         self.running_turns
             .lock()
-            .map(|running| running.contains(&conversation_id))
+            .map(|running| running.contains_key(&conversation_id))
             .unwrap_or(false)
     }
 

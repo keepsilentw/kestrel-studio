@@ -390,6 +390,20 @@ sqlite pool ready connections=4 synchronous=1 journal_mode=wal
 `synchronous=1` 是 NORMAL（FULL 是 2）。为什么不用 FULL、多连接买到的到底是什么，以及目标机上
 那组 1000 次提交的读数，见 architecture.md §13.2 与 verification.md §68。
 
+## 2.9 每账号并发轮次上限（`MAX_TURNS_PER_USER`，2026-11-20）
+
+compose 注入 `MAX_TURNS_PER_USER=${MAX_TURNS_PER_USER:-2}`：一个账号同时最多跑几轮，
+超过回 `429`（`0` 关闭）。是部署配置，不进 `.env`——与 `PORT` / `RUST_LOG` /
+`ASSET_QUOTA_BYTES` 同一条规则。改它只是重启容器：
+
+```bash
+ssh lavo-test "cd /opt/kestrel-studio && MAX_TURNS_PER_USER=4 docker compose up -d"
+```
+
+启动日志带着这个值：`kestrel-studio listening on … client="wasm" max_turns_per_user=2`。
+它与「每会话一轮」是两条独立边界：前者 `409`、后者 `429`。为什么语音轮次不在计数内，
+见 architecture.md §4.2。
+
 ## 3. 对外暴露：openresty 反代
 
 服务器的对外入口是 1Panel 管理的 openresty（容器名形如 `1Panel-openresty-*`，监听 80/443）。

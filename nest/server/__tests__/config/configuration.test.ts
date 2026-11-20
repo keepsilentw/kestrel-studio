@@ -22,6 +22,7 @@ const ENV_KEYS = [
   'BAILIAN_REASONING_EFFORT',
   'BAILIAN_VIDEO_MODEL',
   'ACCESS_LOG',
+  'MAX_TURNS_PER_USER',
 ] as const;
 
 const saved = new Map<string, string | undefined>();
@@ -56,6 +57,8 @@ describe('loadConfig — 默认值', () => {
     expect(config.publicBaseUrl).toBe('https://try.kestrel.justwork.link');
     // Off unless asked for: a deployment must not turn its log volume up by accident.
     expect(config.accessLog).toBe(false);
+    // Two paid turns at once per account, unless configured otherwise; 0 turns it off.
+    expect(config.maxTurnsPerUser).toBe(2);
     // No super admin without credentials — the repository must not describe a
     // working login for a deployed instance.
     expect(config.superAdmin).toBeNull();
@@ -71,6 +74,25 @@ describe('loadConfig — 默认值', () => {
     const config = loadConfig();
     expect(config.port).toBe(9949);
     expect(config.storageDir).toBe('storage');
+  });
+});
+
+describe('loadConfig — MAX_TURNS_PER_USER', () => {
+  it('缺省 2，0 表示关闭', () => {
+    expect(loadConfig().maxTurnsPerUser).toBe(2);
+    process.env.MAX_TURNS_PER_USER = '0';
+    expect(loadConfig().maxTurnsPerUser).toBe(0);
+    process.env.MAX_TURNS_PER_USER = '1';
+    expect(loadConfig().maxTurnsPerUser).toBe(1);
+  });
+
+  it('上限 16，负数与垃圾值回落到默认', () => {
+    process.env.MAX_TURNS_PER_USER = '99';
+    expect(loadConfig().maxTurnsPerUser).toBe(16);
+    process.env.MAX_TURNS_PER_USER = '-1';
+    expect(loadConfig().maxTurnsPerUser).toBe(2);
+    process.env.MAX_TURNS_PER_USER = 'two';
+    expect(loadConfig().maxTurnsPerUser).toBe(2);
   });
 });
 

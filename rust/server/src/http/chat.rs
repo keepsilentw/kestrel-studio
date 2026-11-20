@@ -86,7 +86,7 @@ pub async fn start_turn(
 
     let mode = Mode::parse(body.get("mode").and_then(Value::as_str));
     let message_id = TurnRunner::new(state.clone())
-        .start(conversation_id, &prompt, mode)
+        .start(conversation_id, user.id, &prompt, mode)
         .await?;
     let Some(message_id) = message_id else {
         // One turn per conversation: a second submit would double-bill the first.

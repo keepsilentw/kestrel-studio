@@ -242,7 +242,7 @@ Vite 只做打包，产物固定为 `public/assets/main.js` / `main.css`（由 `
 
 `AppModule`（`nest/server/src/app.module.ts`）装配：`config` 读环境变量 → `database` drizzle + 建表 + seed → `auth` / `conversation` / `media` / `task` / `agent` / `chat` / `view`。
 
-- `agent/turn-runner.service.ts` — 轮次的提交口与登记表：同步建用户消息 + 空 assistant 占位行并记 `user_message`/`turn_started`，然后把 `AgentService.run` 挂后台立即返回；**一个会话同时只跑一轮**（第二次提交 409，防重复计费）；`onApplicationBootstrap` 收尾上个进程留下的空占位行（`abandonStalePlaceholders`，否则孤儿用户消息会触发重提交付费任务）。
+- `agent/turn-runner.service.ts` — 轮次的提交口与登记表：同步建用户消息 + 空 assistant 占位行并记 `user_message`/`turn_started`，然后把 `AgentService.run` 挂后台立即返回；**一个会话同时只跑一轮**（第二次提交 409，防重复计费），**同一账号最多 `MAX_TURNS_PER_USER` 轮**（默认 2、`0` 关闭，超过 429；语音轮次不计入）；`onApplicationBootstrap` 收尾上个进程留下的空占位行（`abandonStalePlaceholders`，否则孤儿用户消息会触发重提交付费任务）。
 - `agent/agent.service.ts` — 轮次引擎：组装 instructions 与工具声明，最多 `MAX_TOOL_ROUNDS = 5` 次 LLM 往返防死循环，把每条增量发布到会话事件日志（不再持有连接）。
   `finally` 里必定收尾（补全占位行、`touch` 会话、关流）——**这个保证是承重的**：占位行若被留下，用户消息就成了孤儿，下一轮回放会出现两条连续 user 消息，曾因此**重复提交过一次付费视频任务**。
 - `agent/mode.ts` — 模式的**唯一真源**：`TOOL_NAMES_BY_MODE` 决定每轮暴露哪些工具，`MODE_INSTRUCTIONS` 决定提示词片段。前端 `nest/client/scripts/main.ts` 里有一份 `MODE_LABEL` 的重复定义，改中文标签要两处一起改。模式是**用户在 UI 上每轮选的**（`localStorage` 的 `kestrel-studio:mode`），不是模型自己挑的。

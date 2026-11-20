@@ -10,6 +10,13 @@ const DEFAULT_PUBLIC_BASE_URL: &str = "https://try.kestrel.justwork.link";
 /// Per-account media budget. `0` disables the check; the default is a guard rail,
 /// not a product limit, and can be overridden with `ASSET_QUOTA_BYTES`.
 const DEFAULT_ASSET_QUOTA_BYTES: i64 = 2 * 1024 * 1024 * 1024;
+/// Turns one account may have in flight at once. One conversation already allows
+/// only one turn (409); this closes the "open N conversations" multiplication,
+/// which is the remaining way to make N paid model calls at the same time. `0`
+/// disables it. Low on purpose: every turn is billed, and a person who needs a
+/// third simultaneous answer can wait for one to finish.
+const DEFAULT_MAX_TURNS_PER_USER: u32 = 2;
+const MAX_TURNS_PER_USER_CEILING: u32 = 16;
 /// SQLite pool size. SQLite still serialises writers, so this buys concurrent
 /// readers (pages, auth, asset lookups), not concurrent commits. Four is enough
 /// for a 2-vCPU host with one public traffic source; the clamp is there because a
@@ -82,6 +89,8 @@ pub struct AppConfig {
     /// Connections the SQLite pool may open. See [`DEFAULT_DB_POOL_SIZE`]: writers
     /// still serialise, this is for readers.
     pub db_pool_size: u32,
+    /// In-flight turns one account may have. `0` disables the check.
+    pub max_turns_per_user: u32,
     pub public_base_url: String,
     pub asset_quota_bytes: i64,
     /// See [`ClientBundle`]: which client the chat and voice pages load.
@@ -113,6 +122,18 @@ fn read_asset_quota() -> i64 {
         .and_then(|raw| raw.parse::<i64>().ok())
         .filter(|value| *value >= 0)
         .unwrap_or(DEFAULT_ASSET_QUOTA_BYTES)
+}
+
+/// `0` is meaningful (off), so unlike the pool size this does not clamp up to 1;
+/// a negative or unparsable value falls back to the default instead.
+fn read_max_turns_per_user() -> u32 {
+    clamp_max_turns_per_user(read_env("MAX_TURNS_PER_USER").as_deref())
+}
+
+fn clamp_max_turns_per_user(raw: Option<&str>) -> u32 {
+    raw.and_then(|value| value.trim().parse::<u32>().ok())
+        .unwrap_or(DEFAULT_MAX_TURNS_PER_USER)
+        .min(MAX_TURNS_PER_USER_CEILING)
 }
 
 /// A nonsense `DB_POOL_SIZE` falls back to the default rather than refusing to
@@ -226,6 +247,7 @@ impl AppConfig {
                 .unwrap_or_else(|| "data/kestrel-studio.db".to_string()),
             storage_dir: read_env("STORAGE_DIR").unwrap_or_else(|| "storage".to_string()),
             db_pool_size: read_db_pool_size(),
+            max_turns_per_user: read_max_turns_per_user(),
             public_base_url: trim_trailing_slashes(
                 &read_env("PUBLIC_BASE_URL").unwrap_or_else(|| DEFAULT_PUBLIC_BASE_URL.to_string()),
             ),
@@ -293,6 +315,7 @@ impl AppConfig {
             database_file: String::new(),
             storage_dir: storage_dir.to_string(),
             db_pool_size: 1,
+            max_turns_per_user: 2,
             public_base_url: public_base_url.to_string(),
             asset_quota_bytes: 0,
             super_admin: None,
@@ -309,7 +332,10 @@ impl AppConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::{clamp_db_pool_size, ClientBundle, DEFAULT_DB_POOL_SIZE, MAX_DB_POOL_SIZE};
+    use super::{
+        clamp_db_pool_size, clamp_max_turns_per_user, ClientBundle, DEFAULT_DB_POOL_SIZE,
+        DEFAULT_MAX_TURNS_PER_USER, MAX_DB_POOL_SIZE, MAX_TURNS_PER_USER_CEILING,
+    };
 
     /// `docker-compose.yml` writes this name, so the spelling is an interface: parse it
     /// back from the string it prints, and refuse everything else. A typo must not pick
@@ -341,5 +367,25 @@ mod tests {
         assert_eq!(clamp_db_pool_size(Some("999")), MAX_DB_POOL_SIZE);
         assert_eq!(clamp_db_pool_size(Some("-4")), DEFAULT_DB_POOL_SIZE);
         assert_eq!(clamp_db_pool_size(Some("many")), DEFAULT_DB_POOL_SIZE);
+    }
+
+    /// `0` must survive — it is the documented "off" value, not a typo.
+    #[test]
+    fn the_turn_cap_falls_back_clamps_and_keeps_zero() {
+        assert_eq!(clamp_max_turns_per_user(None), DEFAULT_MAX_TURNS_PER_USER);
+        assert_eq!(clamp_max_turns_per_user(Some("0")), 0, "off");
+        assert_eq!(clamp_max_turns_per_user(Some("1")), 1);
+        assert_eq!(
+            clamp_max_turns_per_user(Some("99")),
+            MAX_TURNS_PER_USER_CEILING
+        );
+        assert_eq!(
+            clamp_max_turns_per_user(Some("-1")),
+            DEFAULT_MAX_TURNS_PER_USER
+        );
+        assert_eq!(
+            clamp_max_turns_per_user(Some("two")),
+            DEFAULT_MAX_TURNS_PER_USER
+        );
     }
 }

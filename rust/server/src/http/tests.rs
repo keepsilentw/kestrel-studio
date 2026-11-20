@@ -424,7 +424,11 @@ async fn turn_submission_answers_201_400_404_and_409() {
 
     // The busy guard is exercised without a provider: holding the slot is exactly
     // what a running turn does, and a second submit would double-bill.
-    assert!(state.claim_turn(conversation_id), "take the slot");
+    assert_eq!(
+        state.claim_turn(conversation_id, owner),
+        crate::state::TurnClaim::Started,
+        "take the slot"
+    );
     let busy = app
         .clone()
         .oneshot(post_json(
@@ -546,6 +550,66 @@ async fn turn_submission_answers_201_400_404_and_409() {
         .await
         .expect("tasks");
     assert_eq!(json_body(tasks).await, json!([]));
+}
+
+#[tokio::test]
+async fn a_third_turn_for_one_account_is_429() {
+    let (app, state) = app().await;
+    let (cookie, owner) = account(&state, "busybody", Role::User).await;
+    let (_, other) = account(&state, "calm", Role::User).await;
+
+    let mut ids = Vec::new();
+    for _ in 0..3 {
+        let created = app
+            .clone()
+            .oneshot(post_json(
+                "/api/v1/conversations",
+                Some(&cookie),
+                json!({ "prompt": "x" }),
+            ))
+            .await
+            .expect("create");
+        ids.push(
+            json_body(created).await["conversationId"]
+                .as_i64()
+                .expect("id"),
+        );
+    }
+
+    // Two in flight are allowed. The third conversation's slot is then taken by a
+    // different account, which proves the counter is per account and not global:
+    // the owner is still at the cap, the other account is not.
+    assert_eq!(
+        state.claim_turn(ids[0], owner),
+        crate::state::TurnClaim::Started
+    );
+    assert_eq!(
+        state.claim_turn(ids[1], owner),
+        crate::state::TurnClaim::Started
+    );
+    assert_eq!(
+        state.claim_turn(ids[2], other),
+        crate::state::TurnClaim::Started
+    );
+    state.release_turn(ids[2]);
+
+    let third = app
+        .clone()
+        .oneshot(post_json(
+            &format!("/api/v1/conversations/{}/turns", ids[2]),
+            Some(&cookie),
+            json!({ "prompt": "第三轮" }),
+        ))
+        .await
+        .expect("third");
+    assert_eq!(third.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(
+        json_body(third).await["message"],
+        json!("当前进行中的轮次太多，请等其中一轮结束再试")
+    );
+
+    state.release_turn(ids[0]);
+    state.release_turn(ids[1]);
 }
 
 #[tokio::test]

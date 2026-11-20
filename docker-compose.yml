@@ -40,6 +40,10 @@ services:
       # Writers still serialise on SQLite's write lock; the extra connections keep
       # page/auth/asset reads from queueing behind the journal's per-delta commits.
       - DB_POOL_SIZE=${DB_POOL_SIZE:-4}
+      # In-flight turns one account may have (429 past it); `0` disables the check.
+      # Costs money, so it is deployment config rather than product behaviour baked
+      # into the binary. See docs/architecture.md §4.2.
+      - MAX_TURNS_PER_USER=${MAX_TURNS_PER_USER:-2}
       # Per-account media budget. Deployment config, not a secret, so it follows
       # PORT/RUST_LOG into compose instead of the never-rewritten `.env`; `0`
       # disables the check. Default 2 GiB.

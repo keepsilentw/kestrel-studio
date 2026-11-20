@@ -18,6 +18,14 @@ export type ReasoningEffort = (typeof REASONING_EFFORTS)[number];
 const DEFAULT_REASONING_EFFORT: ReasoningEffort = 'high';
 /** Per-account media budget; `0` disables the check. */
 const DEFAULT_ASSET_QUOTA_BYTES = 2 * 1024 * 1024 * 1024;
+/**
+ * Turns one account may have in flight at once; `0` disables the check. One
+ * conversation already allows only one turn (409); this closes the "open N
+ * conversations" multiplication, which is the remaining way to make N paid model
+ * calls at the same time. Kept low on purpose: every turn is billed.
+ */
+const DEFAULT_MAX_TURNS_PER_USER = 2;
+const MAX_TURNS_PER_USER_CEILING = 16;
 
 export interface BailianConfig {
   baseUrl: string;
@@ -56,6 +64,8 @@ export interface AppConfig {
   storageDir: string;
   publicBaseUrl: string;
   assetQuotaBytes: number;
+  /** In-flight turns one account may have; `0` disables the check. */
+  maxTurnsPerUser: number;
   /**
    * One access line per request (`common/access-log.ts`). Off unless asked for, so
    * nobody turns production log volume up by accident — the Rust server gates the
@@ -89,6 +99,19 @@ function readAssetQuota(): number {
   }
   const parsed = Number(raw);
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : DEFAULT_ASSET_QUOTA_BYTES;
+}
+
+/** `0` is meaningful (off), so it is not clamped up to 1. */
+function readMaxTurnsPerUser(): number {
+  const raw = readEnv('MAX_TURNS_PER_USER');
+  if (raw === null) {
+    return DEFAULT_MAX_TURNS_PER_USER;
+  }
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    return DEFAULT_MAX_TURNS_PER_USER;
+  }
+  return Math.min(parsed, MAX_TURNS_PER_USER_CEILING);
 }
 
 /**
@@ -167,6 +190,7 @@ export function loadConfig(): AppConfig {
     storageDir: readEnv('STORAGE_DIR') ?? 'storage',
     publicBaseUrl: (readEnv('PUBLIC_BASE_URL') ?? DEFAULT_PUBLIC_BASE_URL).replace(/\/+$/, ''),
     assetQuotaBytes: readAssetQuota(),
+    maxTurnsPerUser: readMaxTurnsPerUser(),
     accessLog: readAccessLog(),
     superAdmin: readSuperAdmin(),
     bailian: {

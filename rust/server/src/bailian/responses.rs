@@ -330,6 +330,7 @@ mod tests {
             database_file: String::new(),
             storage_dir: String::new(),
             db_pool_size: 1,
+            max_turns_per_user: 2,
             public_base_url: "https://example.test".to_string(),
             asset_quota_bytes: 0,
             super_admin: None,

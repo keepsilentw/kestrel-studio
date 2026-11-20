@@ -283,6 +283,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
     // page: which client users got is the first question after a grey release.
     tracing::info!(
         client = state.config.client_bundle.as_str(),
+        max_turns_per_user = state.config.max_turns_per_user,
         "kestrel-studio listening on http://localhost:{port}"
     );
     axum::serve(listener, http::router::build(state))
