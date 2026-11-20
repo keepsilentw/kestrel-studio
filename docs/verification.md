@@ -4107,3 +4107,41 @@ architecture 的 `api_tokens` 行与 roadmap §5.1，运维写在 deployment.md 
 - **回填在有数据的库上没有跑过**：线上令牌表是空的；逻辑是 `created_at + TTL`，一条 UPDATE。
 - 令牌列表的「有效期」列没有在浏览器里看过（用户页与超管页都只验了渲染函数）。
 - `TOKEN_TTL_DAYS=0` 的线上行为没验，只有单测里 `expiresAt === null`。
+
+## 73. 松手收麦（2026-11-20 11:31）
+
+两套客户端原先在松手后继续送帧，两轮之间的环境声会进下一句的缓冲（roadmap §3、
+implementation-notes §32）。现在 `release` 与 25 秒上限都会停掉音轨；核心在 `!holding || blocked`
+时直接丢弃帧。设计与一个被测试抓到的坑（打断是新的按住，必须自己重新开麦）写在 architecture §11。
+
+### 73.1 质量门
+
+| 命令 | 读数 |
+|---|---|
+| `make check` | 通过（fmt 又抓到一次格式差异） |
+| `make test` | Rust client **53**（+1：release 发 `StopCapture`、迟到帧被丢）、Nest client **74**（+1：松手后旧 worklet 不再收帧、下一按新开一个）；服务端两侧仍是 228 / 533 |
+| 测试改动 | 每次按住现在开自己的 worklet，测试的 `emitMicChunk` 改用最新节点，并在第二次按住前等待它就绪 |
+
+**测试抓到的一个真 bug**：第一版只把 `capture` 关掉，忘了「打断」也是一次新的按住——它的
+`interruptPress` 从不打开麦克风，于是打断的那句话会一个字都收不到。现在两处都走
+`openHoldingCapture()`。另有一个连带修复：播放原先用 `capture.context`，松手后 `capture` 为空，
+提交出去的回答就没声了；播放改用常驻的 `audioContext`。
+
+### 73.2 上线读数（11:31）
+
+| 项 | 读数 |
+|---|---|
+| 提交 / 镜像 | `1e81922` / `sha256:6a51c07…` |
+| 线上 `assets/voice.js` | md5 `5d058ff8…`，与本地构建**逐字节相同** |
+| 线上 `wasm/kestrel_client_bg.wasm` | md5 `c3766596…`，与本地构建**逐字节相同** |
+| 启动日志 | `client="wasm" max_turns_per_user=2 daily_asset_limit=200 token_ttl_days=90` |
+| 日志 / 健康 | `ERROR` / `WARN` 0 行；`running` / `healthy` |
+
+### 73.3 没证的 / 没做的
+
+- **没有真人按住验过**：录音指示灯是否熄灭、松开后下一次按住的启动时延、打断时新开麦是否顺——
+  都要真实浏览器与麦克风。这一轮只有单元读数。
+- **每按一次重新开麦**意味着捕获就绪前的那一小段时间没有声音（与第一次按住相同）。真实用户
+  从按下到开口通常比 `getUserMedia` + worklet 初始化慢，但这个判断没有实测。
+- **空闲保活（150 秒主动重连）没有做**：它改的是 socket 生命周期，没有真实通话就无法验证，
+  贸然上线可能把一次正常通话重连掉。仍按 roadmap §3 记为「未做」。
