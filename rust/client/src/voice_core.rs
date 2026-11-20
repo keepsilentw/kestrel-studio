@@ -55,6 +55,10 @@ pub enum Effect {
     /// upstream session for a page that is merely being looked at would burn one.
     OpenSocket,
     StartCapture,
+    /// The hold ended: stop the microphone now, not at the next press or page
+    /// unload. The browser's recording indicator is the visible half; the other
+    /// half is that frames after a release must not reach the next utterance.
+    StopCapture,
     SetStatus(&'static str),
     AppendEntry {
         kind: &'static str,
@@ -239,7 +243,7 @@ impl<S: Transport> Session<S> {
         }
         self.holding = false;
         self.hold_deadline = None;
-        let mut effects = vec![Effect::SetButtonActive(false)];
+        let mut effects = vec![Effect::SetButtonActive(false), Effect::StopCapture];
         if self.interrupting {
             if self.frames_this_hold == 0 {
                 self.interrupting = false;
@@ -284,7 +288,11 @@ impl<S: Transport> Session<S> {
 
     /// One PCM16 chunk from the audio worklet, already base64-encoded.
     pub fn audio_chunk(&mut self, pcm: String) -> Vec<Effect> {
-        if self.blocked {
+        // `holding` is the same rule as `blocked`: a frame the user is no longer
+        // speaking must not reach the buffer. The worklet can still be winding
+        // down when this arrives, so the core drops it rather than relying on the
+        // page having stopped the tracks already.
+        if self.blocked || !self.holding {
             return Vec::new();
         }
         // Counted for every chunk the machine accepts, whether it goes out at once
@@ -424,7 +432,8 @@ impl<S: Transport> Session<S> {
             // same empty-buffer commit the release path refuses. The cap must not be
             // the hole through which it comes back.
             self.holding = false;
-            return self.end_hold_without_audio(vec![Effect::SetButtonActive(false)]);
+            return self
+                .end_hold_without_audio(vec![Effect::SetButtonActive(false), Effect::StopCapture]);
         }
         // Hand over what has been said and stop feeding. The user is told,
         // because the alternative is the audio after this point going nowhere.
@@ -670,6 +679,32 @@ mod tests {
                 },
                 ClientFrame::Commit,
             ]
+        );
+    }
+
+    /// Letting go closes the microphone: the page stops the tracks, and a frame
+    /// already in flight must not land in the next utterance either.
+    #[test]
+    fn a_release_stops_the_microphone_and_drops_late_frames() {
+        let mut session = session();
+        session.press(0);
+        session.on_socket_open();
+        session.on_server_frame(READY, 0);
+        session.audio_chunk("AAA=".to_string());
+        let effects = session.release();
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::StopCapture)),
+            "release must ask the page to close the microphone"
+        );
+
+        let before = frames(&session).len();
+        session.audio_chunk("LATE=".to_string());
+        assert_eq!(
+            frames(&session).len(),
+            before,
+            "a frame after release is not part of any hold"
         );
     }
 

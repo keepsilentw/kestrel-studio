@@ -457,9 +457,12 @@ openai 面须置 compat 位 `stream_include_usage = true`，否则全程 `usage:
     worklet 的每一帧仍照发 `{"type":"audio"}`，中继也照 append 进上游的输入缓冲——直到上游
     拒绝（`blocked` / `refused`）为止。两套同形（`voice_core::audio_chunk` 只看 `blocked`
     不看 `holding`；`nest/client/scripts/voice.ts` 的 `onmessage` 只看 `blocked` 与 `ready`）。
-    于是两轮之间的环境声会进了下一次提交。这条**没改**：一是它不在本次范围内，二是它正好是
-    打断能盖话的原因（按下之前那句话已经在缓冲里了）。要不要在松手时收麦，是个产品口径，
-    要你定。理由与逐条定位在 [implementation-notes.md](./implementation-notes.md) §32。
+    于是两轮之间的环境声会进了下一次提交。**2026-11-20 决定并实现：松手即收麦。**
+    核心在 `release` 与 25 秒上限时发 `StopCapture`，页面停掉音轨（浏览器录音指示灯随之熄灭）；
+    下一按重新开麦，但 AudioContext 复用——Chrome 对每页能创建的上下文个数有上限。核心侧
+    `audio_chunk` 现在同时看 `!holding || blocked`，所以松手瞬间还在路上的那一帧也不会落进
+    下一句。**空闲保活仍未做**：上游 180 秒无响应会关会话，客户端目前只提示「再按一次继续」。
+    原有定位在 [implementation-notes.md](./implementation-notes.md) §32。
   - **空闲保活未做**：上游 180 秒无响应即关闭会话（close code `1007`），现由客户端提示
     "再按一次继续"并重新取票重连——重连后上游上下文重置。
   - **并发通话数已评估（2026-11-09，读数在 [verification.md](./verification.md) §45）：第一个约束不是带宽**。

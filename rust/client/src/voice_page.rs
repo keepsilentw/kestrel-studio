@@ -180,6 +180,7 @@ fn apply(shared: &Handle, effects: Vec<Effect>) {
         match effect {
             Effect::OpenSocket => open_socket(shared),
             Effect::StartCapture => start_capture(shared),
+            Effect::StopCapture => shared.audio.borrow_mut().stop_capture(),
             Effect::SetStatus(text) => shared.page.borrow().dom.status.set_text_content(Some(text)),
             Effect::AppendEntry { kind, text } => append_entry(shared, kind, &text),
             Effect::ShowAsset { kind, url } => append_asset(shared, &kind, &url),

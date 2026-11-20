@@ -187,6 +187,12 @@ interface Capture {
 }
 
 let capture: Capture | null = null;
+/**
+ * Kept across holds on purpose: Chrome caps the number of AudioContexts a page may
+ * create, so releasing stops the tracks (the microphone really goes off) but the
+ * context is reused by the next press.
+ */
+let audioContext: AudioContext | null = null;
 let playHead = 0;
 /**
  * The chunks still on the playback schedule, each with the time it finishes. Kept
@@ -238,27 +244,44 @@ function stopCapture(current: Capture): void {
   }
 }
 
-function playChunk(base64: string): void {
+/** Release the microphone; the AudioContext stays alive for the next hold. */
+function stopHoldingCapture(): void {
   if (capture === null) {
+    return;
+  }
+  const current = capture;
+  capture = null;
+  try {
+    stopCapture(current);
+  } catch {
+    // A track that is already gone must not stop the commit that follows.
+  }
+}
+
+function playChunk(base64: string): void {
+  // Playback lives on the page's context, not on the capture: a release stops the
+  // microphone, and the answer that was just committed still has to be heard.
+  const context = audioContext;
+  if (context === null) {
     return;
   }
   const bytes = base64ToBytes(base64);
   const samples = new Int16Array(bytes.buffer, bytes.byteOffset, Math.floor(bytes.byteLength / 2));
-  const buffer = capture.context.createBuffer(1, samples.length, SAMPLE_RATE);
+  const buffer = context.createBuffer(1, samples.length, SAMPLE_RATE);
   const channel = buffer.getChannelData(0);
   for (let index = 0; index < samples.length; index += 1) {
     channel[index] = samples[index] / 0x8000;
   }
 
-  const source = capture.context.createBufferSource();
+  const source = context.createBufferSource();
   source.buffer = buffer;
-  source.connect(capture.context.destination);
+  source.connect(context.destination);
   // Queued end to end rather than started on arrival, so consecutive deltas do
   // not overlap or leave gaps.
-  playHead = Math.max(playHead, capture.context.currentTime);
+  playHead = Math.max(playHead, context.currentTime);
   source.start(playHead);
   playHead += buffer.duration;
-  const now = capture.context.currentTime;
+  const now = context.currentTime;
   scheduled = scheduled.filter((entry) => entry.endsAt > now);
   scheduled.push({ source, endsAt: playHead });
 }
@@ -621,7 +644,7 @@ function closeTurn(): void {
  * says it closed it — and an empty interrupt is still an interrupt, so `release`
  * reads `framesThisHold` the same way it always has.
  */
-function interruptPress(): void {
+async function interruptPress(): Promise<void> {
   holding = true;
   blocked = false;
   framesThisHold = 0;
@@ -636,6 +659,50 @@ function interruptPress(): void {
   } else {
     setStatus('正在连接…');
   }
+  try {
+    // The previous release stopped the tracks; interrupting is a new hold and
+    // needs the microphone back, or the words that interrupt say nothing.
+    await openHoldingCapture();
+  } catch (error) {
+    appendEntry('error', error instanceof Error ? error.message : String(error));
+    release();
+    setStatus('按住按钮开始说话');
+  }
+}
+
+/**
+ * Opens the microphone for a hold, once. A release stops it, so every hold (a
+ * normal one or an interrupting one) has to come through here; the AudioContext
+ * itself stays alive because Chrome caps how many a page may create.
+ */
+async function openHoldingCapture(): Promise<void> {
+  if (capture !== null) {
+    return;
+  }
+  audioContext ??= await openAudio();
+  if (audioContext.state === 'suspended') {
+    await audioContext.resume();
+  }
+  capture = await startCapture(audioContext);
+  capture.node.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
+    // Not holding means the user let go; a frame already in flight must not
+    // reach the next utterance (docs/architecture.md §11).
+    if (!holding || blocked) {
+      return;
+    }
+    // Counted for every chunk accepted, whether it goes out now or lands in
+    // `pending`: the question is "did this press capture audio", not "did it
+    // reach the socket yet".
+    framesThisHold += 1;
+    const pcm = bytesToBase64(new Uint8Array(event.data));
+    if (ready) {
+      send({ type: 'audio', pcm });
+    } else {
+      // The first press has to open the session; nothing can be sent until the
+      // upstream has accepted `session.update`.
+      pending.push(pcm);
+    }
+  };
 }
 
 async function press(): Promise<void> {
@@ -647,7 +714,7 @@ async function press(): Promise<void> {
     // the answer is speaking the user is talking over it, and that is an
     // interruption, not a queue jump (docs/architecture.md §11.6).
     if (spoke) {
-      interruptPress();
+      await interruptPress();
     }
     return;
   }
@@ -658,27 +725,7 @@ async function press(): Promise<void> {
   setStatus('正在听…');
 
   try {
-    if (capture === null) {
-      const context = await openAudio();
-      capture = await startCapture(context);
-      capture.node.port.onmessage = (event: MessageEvent<ArrayBuffer>) => {
-        if (blocked) {
-          return;
-        }
-        // Counted for every chunk accepted, whether it goes out now or lands in
-        // `pending`: the question is "did this press capture audio", not "did it
-        // reach the socket yet".
-        framesThisHold += 1;
-        const pcm = bytesToBase64(new Uint8Array(event.data));
-        if (ready) {
-          send({ type: 'audio', pcm });
-        } else {
-          // The first press has to open the session; nothing can be sent until
-          // the upstream has accepted `session.update`.
-          pending.push(pcm);
-        }
-      };
-    }
+    await openHoldingCapture();
     await ensureSocket();
     if (ready) {
       setStatus('正在听…');
@@ -702,6 +749,7 @@ function release(): void {
   holding = false;
   clearHoldTimer();
   button.classList.remove('voice-button-active');
+  stopHoldingCapture();
   if (interrupting) {
     if (framesThisHold === 0) {
       interrupting = false;

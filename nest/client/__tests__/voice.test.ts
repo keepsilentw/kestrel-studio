@@ -224,6 +224,11 @@ async function socketAfterPress(): Promise<FakeWebSocket> {
   await vi.waitFor(() => {
     expect(FakeWebSocket.instances).toHaveLength(1);
   });
+  // A press now opens the microphone asynchronously (a release stops it), so the
+  // worklet is not there the instant the socket is.
+  await vi.waitFor(() => {
+    expect(FakeAudioWorkletNode.instances.length).toBeGreaterThan(0);
+  });
   const socket = FakeWebSocket.instances[0];
   if (socket === undefined) {
     throw new Error('press did not open a socket');
@@ -231,9 +236,22 @@ async function socketAfterPress(): Promise<FakeWebSocket> {
   return socket;
 }
 
-/** A chunk of microphone audio, as the worklet would deliver it. */
+/** Press and wait for that press's own worklet; each hold gets a new one. */
+async function pressAgain(): Promise<void> {
+  const before = FakeAudioWorkletNode.instances.length;
+  press();
+  await vi.waitFor(() => {
+    expect(FakeAudioWorkletNode.instances.length).toBeGreaterThan(before);
+  });
+}
+
+/**
+ * A chunk of microphone audio, as the worklet would deliver it. The *latest* node:
+ * a release stops the tracks and the next press builds a new one, so the first
+ * node's handler is gone by the time a second hold starts.
+ */
 function emitMicChunk(): void {
-  const node = FakeAudioWorkletNode.instances[0];
+  const node = FakeAudioWorkletNode.instances.at(-1);
   node?.port.onmessage?.({ data: new ArrayBuffer(4) });
 }
 
@@ -339,6 +357,37 @@ describe('会话就绪前后', () => {
     expect(socket.frames().map((frame) => frame.type)).toEqual(['start', 'audio', 'commit']);
   });
 
+  it('松手收麦：旧 worklet 不再收帧，下一次按住重新开一个', async () => {
+    stubTicket();
+    await boot();
+    const socket = await socketAfterPress();
+    socket.open();
+    socket.emit({ type: 'ready', conversationId: 7 });
+
+    emitMicChunk();
+    const first = FakeAudioWorkletNode.instances.at(-1);
+    release();
+
+    expect(first?.port.onmessage).toBeNull();
+    emitMicChunk();
+    expect(socket.frames().map((frame) => frame.type)).toEqual(['start', 'audio', 'commit']);
+
+    // The committed turn has to end before a new hold is allowed, then that hold
+    // gets a fresh worklet (and the same AudioContext).
+    socket.emit({ type: 'done' });
+    await vi.waitFor(() => {
+      expect(statusText()).toBe('按住按钮开始说话');
+    });
+    await pressAgain();
+    emitMicChunk();
+    expect(socket.frames().map((frame) => frame.type)).toEqual([
+      'start',
+      'audio',
+      'commit',
+      'audio',
+    ]);
+  });
+
   it('ready 之后松开按钮立刻发 commit', async () => {
     stubTicket();
     await boot();
@@ -434,7 +483,7 @@ describe('单段时长上限', () => {
     expect(framesOf(socket)).toEqual(['start']);
 
     // 下一按照常工作：一次拒绝不该赔掉整通电话
-    press();
+    await pressAgain();
     emitMicChunk();
     release();
     expect(framesOf(socket)).toEqual(['start', 'audio', 'commit']);
@@ -484,7 +533,7 @@ describe('单段时长上限', () => {
     expect(statusText()).toBe('正在思考…');
     socket.emit({ type: 'done' });
 
-    press();
+    await pressAgain();
     await vi.waitFor(() => {
       expect(statusText()).toBe('正在听…');
     });
@@ -556,7 +605,9 @@ describe('打断正在播的回答', () => {
 
   it('打断期间松手，话先存着，等本轮结束才 commit', async () => {
     const socket = await answering();
-    press();
+    // The interrupting hold opens its own microphone (the previous release closed
+    // the last one), so wait for it before the chunk.
+    await pressAgain();
     await vi.waitFor(() => {
       expect(framesOf(socket)).toHaveLength(4);
     });

@@ -506,6 +506,12 @@ flowchart LR
 服务端只做转发与编排，**不做音频编解码**——音频在两个方向上都是 base64 的裸 PCM16 单声道 24kHz，
 上游给的字符串原样转给浏览器。
 
+**麦克风跟着按住走**（2026-11-20）：`release` 与 25 秒上限都让核心发 `StopCapture`，页面停掉
+音轨（浏览器录音指示灯熄灭），下一按重新开麦；**AudioContext 复用**，因为 Chrome 对每页可创建
+的上下文个数有上限。核心的 `audio_chunk` 在 `!holding || blocked` 时直接丢弃，所以松手瞬间还在
+路上的那一帧不会落进下一句。打断是**一次新的按住**，它自己重新开麦——否则上一句的 release 已经
+把麦克风关了。中继与协议没有变化。
+
 线上还需要一个**单独的 nginx location**（`location = /api/voice`）：现有反代片段为了让 SSE 保持
 普通长连接而显式清空了 `Connection`，那会一并杀掉 WS 的 upgrade。见 [deployment.md](deployment.md) §3。
 
