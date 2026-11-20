@@ -33,6 +33,24 @@ STAGING="/tmp/kestrel-studio-deploy"
 log() { printf '\033[36m==>\033[0m %s\n' "$1"; }
 fail() { printf '\033[31m!!\033[0m %s\n' "$1" >&2; exit 1; }
 
+# The image is tagged with the commit it was built from, so a bad deploy has a way
+# back that is not "recompile and hope": `make rollback IMAGE=<tag>`. A dirty tree
+# keeps a `-dirty` suffix — the image really does contain those uncommitted edits,
+# and a plain commit sha would claim otherwise.
+revision() {
+  if ! git -C "$PROJECT_ROOT" rev-parse --short HEAD >/dev/null 2>&1; then
+    echo "nogit"
+    return
+  fi
+  local sha
+  sha="$(git -C "$PROJECT_ROOT" rev-parse --short HEAD)"
+  if [ -n "$(git -C "$PROJECT_ROOT" status --porcelain --untracked-files=normal)" ]; then
+    sha="${sha}-dirty"
+  fi
+  echo "$sha"
+}
+REVISION="$(revision)"
+
 read_api_key() {
   python3 - <<'PY'
 import json
@@ -121,10 +139,17 @@ fi
 log "building image on the host (FROM scratch: no pull, no compile)"
 ssh "$HOST" "cd '${REMOTE_DIR}' && HOST_PORT='${HOST_PORT}' docker compose up -d --build"
 
+# Tagged after the build, not before: compose is what names :latest. A tagging
+# failure must not fail a deploy that already shipped, so it only warns — the
+# consequence is that this one build has no fast way back.
+log "tagging the image as kestrel-studio:${REVISION}"
+ssh "$HOST" "docker tag kestrel-studio:latest 'kestrel-studio:${REVISION}'" \
+  || log "  warning: tagging failed; this build cannot be rolled back to by tag"
+
 log "waiting for the app to answer"
 for _ in $(seq 1 60); do
   if ssh "$HOST" "curl -sf -o /dev/null 'http://127.0.0.1:${HOST_PORT}/login'"; then
-    log "deployed -> http://${REMOTE_IP}:${HOST_PORT}"
+    log "deployed ${REVISION} -> http://${REMOTE_IP}:${HOST_PORT}"
     exit 0
   fi
   sleep 3

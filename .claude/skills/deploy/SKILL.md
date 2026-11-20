@@ -33,11 +33,20 @@ After `docker compose up -d --build` the script polls
 `http://127.0.0.1:${HOST_PORT}/login` on the host for up to 180 s and fails if
 the app never answers.
 
+It then tags the image it just built as `kestrel-studio:<short commit>` (with a
+`-dirty` suffix when the worktree has uncommitted changes). That tag is the fast
+way back: `make rollback IMAGE=<tag>` retags `latest` and recreates the container
+without zig, an upload or a rebuild. Tags only exist for builds made after
+2026-11-20.
+
 ## Operational commands
 
 | Command | Effect |
 |---|---|
-| `make deploy` | Full redeploy |
+| `make deploy` | Full redeploy (tags the image with the commit it was built from) |
+| `make rollback IMAGE=<tag>` | Put a previous image back; no rebuild. Without `IMAGE` it lists the host's tags |
+| `make tier-wasm` / `make tier-nest` | Persist `CLIENT_BUNDLE` in the host's `.env` and recreate the container (survives later deploys) |
+| `make backup-now` / `make backup-cron` | Run the hot backup now / install the daily 03:30 job on the host |
 | `scripts/bootstrap-host.sh` | One-time per fresh host: checks that Docker works. Nothing to cache under the Rust pipeline; pass `NEST_BASE_IMAGES=1` only to roll back to the Node pipeline |
 | `make deploy-status` | Container state |
 | `make deploy-logs` | Follow logs |

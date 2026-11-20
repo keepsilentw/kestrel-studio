@@ -75,7 +75,8 @@ endef
 .PHONY: check test test-watch
 .PHONY: clean run-rust build-linux
 .PHONY: deploy deploy-status deploy-logs deploy-restart deploy-down
-.PHONY: backup
+.PHONY: rollback tier-wasm tier-nest
+.PHONY: backup backup-now backup-cron
 .PHONY: census census-prod
 
 help:
@@ -108,10 +109,14 @@ help:
 	@echo "    make run-rust               本机前台运行 Rust 服务（占用 $(PORT)）"
 	@echo "    make build-linux            交叉编译静态 musl 二进制（需 zig + cargo-zigbuild）"
 	@echo "    make deploy                 一键部署到 $(DEPLOY_HOST)"
+	@echo "    make rollback IMAGE=<tag>   把镜像切回某次构建（deploy 会按提交打标签；不带 IMAGE 列标签）"
+	@echo "    make tier-wasm / tier-nest  持久切换页面加载哪份客户端（写进宿主机 .env，见 docs/deployment.md §2.2）"
 	@echo "    make deploy-status / deploy-logs / deploy-restart / deploy-down"
 	@echo "    make deploy-nest            打包并构建 Nest 那套的镜像（不启动，见目标注释）"
 	@echo "    make nest-up / nest-down / nest-logs   第二后端的启停与日志（共用同一个库，先读 §13.2）"
 	@echo "    make backup                 热备份数据库与 storage/（在宿主机执行；保留 $(BACKUP_KEEP_DAYS) 天）"
+	@echo "    make backup-now             立刻在宿主机跑一次 make backup"
+	@echo "    make backup-cron            在宿主机安装每日 03:30 的备份任务（重建宿主机后要重跑）"
 	@echo "    make storage-report         按账号汇总资产字节数（只读）"
 	@echo ""
 	@echo "  单个包的 check/test 直接调 pnpm --dir 或 cargo（这里只保留跨包编排）。"
@@ -291,6 +296,21 @@ build-linux:
 deploy: build-linux build-wasm
 	./scripts/deploy.sh
 
+# `deploy.sh` tags every build with the commit it was made from, so a bad release
+# has a way back that does not need zig, an upload, or a rebuild. Without IMAGE the
+# script lists the tags the host is holding.
+rollback:
+	./scripts/rollback.sh "$(IMAGE)"
+
+# The durable tier switch. Writing `CLIENT_BUNDLE` into the host's `.env` is what
+# makes it survive `make deploy`; passing it on a `docker compose up -d` command
+# line only survives until the next deploy (docs/deployment.md §2.2).
+tier-wasm:
+	./scripts/set-client-bundle.sh wasm
+
+tier-nest:
+	./scripts/set-client-bundle.sh nest
+
 # The second backend (roadmap.md §4.5). This ships the context and builds the
 # image, then stops: the two processes share one SQLite file and one storage
 # directory, and three of their writes carry no process ownership — the boot
@@ -348,6 +368,16 @@ backup:
 			\( -name 'kestrel-studio-*.db' -o -name 'storage-*.tar.gz' \) \
 			-mtime +$(BACKUP_KEEP_DAYS) -delete \
 		&& echo "backup: $(BACKUP_DIR)/kestrel-studio-$$STAMP.db"
+
+# The same target, run where it actually works: `backup` shells out to
+# `docker compose exec`, so on a dev machine it only ever fails.
+backup-now:
+	ssh $(DEPLOY_HOST) "cd $(DEPLOY_DIR) && make backup"
+
+# Host state, not container state: a rebuilt host silently loses the schedule
+# (the daily entry is described in docs/deployment.md §2.5).
+backup-cron:
+	./scripts/install-backup-cron.sh
 
 # Read-only. Works with the host's old sqlite3 because it uses plain GROUP BY.
 storage-report:

@@ -63,6 +63,17 @@ C 侧编得过、链接过不去，2026-10-30 当天删掉换成 zigbuild，全�
 （Nest 时代 1.27 GB）、静态 ELF 直接跑、`docker stats` RSS 1.2 MiB，`/login` / 静态资源 /
 鉴权跳转 / 公网反代 / 一轮真实流式对话均已确认，证据见 [verification.md](verification.md) §13。
 
+**每次部署都留一个可回滚的锚**（2026-11-20 起）：`deploy.sh` 在宿主机上构建完镜像后，会把它额外
+打成 `kestrel-studio:<短提交>`（工作区脏时是 `<短提交>-dirty`）。回滚因此不再需要重新交叉编译与上传：
+
+```bash
+make rollback IMAGE=<tag>   # 不带 IMAGE 会列出宿主机上现存的标签
+```
+
+回滚只把 `kestrel-studio:latest` 重新指向那个镜像并重建容器，`.env`、`data/`、`storage/` 一行不动。
+两条边界：标签从这次改动之后的第一次部署才开始有，之前的构建没有标签；标签按每次部署累积
+（每份约 10 MB），需要时在宿主机上手工 `docker rmi`。
+
 ### 1.1 把 Nest 管线重新上线（原「回滚到 Node 管线」）
 
 **2026-11-07 起这一节不是回滚手册**：roadmap.md §4.5 撤销了退役，`nest/` 与 `rust/` 两套后端
@@ -251,6 +262,15 @@ ssh lavo-test "cd /opt/kestrel-studio && docker compose up -d"
 2. **`make deploy` 会把它带回 `nest`**：脚本不转发这个变量，所以下一次部署自动回滚。想让它长期
    保持 `wasm`，就把它写进服务器上那份 `.env`（`deploy.sh` 永不覆盖该文件，改它本来就是运维的活）——
    这是**长期启用**的唯一写法，别以为 `docker compose up -d` 的效果能扛过一次部署。
+   2026-11-20 起这一步有一条命令，不必手改 `.env`：
+
+   ```bash
+   make tier-wasm    # 写 CLIENT_BUNDLE=wasm 进宿主机 .env，重建容器，回读启动日志的 client=
+   make tier-nest    # 同一件事，回到 nest
+   ```
+
+   脚本只换这一行（其余键与 0600 权限保持原样），最后从 `main.rs` 的启动行 `client=` 回读核对，
+   而不是「文件写进去了就算成功」。
 3. **启动日志会写用了哪个**：`client=nest` / `client=wasm`（`main.rs`）。判断"用户拿到的是哪份
    客户端"不必猜，也不必读宿主机环境变量。
 4. **它按 `nest` 起、按 `wasm` 灰度时，出错是页面级而不是服务级**：接口、SSR、登录都还在跑同一份
@@ -317,6 +337,11 @@ PATH=/usr/bin:/bin
 ```
 
 第一次自动执行要等 03:30，尚未观察到；日志追加到 `/opt/kestrel-backups/backup.log`。
+
+**重建宿主机后这条 cron 不会自己回来**。`make backup-cron` 把上面同一份内容重新装到
+`/etc/cron.d/kestrel-backup`、建好备份目录，并检查 cron 守护进程是不是 active；`make backup-now`
+立刻在宿主机跑一次 `make backup`（`make backup` 本身只能在宿主机上跑，它用的是
+`docker compose exec`）。两条都是开发机发起的 SSH 动作。
 
 ## 2.6 wasm 预压缩（2026-11-19）
 
@@ -427,6 +452,9 @@ kestrel-studio 的站点配置：`/opt/1panel/www/conf.d/try.kestrel.justwork.li
 | 命令 | 效果 |
 |---|---|
 | `make deploy` | 完整重新部署：先 `build-linux` + `build-wasm`，再跑 `scripts/deploy.sh` |
+| `make rollback IMAGE=<tag>` | 把镜像切回某次构建（每次 `make deploy` 会按提交打标签；不带 `IMAGE` 列出宿主机上的标签） |
+| `make tier-wasm` / `make tier-nest` | 把 `CLIENT_BUNDLE` 写进宿主机 `.env` 并重建容器（持久档位，见 §2.2） |
+| `make backup-now` / `make backup-cron` | 立刻在宿主机跑一次热备份 / 安装每日 03:30 的备份任务（见 §2.5） |
 | `scripts/bootstrap-host.sh` | 每台新宿主机执行一次，检查 Docker 可用；只有回滚 Node 管线时才需要它拉两个基础镜像（`NEST_BASE_IMAGES=1`） |
 | `make deploy-status` | 查看容器状态 |
 | `make deploy-logs` | 跟随容器日志 |
