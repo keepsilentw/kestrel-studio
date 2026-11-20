@@ -570,6 +570,62 @@ async fn super_count(state: &AppState) -> i64 {
 }
 
 #[tokio::test]
+async fn the_site_wide_list_pages_and_keeps_its_filters() {
+    let (app, state) = app().await;
+    let (admin_cookie, _) = boss(&state).await;
+    let (_, walker_id) = account(&state, "walker", Role::User).await;
+    for index in 0..51 {
+        state
+            .conversations
+            .create(walker_id, &format!("会话 {index}"))
+            .await
+            .expect("conversation");
+    }
+
+    let first = text_body(
+        app.clone()
+            .oneshot(get("/admin/conversations", Some(&admin_cookie)))
+            .await
+            .expect("first page"),
+    )
+    .await;
+    assert!(first.contains("第 1 页"), "{first}");
+    assert!(first.contains("更早的"), "{first}");
+    assert!(!first.contains("较新的"), "nothing before page 1: {first}");
+
+    let second = text_body(
+        app.clone()
+            .oneshot(get("/admin/conversations?page=2", Some(&admin_cookie)))
+            .await
+            .expect("second page"),
+    )
+    .await;
+    assert!(second.contains("第 2 页"), "{second}");
+    assert!(second.contains("较新的"), "{second}");
+    assert!(
+        !second.contains("更早的"),
+        "51 rows end on page 2: {second}"
+    );
+
+    // The pager repeats the filters; `&` is escaped in the attribute, the query is not.
+    let filtered = text_body(
+        app.clone()
+            .oneshot(get(
+                &format!("/admin/conversations?page=2&user={walker_id}&q=%E4%BC%9A%E8%AF%9D"),
+                Some(&admin_cookie),
+            ))
+            .await
+            .expect("filtered page"),
+    )
+    .await;
+    assert!(
+        filtered.contains(&format!("user={walker_id}")),
+        "{filtered}"
+    );
+    assert!(filtered.contains("q=%E4%BC%9A%E8%AF%9D"), "{filtered}");
+}
+
+#[tokio::test]
 async fn the_token_page_lists_active_tokens_with_their_owner() {
     let (app, state) = app().await;
     let (admin_cookie, _admin_id) = boss(&state).await;
