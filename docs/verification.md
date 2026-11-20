@@ -3458,6 +3458,8 @@ cargo run --manifest-path rust/server/Cargo.toml -- \
 ### 52.3 没证的部分
 
 - 线上 429、`Secure` Cookie、CSP 与 `/healthz` 的运行时读数：未部署，未验。
+  **CSP 已随后续部署上线**：线上 `/login` 的响应头可见 CSP、HSTS、`nosniff`、`X-Frame-Options`，
+  与 §63 记的是同一条链；429 与 `Secure` Cookie 没有单独复验。
 - `make backup` 的宿主机路径（`docker compose exec`、`/opt/kestrel-backups`、cron）：未在本机执行。
 - 模型流超时：没有构造半开连接的上游，只做了编译与既有流式测试；180 秒边界未实测。
 - clippy 的 **34 条**既有告警与 rustfmt 的全仓差异已清掉；`make check` 现在包含两个 crate 的
@@ -3599,7 +3601,7 @@ Nest 的同一套解析测试。
 ### 57.2 没证的
 
 - 没有构造「用量已接近上限」的真实生成来观察拒绝文案；只做了单元层的用量与签名断言。
-- 未部署；`ASSET_QUOTA_BYTES` 在线上仍是 compose 默认 2 GiB。
+- **已随 §61（11:15）的部署上线**；`ASSET_QUOTA_BYTES` 在线上仍是 compose 默认 2 GiB。
 - 没有做按天/按月的历史用量报表，也没有在管理面展示用量。
 
 ## 58. 管理面显示账号用量（2026-11-19）
@@ -3620,7 +3622,7 @@ Nest 的同一套解析测试。
 ### 58.2 没证的
 
 - 没有登录 `/admin` 在浏览器里看这两列的实际排版；只做了服务层与模板层编译/断言。
-- 未部署。
+- **已随 §61 的部署上线**；排版仍没有浏览器读数。
 
 ## 59. 热备份与存储报表实测（2026-11-19 10:58）
 
