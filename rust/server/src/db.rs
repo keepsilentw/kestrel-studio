@@ -1,6 +1,8 @@
 use std::path::Path;
 
-use sqlx::sqlite::{SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions};
+use sqlx::sqlite::{
+    SqliteConnectOptions, SqliteJournalMode, SqlitePool, SqlitePoolOptions, SqliteSynchronous,
+};
 use sqlx::Row;
 
 use crate::config::AppConfig;
@@ -151,6 +153,22 @@ const ADDED_COLUMNS: [(&str, &str, &str); 8] = [
     ("generation_tasks", "claimed_at", "INTEGER"),
 ];
 
+/// The pragmas every file-backed connection runs with, in one place so the test
+/// below checks what `open()` really applies instead of a copy of it.
+fn connect_options(path: &Path) -> SqliteConnectOptions {
+    SqliteConnectOptions::new()
+        .filename(path)
+        .create_if_missing(true)
+        .foreign_keys(true)
+        .journal_mode(SqliteJournalMode::Wal)
+        // WAL + NORMAL: a commit appends to the WAL without fsyncing it. Measured on
+        // the deploy host 2026-11-20 (docs/verification.md §68): 1000 autocommit
+        // inserts took 1519-1520 ms at FULL and 35 ms at NORMAL, and every journal
+        // delta is its own commit. The price is the last few committed transactions
+        // on a power cut, not corruption — and a snapshot backup runs nightly.
+        .synchronous(SqliteSynchronous::Normal)
+}
+
 pub async fn open(config: &AppConfig) -> Result<SqlitePool, crate::error::AppError> {
     let path = config.database_file.as_str();
     if let Some(parent) = Path::new(path).parent() {
@@ -159,27 +177,42 @@ pub async fn open(config: &AppConfig) -> Result<SqlitePool, crate::error::AppErr
         }
     }
 
-    let options = SqliteConnectOptions::new()
-        .filename(Path::new(path))
-        .create_if_missing(true)
-        .foreign_keys(true)
-        .journal_mode(SqliteJournalMode::Wal);
-
     let pool = SqlitePoolOptions::new()
-        // SQLite takes one writer at a time, and the pool is deliberately one
-        // connection so a transaction can never contend with itself. Note for the
-        // next reader: sqlx opens a **deferred** `BEGIN` here, not `BEGIN IMMEDIATE`,
-        // which is why the journal allocates its cursor in a single statement instead
-        // of in a transaction (docs/conversation/events.rs, docs/architecture.md §13.2).
-        .max_connections(1)
-        .connect_with(options)
+        // SQLite allows one writer at a time, but any number of readers under WAL.
+        // With a single connection every page, auth lookup and asset query queued
+        // behind the journal's per-delta commits. Writers still serialise on the
+        // database write lock (5 s busy timeout) and `conversation/events.rs`
+        // allocates `seq` inside the INSERT so two writers cannot pick the same one.
+        .max_connections(config.db_pool_size)
+        .connect_with(connect_options(Path::new(path)))
         .await
         .map_err(|error| {
             crate::error::AppError::internal(anyhow::anyhow!("opening {path}: {error}"))
         })?;
 
     apply_schema(&pool).await?;
+    log_pool(&pool, config.db_pool_size).await;
     Ok(pool)
+}
+
+/// Reads the pragmas back instead of logging what was asked for — the point of the
+/// line is that the running process really has them, which is also how a deploy is
+/// checked (docs/verification.md §68).
+async fn log_pool(pool: &SqlitePool, connections: u32) {
+    let synchronous: i64 = sqlx::query_scalar("PRAGMA synchronous")
+        .fetch_one(pool)
+        .await
+        .unwrap_or(-1);
+    let journal: String = sqlx::query_scalar("PRAGMA journal_mode")
+        .fetch_one(pool)
+        .await
+        .unwrap_or_default();
+    tracing::info!(
+        connections,
+        synchronous,
+        journal_mode = %journal,
+        "sqlite pool ready"
+    );
 }
 
 /// Brings a connection up to the current schema, pragmas included.
@@ -341,6 +374,35 @@ pub async fn open_in_memory() -> SqlitePool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The pragmas are the point of `connect_options`, and `:memory:` cannot show
+    /// them (it runs `journal_mode=MEMORY`), so this opens a throwaway file. A
+    /// regression to `synchronous=FULL` would show up as `2` here — and as the
+    /// 1.5 s-per-1000-commits cost measured in docs/verification.md §68.
+    #[tokio::test]
+    async fn a_file_database_runs_wal_with_normal_synchronous() {
+        let path =
+            std::env::temp_dir().join(format!("kestrel-db-pragmas-{}.db", uuid::Uuid::new_v4()));
+        let pool = SqlitePoolOptions::new()
+            .max_connections(2)
+            .connect_with(connect_options(&path))
+            .await
+            .expect("file sqlite");
+        let synchronous: i64 = sqlx::query_scalar("PRAGMA synchronous")
+            .fetch_one(&pool)
+            .await
+            .expect("synchronous");
+        let journal: String = sqlx::query_scalar("PRAGMA journal_mode")
+            .fetch_one(&pool)
+            .await
+            .expect("journal_mode");
+        assert_eq!(synchronous, 1, "NORMAL is 1; FULL would be 2");
+        assert_eq!(journal.to_lowercase(), "wal");
+        pool.close().await;
+        for suffix in ["", "-wal", "-shm"] {
+            let _ = std::fs::remove_file(format!("{}{suffix}", path.display()));
+        }
+    }
 
     #[tokio::test]
     async fn schema_is_idempotent_and_adds_later_columns() {

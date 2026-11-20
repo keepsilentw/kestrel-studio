@@ -36,6 +36,10 @@ services:
       - PORT=${HOST_PORT:-8848}
       - RUST_LOG=${RUST_LOG:-info}
       - CLIENT_BUNDLE=${CLIENT_BUNDLE:-nest}
+      # SQLite connections (docs/architecture.md §13.2, verification.md §68).
+      # Writers still serialise on SQLite's write lock; the extra connections keep
+      # page/auth/asset reads from queueing behind the journal's per-delta commits.
+      - DB_POOL_SIZE=${DB_POOL_SIZE:-4}
       # Per-account media budget. Deployment config, not a secret, so it follows
       # PORT/RUST_LOG into compose instead of the never-rewritten `.env`; `0`
       # disables the check. Default 2 GiB.

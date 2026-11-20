@@ -10,6 +10,12 @@ const DEFAULT_PUBLIC_BASE_URL: &str = "https://try.kestrel.justwork.link";
 /// Per-account media budget. `0` disables the check; the default is a guard rail,
 /// not a product limit, and can be overridden with `ASSET_QUOTA_BYTES`.
 const DEFAULT_ASSET_QUOTA_BYTES: i64 = 2 * 1024 * 1024 * 1024;
+/// SQLite pool size. SQLite still serialises writers, so this buys concurrent
+/// readers (pages, auth, asset lookups), not concurrent commits. Four is enough
+/// for a 2-vCPU host with one public traffic source; the clamp is there because a
+/// fat-fingered env value should not open a thousand connections.
+const DEFAULT_DB_POOL_SIZE: u32 = 4;
+const MAX_DB_POOL_SIZE: u32 = 32;
 const DEFAULT_REASONING_EFFORT: ReasoningEffort = ReasoningEffort::High;
 const REASONING_EFFORTS: [ReasoningEffort; 4] = [
     ReasoningEffort::Minimal,
@@ -73,6 +79,9 @@ pub struct AppConfig {
     pub session_secret: String,
     pub database_file: String,
     pub storage_dir: String,
+    /// Connections the SQLite pool may open. See [`DEFAULT_DB_POOL_SIZE`]: writers
+    /// still serialise, this is for readers.
+    pub db_pool_size: u32,
     pub public_base_url: String,
     pub asset_quota_bytes: i64,
     /// See [`ClientBundle`]: which client the chat and voice pages load.
@@ -104,6 +113,19 @@ fn read_asset_quota() -> i64 {
         .and_then(|raw| raw.parse::<i64>().ok())
         .filter(|value| *value >= 0)
         .unwrap_or(DEFAULT_ASSET_QUOTA_BYTES)
+}
+
+/// A nonsense `DB_POOL_SIZE` falls back to the default rather than refusing to
+/// boot: unlike the client bundle, a wrong pool size is a performance setting, not
+/// a "which code is that page running" decision.
+fn read_db_pool_size() -> u32 {
+    clamp_db_pool_size(read_env("DB_POOL_SIZE").as_deref())
+}
+
+fn clamp_db_pool_size(raw: Option<&str>) -> u32 {
+    raw.and_then(|value| value.trim().parse::<u32>().ok())
+        .unwrap_or(DEFAULT_DB_POOL_SIZE)
+        .clamp(1, MAX_DB_POOL_SIZE)
 }
 
 fn read_reasoning_effort() -> ReasoningEffort {
@@ -203,6 +225,7 @@ impl AppConfig {
             database_file: read_env("DATABASE_FILE")
                 .unwrap_or_else(|| "data/kestrel-studio.db".to_string()),
             storage_dir: read_env("STORAGE_DIR").unwrap_or_else(|| "storage".to_string()),
+            db_pool_size: read_db_pool_size(),
             public_base_url: trim_trailing_slashes(
                 &read_env("PUBLIC_BASE_URL").unwrap_or_else(|| DEFAULT_PUBLIC_BASE_URL.to_string()),
             ),
@@ -269,6 +292,7 @@ impl AppConfig {
             session_secret: "unit-test-secret".to_string(),
             database_file: String::new(),
             storage_dir: storage_dir.to_string(),
+            db_pool_size: 1,
             public_base_url: public_base_url.to_string(),
             asset_quota_bytes: 0,
             super_admin: None,
@@ -285,7 +309,7 @@ impl AppConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::ClientBundle;
+    use super::{clamp_db_pool_size, ClientBundle, DEFAULT_DB_POOL_SIZE, MAX_DB_POOL_SIZE};
 
     /// `docker-compose.yml` writes this name, so the spelling is an interface: parse it
     /// back from the string it prints, and refuse everything else. A typo must not pick
@@ -304,5 +328,18 @@ mod tests {
                 "{raw:?} must not pick a client"
             );
         }
+    }
+
+    /// The pool size is a performance knob, so nonsense falls back instead of
+    /// refusing to boot — but it must never leave the range the pool can honour.
+    #[test]
+    fn the_pool_size_falls_back_and_clamps() {
+        assert_eq!(clamp_db_pool_size(None), DEFAULT_DB_POOL_SIZE);
+        assert_eq!(clamp_db_pool_size(Some("8")), 8);
+        assert_eq!(clamp_db_pool_size(Some(" 8 ")), 8, "trimmed");
+        assert_eq!(clamp_db_pool_size(Some("0")), 1, "zero would deadlock");
+        assert_eq!(clamp_db_pool_size(Some("999")), MAX_DB_POOL_SIZE);
+        assert_eq!(clamp_db_pool_size(Some("-4")), DEFAULT_DB_POOL_SIZE);
+        assert_eq!(clamp_db_pool_size(Some("many")), DEFAULT_DB_POOL_SIZE);
     }
 }

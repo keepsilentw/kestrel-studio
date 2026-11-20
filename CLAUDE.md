@@ -163,7 +163,10 @@ cwd 拼接），且它的 `assets` **不能写 `outDir`**（写了就按 cwd 拼
 
 **两套共用同一个 SQLite 文件与同一个 `storage/`。** `nest/` 那套的镜像与 compose service 已就位
 （`make deploy-nest` 建镜像、`make nest-up` 启动，service 挂在 profile 上，寻常 `make deploy`
-不会拉起它）。`docs/architecture.md` §13.2 那「四处没有进程所有权的写」里，启动收尾、任务 worker、
+不会拉起它）。**两侧的锁参数自 2026-11-20 起不同**：Rust 侧连接池 4（`DB_POOL_SIZE`，默认 4、
+clamp 1..32）+ `synchronous=NORMAL`，Nest 侧仍是 better-sqlite3 单连接 + FULL；依据、代价与目标机
+读数见 `docs/architecture.md` §13.2 与 `docs/verification.md` §68。`docs/architecture.md` §13.2 那
+「四处没有进程所有权的写」里，启动收尾、任务 worker、
 journal 的 `seq` 这三处**已于 2026-11-09 两侧同改到位**：`messages.owner` 标写入者（`rust` / `nest`，
 每套后端一个值）、`generation_tasks.claimed_by` / `claimed_at` 是 worker 的租约、`seq` 算在写语句
 自己身上且游标索引改 UNIQUE。**这批改动天生是双端的**——一张表、一套协议，只改一侧等于没改，所以

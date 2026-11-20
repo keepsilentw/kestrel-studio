@@ -329,6 +329,7 @@ mod tests {
             session_secret: "s".to_string(),
             database_file: String::new(),
             storage_dir: String::new(),
+            db_pool_size: 1,
             public_base_url: "https://example.test".to_string(),
             asset_quota_bytes: 0,
             super_admin: None,

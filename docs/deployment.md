@@ -371,6 +371,25 @@ ASSET_QUOTA_BYTES=1073741824 docker compose up -d   # 改成 1 GiB
 宿主机上可用 `make storage-report` 查看按账号的资产数与字节数（只读，普通 `GROUP BY`，
 兼容宿主自带的 sqlite3 3.7.17）。
 
+## 2.8 SQLite 连接池与 fsync（`DB_POOL_SIZE`，2026-11-20）
+
+compose 注入 `DB_POOL_SIZE=${DB_POOL_SIZE:-4}`，取值 clamp 1..32，非法值回落默认。它只影响
+Rust 服务端（Nest 侧是 better-sqlite3 的同步单连接）。**是部署配置，不进 `.env`**——与
+`PORT` / `RUST_LOG` / `ASSET_QUOTA_BYTES` 同一条规则。改它只是重启容器：
+
+```bash
+ssh lavo-test "cd /opt/kestrel-studio && DB_POOL_SIZE=8 docker compose up -d"
+```
+
+启动日志回读实际生效的 pragma，不靠猜：
+
+```
+sqlite pool ready connections=4 synchronous=1 journal_mode=wal
+```
+
+`synchronous=1` 是 NORMAL（FULL 是 2）。为什么不用 FULL、多连接买到的到底是什么，以及目标机上
+那组 1000 次提交的读数，见 architecture.md §13.2 与 verification.md §68。
+
 ## 3. 对外暴露：openresty 反代
 
 服务器的对外入口是 1Panel 管理的 openresty（容器名形如 `1Panel-openresty-*`，监听 80/443）。

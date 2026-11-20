@@ -889,9 +889,18 @@ WebSocket 的 upgrade 不经过 Express，所以 `AuthenticatedGuard` 对它无�
      「知道坏的只是可量化的那一样」。
 
   对齐的部分也记一句，免得下次重复调查：`journal_mode=WAL` + `foreign_keys=ON` 两侧相同
-  （`database.module.ts:129-130` / `db.rs:118-119`），都不设 busy_timeout（默认各自 5000ms），
-  `synchronous` 都保持 FULL，也没有任何事务跨越网络 I/O 或文件写入。**风险不在锁参数上，在上面
-  这四处缺 owner。**
+  （`database.module.ts` / `db.rs` 的 `connect_options`），都不设 busy_timeout（默认各自 5000ms），
+  也没有任何事务跨越网络 I/O 或文件写入。**风险不在锁参数上，在上面这四处缺 owner。**
+
+  **2026-11-20 起 `synchronous` 两侧不同了**：Rust 侧改成 `NORMAL`（WAL 配下的常规做法），
+  Nest 侧（better-sqlite3）仍是默认 FULL。依据是目标机上的实测：同样 1000 次 autocommit 插入，
+  FULL 1519-1520 ms、NORMAL 35 ms，而 journal 的每个 delta 都是一次提交（verification.md §68）。
+  代价是掉电时可能丢最后几条已提交的事务，不是损坏；夜里那次快照备份是兜底。
+
+  **同一日 Rust 侧的连接池从 1 改成 `DB_POOL_SIZE`（默认 4，clamp 1..32）**：单个连接把**所有读**
+  （页面、鉴权、资产查询）都排在 journal 的逐 delta 提交之后；WAL 允许一个写与多个读同时进行，
+  所以增加的是读并发，不是写并发——写入仍由数据库写锁串行，靠 5 s busy timeout 等待，而 `seq`
+  在 INSERT 里分配，两个写者不会选到同一个值。Nest 侧是 better-sqlite3 的同步单连接，没有对应物。
 
 ### 13.3 现状与未做的部分
 
