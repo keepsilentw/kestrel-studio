@@ -3566,6 +3566,21 @@ Nest 的同一套解析测试。
 - 2026-11-19 10:05 已部署并核对，读数见 §56。
 - 浏览器首次加载 wasm 的耗时变化：没有跑真实浏览器测量。
 
+## 56. wasm 预压缩上线（2026-11-19 10:05）
+
+| 项 | 读数 |
+|---|---|
+| `make deploy` | 最终镜像 `sha256:abc45ea6…`，archive 6.1 MB |
+| 档位 | 部署后按 §2.2 重拨 `CLIENT_BUNDLE=wasm`；启动日志 `client="wasm"` |
+| 容器 | `Up 55 seconds (healthy)`；`/healthz` 本地 200、公网 200 |
+| 公网 wasm（未声明 gzip） | `content-length: 395686`，`vary: Accept-Encoding` |
+| 公网 wasm（声明 gzip） | `content-length: 142377`，`content-encoding: gzip` |
+| `/login` | `x-content-type-options: nosniff`、`x-frame-options: DENY`、`referrer-policy: no-referrer`、CSP 在位 |
+| 启动日志 | 重拨后近 3 分钟 `ERROR` / `WARN` 0 行 |
+
+第一次 `make deploy` 的 release 构建报了一条 `list_by_user` 从未使用的 warning（它只剩测试
+在用）。已改为 `#[cfg(test)]`（提交 `c15790c`）并重新部署；最终镜像的构建没有再出现 warning。
+
 ## 57. 每账号媒体配额（2026-11-19）
 
 `ASSET_QUOTA_BYTES` 默认 2 GiB，`0` 关闭。用量是 `SUM(assets.bytes)` 按会话属主汇总；
@@ -3787,21 +3802,6 @@ Rust 模板包含 `.conversation-search`。
 - 侧栏搜索仍是**已加载行**的本地过滤，不会去服务端搜索未加载的会话。
 - lazy-image issue count=2 仍在，与 §42 的既有结论一致，本轮未重测布局偏移。
 
-## 56. wasm 预压缩上线（2026-11-19 10:05）
-
-| 项 | 读数 |
-|---|---|
-| `make deploy` | 最终镜像 `sha256:abc45ea6…`，archive 6.1 MB |
-| 档位 | 部署后按 §2.2 重拨 `CLIENT_BUNDLE=wasm`；启动日志 `client="wasm"` |
-| 容器 | `Up 55 seconds (healthy)`；`/healthz` 本地 200、公网 200 |
-| 公网 wasm（未声明 gzip） | `content-length: 395686`，`vary: Accept-Encoding` |
-| 公网 wasm（声明 gzip） | `content-length: 142377`，`content-encoding: gzip` |
-| `/login` | `x-content-type-options: nosniff`、`x-frame-options: DENY`、`referrer-policy: no-referrer`、CSP 在位 |
-| 启动日志 | 重拨后近 3 分钟 `ERROR` / `WARN` 0 行 |
-
-第一次 `make deploy` 的 release 构建报了一条 `list_by_user` 从未使用的 warning（它只剩测试
-在用）。已改为 `#[cfg(test)]`（提交 `c15790c`）并重新部署；最终镜像的构建没有再出现 warning。
-
 ## 67. 部署锚与宿主机运维落地（2026-11-20 10:50）
 
 本轮把三件只有出事时才会发现缺失的运维件落进了仓库（提交 `fafeeda`），并在 lavo-test 上逐条执行。
@@ -3918,6 +3918,9 @@ Rust client **52**。
   登录凭据、也没有花一次生成。今天能证的只有「配置生效」与「池确实开了多连接」。
 - **写竞争没有压测**：多连接下的写仍靠 SQLite 写锁 + 5 s busy timeout，而「同一会话两轮」的
   唯一性还是进程内锁（§13.2 第 4 条，第二套不对外）。并发写路径只有既有单测与 §34 的双进程实测。
+- **多连接打开了一个以前不存在的小窗口**：`delete_conversations`（超管删账号/删会话）用
+  `pool.begin()`，sqlx 发的是 deferred `BEGIN`；若同时有写者在提交，升级写锁可能得到
+  `SQLITE_BUSY_SNAPSHOT`，而这条路径没有重试。它是管理操作、不是用户路径，今天没有构造这个竞争。
 - **掉电时的耐久性**按定义验不了：`NORMAL` 的代价是可能丢最后几条已提交事务，不是损坏；
   夜里 03:30 的快照备份是兜底。
 - 池上限 4 够不够、`80%` 使用率时会不会排队，没有观测（没有池指标）。
@@ -3938,3 +3941,26 @@ compose 比的是容器里的 image id，retag 改不了它，回滚会静默不
 
 **没证的**：跨 schema 迁移的回滚（这两个标签之间没有迁移，旧构建也读得懂当前库）；
 有在飞轮次时的回滚（本次是空场，轮次被打断的行为按 §26 既有结论处理，未重测）。
+
+### 68.6 备份恢复演练（11:00）
+
+只读副本、一次性容器、`127.0.0.1:8856`，没有碰线上容器与线上库。输入是 03:30 那份自动备份：
+
+| 项 | 读数 |
+|---|---|
+| 解包 `storage-20261120-033001.tar.gz` | 23 个条目 |
+| `kestrel-studio-20261120-033001.db` | 872,448 B，`PRAGMA integrity_check` = `ok` |
+| 数据面 | `users` 2、`messages` 76、`assets` 23 |
+| 存储交叉核对 | `SUM(assets.bytes)` = 70,719,659；目录 `du -sb` = 70,723,755，差额正好是目录自身的 4,096 B |
+| 镜像 / 二进制 | `kestrel-studio:2629517`（当前构建） |
+| `/healthz` | 200 |
+| `/login` | 200，909 B |
+| `GET /` | 302 → `/login` |
+| 启动日志 | `sqlite pool ready connections=4 synchronous=1 journal_mode=wal` |
+| 唯一一条 WARN | `No Bailian API key found`——演练没有传 key，且从不调用供应商 |
+
+它证明的是：**这份快照能恢复**，而且当前二进制接得上这份旧库（迁移在恢复副本上幂等）；
+tar 包的目录形状与 `STORAGE_DIR` 对得上。演练后容器与 `/tmp/restore-drill` 都已删除，
+宿主上仍只有原来那五个常驻容器。
+
+**没证的**：用同一份快照恢复 **Nest** 那一套（没跑）；真正的切换（停线上、改名、起服务）没有做。
