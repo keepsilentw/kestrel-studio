@@ -285,6 +285,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         client = state.config.client_bundle.as_str(),
         max_turns_per_user = state.config.max_turns_per_user,
         daily_asset_limit = state.config.daily_asset_limit,
+        token_ttl_days = state.config.token_ttl_days,
         "kestrel-studio listening on http://localhost:{port}"
     );
     axum::serve(listener, http::router::build(state))

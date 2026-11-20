@@ -23,6 +23,11 @@ const MAX_TURNS_PER_USER_CEILING: u32 = 16;
 /// purpose: the whole site had 23 assets after weeks when this was added.
 const DEFAULT_DAILY_ASSET_LIMIT: u32 = 200;
 const MAX_DAILY_ASSET_LIMIT: u32 = 10_000;
+/// Device tokens live this long from issue; `0` means "no expiry". Existing rows
+/// with a NULL expiry are backfilled at boot while this is non-zero, so turning it
+/// on applies to tokens that predate the column.
+const DEFAULT_TOKEN_TTL_DAYS: u32 = 90;
+const MAX_TOKEN_TTL_DAYS: u32 = 3650;
 /// SQLite pool size. SQLite still serialises writers, so this buys concurrent
 /// readers (pages, auth, asset lookups), not concurrent commits. Four is enough
 /// for a 2-vCPU host with one public traffic source; the clamp is there because a
@@ -99,6 +104,8 @@ pub struct AppConfig {
     pub max_turns_per_user: u32,
     /// Generated assets per account per trailing 24 hours. `0` disables it.
     pub daily_asset_limit: u32,
+    /// Device token lifetime in days; `0` means no expiry.
+    pub token_ttl_days: u32,
     pub public_base_url: String,
     pub asset_quota_bytes: i64,
     /// See [`ClientBundle`]: which client the chat and voice pages load.
@@ -154,6 +161,16 @@ fn clamp_daily_asset_limit(raw: Option<&str>) -> u32 {
     raw.and_then(|value| value.trim().parse::<u32>().ok())
         .unwrap_or(DEFAULT_DAILY_ASSET_LIMIT)
         .min(MAX_DAILY_ASSET_LIMIT)
+}
+
+fn read_token_ttl_days() -> u32 {
+    clamp_token_ttl_days(read_env("TOKEN_TTL_DAYS").as_deref())
+}
+
+fn clamp_token_ttl_days(raw: Option<&str>) -> u32 {
+    raw.and_then(|value| value.trim().parse::<u32>().ok())
+        .unwrap_or(DEFAULT_TOKEN_TTL_DAYS)
+        .min(MAX_TOKEN_TTL_DAYS)
 }
 
 /// A nonsense `DB_POOL_SIZE` falls back to the default rather than refusing to
@@ -269,6 +286,7 @@ impl AppConfig {
             db_pool_size: read_db_pool_size(),
             max_turns_per_user: read_max_turns_per_user(),
             daily_asset_limit: read_daily_asset_limit(),
+            token_ttl_days: read_token_ttl_days(),
             public_base_url: trim_trailing_slashes(
                 &read_env("PUBLIC_BASE_URL").unwrap_or_else(|| DEFAULT_PUBLIC_BASE_URL.to_string()),
             ),
@@ -338,6 +356,7 @@ impl AppConfig {
             db_pool_size: 1,
             max_turns_per_user: 2,
             daily_asset_limit: 200,
+            token_ttl_days: 90,
             public_base_url: public_base_url.to_string(),
             asset_quota_bytes: 0,
             super_admin: None,
@@ -355,9 +374,10 @@ impl AppConfig {
 #[cfg(test)]
 mod tests {
     use super::{
-        clamp_daily_asset_limit, clamp_db_pool_size, clamp_max_turns_per_user, ClientBundle,
-        DEFAULT_DAILY_ASSET_LIMIT, DEFAULT_DB_POOL_SIZE, DEFAULT_MAX_TURNS_PER_USER,
-        MAX_DAILY_ASSET_LIMIT, MAX_DB_POOL_SIZE, MAX_TURNS_PER_USER_CEILING,
+        clamp_daily_asset_limit, clamp_db_pool_size, clamp_max_turns_per_user,
+        clamp_token_ttl_days, ClientBundle, DEFAULT_DAILY_ASSET_LIMIT, DEFAULT_DB_POOL_SIZE,
+        DEFAULT_MAX_TURNS_PER_USER, DEFAULT_TOKEN_TTL_DAYS, MAX_DAILY_ASSET_LIMIT,
+        MAX_DB_POOL_SIZE, MAX_TOKEN_TTL_DAYS, MAX_TURNS_PER_USER_CEILING,
     };
 
     /// `docker-compose.yml` writes this name, so the spelling is an interface: parse it
@@ -428,6 +448,19 @@ mod tests {
         assert_eq!(
             clamp_daily_asset_limit(Some("lots")),
             DEFAULT_DAILY_ASSET_LIMIT
+        );
+    }
+
+    #[test]
+    fn the_token_ttl_falls_back_clamps_and_keeps_zero() {
+        assert_eq!(clamp_token_ttl_days(None), DEFAULT_TOKEN_TTL_DAYS);
+        assert_eq!(clamp_token_ttl_days(Some("0")), 0, "no expiry");
+        assert_eq!(clamp_token_ttl_days(Some("30")), 30);
+        assert_eq!(clamp_token_ttl_days(Some("99999")), MAX_TOKEN_TTL_DAYS);
+        assert_eq!(clamp_token_ttl_days(Some("-1")), DEFAULT_TOKEN_TTL_DAYS);
+        assert_eq!(
+            clamp_token_ttl_days(Some("forever")),
+            DEFAULT_TOKEN_TTL_DAYS
         );
     }
 }

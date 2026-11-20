@@ -45,6 +45,7 @@ pub struct ActiveTokenView {
     pub label: String,
     pub created_at: i64,
     pub last_seen_at: Option<i64>,
+    pub expires_at: Option<i64>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,10 +129,12 @@ impl AdminService {
     /// devices are still trusted and whose they are.
     pub async fn list_active_tokens(&self) -> Result<Vec<ActiveTokenView>, AppError> {
         let rows = sqlx::query(
-            "SELECT t.id, t.user_id, u.username, t.label, t.created_at, t.last_seen_at \
+            "SELECT t.id, t.user_id, u.username, t.label, t.created_at, t.last_seen_at, t.expires_at \
              FROM api_tokens t JOIN users u ON u.id = t.user_id \
-             WHERE t.revoked_at IS NULL ORDER BY t.id DESC",
+             WHERE t.revoked_at IS NULL AND (t.expires_at IS NULL OR t.expires_at > ?1) \
+             ORDER BY t.id DESC",
         )
+        .bind(chrono::Utc::now().timestamp_millis())
         .fetch_all(&self.pool)
         .await?;
         Ok(rows
@@ -142,6 +145,7 @@ impl AdminService {
                 label: row.try_get("label").unwrap_or_default(),
                 created_at: row.try_get("created_at").unwrap_or_default(),
                 last_seen_at: row.try_get("last_seen_at").unwrap_or(None),
+                expires_at: row.try_get("expires_at").unwrap_or(None),
             })
             .collect())
     }

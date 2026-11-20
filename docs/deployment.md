@@ -417,6 +417,18 @@ ssh lavo-test "cd /opt/kestrel-studio && DAILY_ASSET_LIMIT=100 docker compose up
 计数失败时放行（只打 WARN），所以一次数据库抖动不会挡住正常生成。三条限制的分工：
 `MAX_TURNS_PER_USER` 挡突发、这个挡慢速刷、`ASSET_QUOTA_BYTES` 挡存储增长。
 
+## 2.11 设备令牌有效期（`TOKEN_TTL_DAYS`，2026-11-20）
+
+compose 注入 `TOKEN_TTL_DAYS=${TOKEN_TTL_DAYS:-90}`：签发后多少天过期，`0` 表示不过期，
+clamp 3650。过期读作 401（与撤销同形），用户与超管的令牌列表都不再显示它。部署配置，不进 `.env`：
+
+```bash
+ssh lavo-test "cd /opt/kestrel-studio && TOKEN_TTL_DAYS=30 docker compose up -d"
+```
+
+启动时会把 `expires_at IS NULL` 的旧行按 `created_at + TTL` 回填，所以开启这个设置也覆盖历史
+令牌；把 TTL 设回 `0` 则新令牌保持 NULL（不过期），已有日期不会被清掉。
+
 ## 3. 对外暴露：openresty 反代
 
 服务器的对外入口是 1Panel 管理的 openresty（容器名形如 `1Panel-openresty-*`，监听 80/443）。

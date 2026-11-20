@@ -838,8 +838,10 @@ Nest 侧 `AuthenticatedGuard` 同理。这是唯一的硬缺口，其余都是�
 返回会话 sid，两种 Bearer（设备令牌与会话 sid）都由同一处解析。本地 curl 全序列与单测读数在
 verification.md §49，**未部署**。
 
-存储是一张新表 `api_tokens(id, user_id, label, token_hash, created_at, last_seen_at, revoked_at)`，
-库里存 **SHA-256 摘要**。为什么是摘要不是明文：`./data/kestrel-studio.db` 在宿主机上是明文文件，
+存储是一张新表 `api_tokens(id, user_id, label, token_hash, created_at, last_seen_at, revoked_at, expires_at)`，
+库里存 **SHA-256 摘要**。**2026-11-20 起签发时写 `expires_at`**（`TOKEN_TTL_DAYS`，默认 90 天，
+`0` 不过期）：过期与撤销同形——下一次请求 401、列表里不再出现；启动时把 `expires_at IS NULL`
+的旧行按 `created_at + TTL` 回填，所以开启这个设置也覆盖历史令牌。为什么是摘要不是明文：`./data/kestrel-studio.db` 在宿主机上是明文文件，
 一次备份外泄不该等于所有设备可被冒用；而长期令牌恰恰是为「不用一次登录」存在的。
 `last_seen_at` 的写入要收（**每小时至多一次**），否则每请求一行 UPDATE 会把 SQLite 的写放大
 加到每条读请求上——这个决定要在 P1 就定，不能事后补。

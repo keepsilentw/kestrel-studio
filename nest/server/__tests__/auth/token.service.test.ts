@@ -80,6 +80,25 @@ describe('TokenService', () => {
     expect(harness.tokens.resolveBearer(issued.token)).toBe(harness.userId);
   });
 
+  it('令牌带有效期，过期后不再解析也不再列出', () => {
+    const issued = harness.tokens.issue(harness.userId, 'phone', 90);
+    expect(issued.expiresAt).toEqual(expect.any(Number));
+    expect(harness.tokens.list(harness.userId)[0].expiresAt).toBe(issued.expiresAt);
+
+    harness.raw
+      .prepare('UPDATE api_tokens SET expires_at = ? WHERE id = ?')
+      .run(Date.now() - 1, issued.id);
+    expect(harness.tokens.resolveBearer(issued.token)).toBeNull();
+    expect(harness.tokens.list(harness.userId)).toEqual([]);
+  });
+
+  it('TTL 为 0 时签发没有有效期的令牌', () => {
+    const issued = harness.tokens.issue(harness.userId, 'forever', 0);
+    expect(issued.expiresAt).toBeNull();
+    expect(harness.tokens.resolveBearer(issued.token)).toBe(harness.userId);
+    expect(harness.tokens.list(harness.userId)[0].expiresAt).toBeNull();
+  });
+
   it('会话 sid 也能当 Bearer：passport 的嵌套形状与 ISO 过期时间', () => {
     harness.raw
       .prepare('INSERT INTO sessions (sid, sess, expire) VALUES (?, ?, ?)')

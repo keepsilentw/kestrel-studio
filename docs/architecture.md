@@ -177,7 +177,7 @@ hbs 只负责渲染首屏骨架：登录态判断、历史会话侧栏、页面�
 |---|---|
 | `users` | id, username, password_hash, role, created_at |
 | `sessions` | sid, sess, expire —— Nest 侧由 better-sqlite3-session-store 独占管理，不纳入 drizzle schema；Rust 侧由 `auth/session.rs` 读写同一张表，形状差异见 §13.2 |
-| `api_tokens` | id, user_id, label, token_hash, created_at, last_seen_at, revoked_at —— 非浏览器宿主的长期令牌，只存 SHA-256 摘要，撤销写 `revoked_at`（docs/roadmap.md §5.1） |
+| `api_tokens` | id, user_id, label, token_hash, created_at, last_seen_at, revoked_at, expires_at —— 非浏览器宿主的令牌，只存 SHA-256 摘要，撤销写 `revoked_at`；`expires_at` 默认签发后 90 天（`TOKEN_TTL_DAYS`，`0` 不过期），过期读作 401（docs/roadmap.md §5.1） |
 | `conversations` | id, user_id, title, deleted_at, created_at, updated_at |
 | `messages` | id, conversation_id, role, content, reasoning, tool_calls, mode, created_at |
 | `assets` | id, message_id, kind, file_path, source_url, mime, bytes, width, height, created_at |

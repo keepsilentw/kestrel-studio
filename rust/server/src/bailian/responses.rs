@@ -332,6 +332,7 @@ mod tests {
             db_pool_size: 1,
             max_turns_per_user: 2,
             daily_asset_limit: 200,
+            token_ttl_days: 90,
             public_base_url: "https://example.test".to_string(),
             asset_quota_bytes: 0,
             super_admin: None,

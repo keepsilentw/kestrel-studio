@@ -14,6 +14,7 @@ pub const TOKEN_PREFIX: &str = "kst_";
 /// read-only request would issue an UPDATE and turn SQLite's single writer into
 /// the bottleneck for the whole product API (docs/roadmap.md §5.1).
 const SEEN_THROTTLE_MS: i64 = 60 * 60 * 1000;
+const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 
 fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
@@ -40,27 +41,42 @@ pub struct IssuedToken {
     pub id: i64,
     pub token: String,
     pub created_at: i64,
+    pub expires_at: Option<i64>,
 }
 
-pub async fn issue(pool: &SqlitePool, user_id: i64, label: &str) -> Result<IssuedToken, AppError> {
+/// `None` when the lifetime is `0`: the row then never expires.
+fn expiry_from(created_at: i64, ttl_days: u32) -> Option<i64> {
+    (ttl_days > 0).then(|| created_at + i64::from(ttl_days) * DAY_MS)
+}
+
+pub async fn issue(
+    pool: &SqlitePool,
+    user_id: i64,
+    label: &str,
+    ttl_days: u32,
+) -> Result<IssuedToken, AppError> {
     let token = format!(
         "{TOKEN_PREFIX}{}",
         crate::config::hex::encode(&random_bytes(24))
     );
     let created_at = now_ms();
+    let expires_at = expiry_from(created_at, ttl_days);
     let result = sqlx::query(
-        "INSERT INTO api_tokens (user_id, label, token_hash, created_at) VALUES (?1, ?2, ?3, ?4)",
+        "INSERT INTO api_tokens (user_id, label, token_hash, created_at, expires_at) \
+         VALUES (?1, ?2, ?3, ?4, ?5)",
     )
     .bind(user_id)
     .bind(normalize_label(label))
     .bind(hash(&token))
     .bind(created_at)
+    .bind(expires_at)
     .execute(pool)
     .await?;
     Ok(IssuedToken {
         id: result.last_insert_rowid(),
         token,
         created_at,
+        expires_at,
     })
 }
 
@@ -68,7 +84,7 @@ pub async fn issue(pool: &SqlitePool, user_id: i64, label: &str) -> Result<Issue
 /// per hour. Revoked rows resolve to `None` exactly like an unknown token.
 pub async fn resolve(pool: &SqlitePool, token: &str) -> Result<Option<i64>, AppError> {
     let row = sqlx::query(
-        "SELECT id, user_id, last_seen_at FROM api_tokens \
+        "SELECT id, user_id, last_seen_at, expires_at FROM api_tokens \
          WHERE token_hash = ?1 AND revoked_at IS NULL",
     )
     .bind(hash(token))
@@ -79,7 +95,12 @@ pub async fn resolve(pool: &SqlitePool, token: &str) -> Result<Option<i64>, AppE
     let id: i64 = row.try_get("id")?;
     let user_id: i64 = row.try_get("user_id")?;
     let last_seen: Option<i64> = row.try_get("last_seen_at")?;
+    let expires_at: Option<i64> = row.try_get("expires_at")?;
     let now = now_ms();
+    if expires_at.is_some_and(|at| at <= now) {
+        // Expired reads exactly like revoked: the caller gets 401 and no detail.
+        return Ok(None);
+    }
     if last_seen.is_none_or(|seen| now - seen >= SEEN_THROTTLE_MS) {
         sqlx::query("UPDATE api_tokens SET last_seen_at = ?1 WHERE id = ?2 AND revoked_at IS NULL")
             .bind(now)
@@ -90,14 +111,16 @@ pub async fn resolve(pool: &SqlitePool, token: &str) -> Result<Option<i64>, AppE
     Ok(Some(user_id))
 }
 
-/// Active tokens of one account, newest first. Revoked rows stay in the table as
-/// an audit trail but are never listed.
+/// Active tokens of one account, newest first. Revoked and expired rows stay in the
+/// table as an audit trail but are never listed.
 pub async fn list(pool: &SqlitePool, user_id: i64) -> Result<Vec<Value>, AppError> {
     let rows = sqlx::query(
-        "SELECT id, label, created_at, last_seen_at FROM api_tokens \
-         WHERE user_id = ?1 AND revoked_at IS NULL ORDER BY id DESC",
+        "SELECT id, label, created_at, last_seen_at, expires_at FROM api_tokens \
+         WHERE user_id = ?1 AND revoked_at IS NULL \
+           AND (expires_at IS NULL OR expires_at > ?2) ORDER BY id DESC",
     )
     .bind(user_id)
+    .bind(now_ms())
     .fetch_all(pool)
     .await?;
     Ok(rows
@@ -108,6 +131,7 @@ pub async fn list(pool: &SqlitePool, user_id: i64) -> Result<Vec<Value>, AppErro
                 "label": row.try_get::<String, _>("label").unwrap_or_default(),
                 "createdAt": row.try_get::<i64, _>("created_at").unwrap_or_default(),
                 "lastSeenAt": row.try_get::<Option<i64>, _>("last_seen_at").unwrap_or(None),
+                "expiresAt": row.try_get::<Option<i64>, _>("expires_at").unwrap_or(None),
             })
         })
         .collect())
@@ -140,7 +164,7 @@ mod tests {
             .await
             .expect("seed user");
 
-        let issued = issue(&pool, 1, "  phone  ").await.expect("issue");
+        let issued = issue(&pool, 1, "  phone  ", 90).await.expect("issue");
         assert!(issued.token.starts_with(TOKEN_PREFIX));
         assert_eq!(
             resolve(&pool, &issued.token).await.expect("resolve"),
@@ -165,13 +189,50 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn an_expired_token_stops_resolving_and_drops_out_of_the_list() {
+        let pool = crate::db::open_in_memory().await;
+        sqlx::query("INSERT INTO users (username, password_hash, role, created_at) VALUES ('u','h','user',1)")
+            .execute(&pool)
+            .await
+            .expect("seed user");
+        let issued = issue(&pool, 1, "old", 90).await.expect("issue");
+        assert!(issued.expires_at.is_some(), "90 days is a deadline");
+
+        sqlx::query("UPDATE api_tokens SET expires_at = ?1 WHERE id = ?2")
+            .bind(now_ms() - 1)
+            .bind(issued.id)
+            .execute(&pool)
+            .await
+            .expect("expire");
+        assert_eq!(resolve(&pool, &issued.token).await.expect("resolve"), None);
+        assert!(list(&pool, 1).await.expect("list").is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_zero_ttl_issues_a_token_without_a_deadline() {
+        let pool = crate::db::open_in_memory().await;
+        sqlx::query("INSERT INTO users (username, password_hash, role, created_at) VALUES ('u','h','user',1)")
+            .execute(&pool)
+            .await
+            .expect("seed user");
+        let issued = issue(&pool, 1, "forever", 0).await.expect("issue");
+        assert!(issued.expires_at.is_none());
+        assert_eq!(
+            resolve(&pool, &issued.token).await.expect("resolve"),
+            Some(1)
+        );
+        let listed = list(&pool, 1).await.expect("list");
+        assert_eq!(listed[0]["expiresAt"], serde_json::Value::Null);
+    }
+
+    #[tokio::test]
     async fn a_revoked_token_stops_resolving_and_drops_out_of_the_list() {
         let pool = crate::db::open_in_memory().await;
         sqlx::query("INSERT INTO users (username, password_hash, role, created_at) VALUES ('u','h','user',1)")
             .execute(&pool)
             .await
             .expect("seed user");
-        let issued = issue(&pool, 1, "").await.expect("issue");
+        let issued = issue(&pool, 1, "", 90).await.expect("issue");
 
         assert!(revoke(&pool, 1, issued.id).await.expect("revoke"));
         assert!(!revoke(&pool, 1, issued.id).await.expect("second revoke"));
@@ -187,7 +248,7 @@ mod tests {
             .execute(&pool)
             .await
             .expect("seed user");
-        let issued = issue(&pool, 1, "laptop").await.expect("issue");
+        let issued = issue(&pool, 1, "laptop", 90).await.expect("issue");
         resolve(&pool, &issued.token).await.expect("first");
         let first: Option<i64> = sqlx::query("SELECT last_seen_at FROM api_tokens WHERE id = ?1")
             .bind(issued.id)

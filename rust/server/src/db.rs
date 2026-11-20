@@ -126,7 +126,9 @@ CREATE TABLE IF NOT EXISTS api_tokens (
   -- Refreshed at most once an hour, so a read-only request does not turn into a
   -- write on every call (docs/roadmap.md §5.1).
   last_seen_at INTEGER,
-  revoked_at INTEGER
+  revoked_at INTEGER,
+  -- Epoch ms. NULL means "never" (a row that predates the column, or TOKEN_TTL_DAYS=0).
+  expires_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_api_tokens_user ON api_tokens(user_id, revoked_at);
 "#;
@@ -134,7 +136,7 @@ CREATE INDEX IF NOT EXISTS idx_api_tokens_user ON api_tokens(user_id, revoked_at
 /// `CREATE TABLE IF NOT EXISTS` cannot add a column to a table that already
 /// exists, and this database file survives deploys. So columns introduced after
 /// the first release are added explicitly here.
-const ADDED_COLUMNS: [(&str, &str, &str); 8] = [
+const ADDED_COLUMNS: [(&str, &str, &str); 9] = [
     // The two dimensions the replay `<img>` reserves its box with. Read from the
     // stored bytes, not from the request: docs/verification.md §40.
     ("assets", "width", "INTEGER"),
@@ -151,6 +153,9 @@ const ADDED_COLUMNS: [(&str, &str, &str); 8] = [
     ("messages", "owner", "TEXT"),
     ("generation_tasks", "claimed_by", "TEXT"),
     ("generation_tasks", "claimed_at", "INTEGER"),
+    // Device-token lifetime, added 2026-11-20. The column starts NULL on an old
+    // database and `open()` backfills it from `created_at` when a TTL is configured.
+    ("api_tokens", "expires_at", "INTEGER"),
 ];
 
 /// The pragmas every file-backed connection runs with, in one place so the test
@@ -191,8 +196,28 @@ pub async fn open(config: &AppConfig) -> Result<SqlitePool, crate::error::AppErr
         })?;
 
     apply_schema(&pool).await?;
+    backfill_token_expiry(&pool, config.token_ttl_days).await;
     log_pool(&pool, config.db_pool_size).await;
     Ok(pool)
+}
+
+/// Gives rows that predate the expiry column a deadline, derived from when they
+/// were issued. Runs while `TOKEN_TTL_DAYS` is non-zero; with `0` configured the
+/// NULL keeps meaning "no expiry" and nothing is stamped.
+async fn backfill_token_expiry(pool: &SqlitePool, ttl_days: u32) {
+    if ttl_days == 0 {
+        return;
+    }
+    let ttl_ms = i64::from(ttl_days) * 24 * 60 * 60 * 1000;
+    if let Err(error) =
+        sqlx::query("UPDATE api_tokens SET expires_at = created_at + ?1 WHERE expires_at IS NULL")
+            .bind(ttl_ms)
+            .execute(pool)
+            .await
+    {
+        // Not fatal: the column is there, the tokens just stay non-expiring.
+        tracing::warn!(%error, "token expiry backfill failed");
+    }
 }
 
 /// Reads the pragmas back instead of logging what was asked for — the point of the

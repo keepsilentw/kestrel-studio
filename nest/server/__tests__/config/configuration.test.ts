@@ -24,6 +24,7 @@ const ENV_KEYS = [
   'ACCESS_LOG',
   'MAX_TURNS_PER_USER',
   'DAILY_ASSET_LIMIT',
+  'TOKEN_TTL_DAYS',
 ] as const;
 
 const saved = new Map<string, string | undefined>();
@@ -61,6 +62,7 @@ describe('loadConfig — 默认值', () => {
     // Two paid turns at once per account, unless configured otherwise; 0 turns it off.
     expect(config.maxTurnsPerUser).toBe(2);
     expect(config.dailyAssetLimit).toBe(200);
+    expect(config.tokenTtlDays).toBe(90);
     // No super admin without credentials — the repository must not describe a
     // working login for a deployed instance.
     expect(config.superAdmin).toBeNull();
@@ -111,6 +113,22 @@ describe('loadConfig — DAILY_ASSET_LIMIT', () => {
     expect(loadConfig().dailyAssetLimit).toBe(200);
     process.env.DAILY_ASSET_LIMIT = 'lots';
     expect(loadConfig().dailyAssetLimit).toBe(200);
+  });
+});
+
+describe('loadConfig — TOKEN_TTL_DAYS', () => {
+  it('缺省 90 天，0 表示不过期，上限 3650', () => {
+    expect(loadConfig().tokenTtlDays).toBe(90);
+    process.env.TOKEN_TTL_DAYS = '0';
+    expect(loadConfig().tokenTtlDays).toBe(0);
+    process.env.TOKEN_TTL_DAYS = '30';
+    expect(loadConfig().tokenTtlDays).toBe(30);
+    process.env.TOKEN_TTL_DAYS = '99999';
+    expect(loadConfig().tokenTtlDays).toBe(3650);
+    process.env.TOKEN_TTL_DAYS = '-1';
+    expect(loadConfig().tokenTtlDays).toBe(90);
+    process.env.TOKEN_TTL_DAYS = 'forever';
+    expect(loadConfig().tokenTtlDays).toBe(90);
   });
 });
 

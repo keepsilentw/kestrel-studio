@@ -113,6 +113,10 @@ pub async fn tokens_page_handler(
                 .last_seen_at
                 .map(format_timestamp)
                 .unwrap_or_else(|| "从未使用".to_string()),
+            expires_at_label: token
+                .expires_at
+                .map(|at| format!("有效期至 {}", format_timestamp(at)))
+                .unwrap_or_else(|| "永不过期".to_string()),
         })
         .collect();
     Ok(html(tokens_page(&actor.username, &rows)))

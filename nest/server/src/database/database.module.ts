@@ -132,7 +132,9 @@ CREATE TABLE IF NOT EXISTS api_tokens (
   token_hash TEXT NOT NULL UNIQUE,
   created_at INTEGER NOT NULL,
   last_seen_at INTEGER,
-  revoked_at INTEGER
+  revoked_at INTEGER,
+  -- Epoch ms. NULL means "never" (a row that predates the column, or TOKEN_TTL_DAYS=0).
+  expires_at INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_api_tokens_user ON api_tokens(user_id, revoked_at);
 `;
@@ -147,6 +149,8 @@ const ADDED_COLUMNS: { table: string; column: string; definition: string }[] = [
   // bytes, not from the request: docs/verification.md §40.
   { table: 'assets', column: 'width', definition: 'INTEGER' },
   { table: 'assets', column: 'height', definition: 'INTEGER' },
+  // Device-token lifetime, added 2026-11-20; `applySchema` backfills it.
+  { table: 'api_tokens', column: 'expires_at', definition: 'INTEGER' },
   { table: 'messages', column: 'mode', definition: 'TEXT' },
   // Every account that existed before roles did lands on the least privileged
   // role; the seeded super admin is created with `super` explicitly.
@@ -180,12 +184,32 @@ function ensureColumns(connection: Database.Database): void {
  * `resolve()`, so it becomes a real file literally named `:memory:`. Tests must
  * open the connection themselves and call this.
  */
+/**
+ * Gives rows that predate the expiry column a deadline derived from `created_at`.
+ * Runs while `TOKEN_TTL_DAYS` is non-zero; with `0` the NULL keeps meaning "never".
+ */
+function backfillTokenExpiry(connection: Database.Database): void {
+  const ttlDays = loadConfig().tokenTtlDays;
+  if (ttlDays === 0) {
+    return;
+  }
+  const ttlMs = ttlDays * 86_400_000;
+  try {
+    connection
+      .prepare('UPDATE api_tokens SET expires_at = created_at + ? WHERE expires_at IS NULL')
+      .run(ttlMs);
+  } catch {
+    // Not fatal: the column is there, the tokens just stay non-expiring.
+  }
+}
+
 export function applySchema(connection: Database.Database): void {
   connection.pragma('journal_mode = WAL');
   connection.pragma('foreign_keys = ON');
   connection.exec(DDL);
   ensureColumns(connection);
   ensureUniqueEventSeq(connection);
+  backfillTokenExpiry(connection);
 }
 
 /**

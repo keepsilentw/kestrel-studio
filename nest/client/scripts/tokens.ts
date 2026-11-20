@@ -19,6 +19,7 @@ interface TokenSummary {
   label: string;
   createdAt: number;
   lastSeenAt: number | null;
+  expiresAt: number | null;
 }
 
 interface IssuedToken {
@@ -42,7 +43,10 @@ function isTokenSummary(value: unknown): value is TokenSummary {
     typeof value.id === 'number' &&
     typeof value.label === 'string' &&
     typeof value.createdAt === 'number' &&
-    (value.lastSeenAt === null || typeof value.lastSeenAt === 'number')
+    (value.lastSeenAt === null || typeof value.lastSeenAt === 'number') &&
+    (value.expiresAt === undefined ||
+      value.expiresAt === null ||
+      typeof value.expiresAt === 'number')
   );
 }
 
@@ -119,7 +123,7 @@ function showNotice(text: string, isError = false): void {
 function emptyRow(text: string): HTMLTableRowElement {
   const row = document.createElement('tr');
   const cell = document.createElement('td');
-  cell.colSpan = 4;
+  cell.colSpan = 5;
   cell.className = 'admin-empty';
   cell.textContent = text;
   row.append(cell);
@@ -135,6 +139,9 @@ function tokenRow(token: TokenSummary): HTMLTableRowElement {
   const created = document.createElement('td');
   created.textContent = formatTime(token.createdAt);
 
+  const expires = document.createElement('td');
+  expires.textContent = token.expiresAt === null ? '永不过期' : formatTime(token.expiresAt);
+
   const seen = document.createElement('td');
   seen.textContent =
     token.lastSeenAt === null ? '从未使用' : formatTime(token.lastSeenAt);
@@ -148,7 +155,7 @@ function tokenRow(token: TokenSummary): HTMLTableRowElement {
   revoke.dataset.tokenLabel = token.label;
   action.append(revoke);
 
-  row.append(label, created, seen, action);
+  row.append(label, created, expires, seen, action);
   return row;
 }
 

@@ -206,6 +206,9 @@ describe('GET /admin/tokens', () => {
     expect(html).toContain('user1');
     expect(html).toContain('phone');
     expect(html).toContain('从未使用');
+    // NULL expiry (a row from before the column, or TTL=0) reads as "永不过期".
+    expect(html).toContain('永不过期');
+    expect(html).toContain('有效期');
     expect(html).not.toContain('old-laptop');
   });
 });

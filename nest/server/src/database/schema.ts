@@ -174,6 +174,8 @@ export const apiTokens = sqliteTable('api_tokens', {
   lastSeenAt: integer('last_seen_at', { mode: 'timestamp_ms' }),
   /** Null while active; set once and never cleared. Revoked rows stay as an audit trail. */
   revokedAt: integer('revoked_at', { mode: 'timestamp_ms' }),
+  /** Null means no expiry: a pre-2026-11-20 row, or `TOKEN_TTL_DAYS=0`. */
+  expiresAt: integer('expires_at', { mode: 'timestamp_ms' }),
 });
 
 export type User = typeof users.$inferSelect;

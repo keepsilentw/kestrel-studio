@@ -1,7 +1,8 @@
 import { Inject, Injectable } from '@nestjs/common';
 import type Database from 'better-sqlite3';
 import { createHash, randomBytes } from 'node:crypto';
-import { and, desc, eq, isNull } from 'drizzle-orm';
+import { and, desc, eq, gt, isNull, or } from 'drizzle-orm';
+import { loadConfig } from '@/config/configuration';
 import {
   DRIZZLE_INSTANCE,
   SQLITE_CONNECTION,
@@ -18,6 +19,7 @@ export interface IssuedToken {
   label: string;
   token: string;
   createdAt: number;
+  expiresAt: number | null;
 }
 
 export interface TokenSummary {
@@ -25,6 +27,12 @@ export interface TokenSummary {
   label: string;
   createdAt: number;
   lastSeenAt: number | null;
+  expiresAt: number | null;
+}
+
+/** `null` when the lifetime is 0: that token never expires. */
+function expiryFrom(createdAt: number, ttlDays: number): Date | null {
+  return ttlDays > 0 ? new Date(createdAt + ttlDays * 86_400_000) : null;
 }
 
 /** A blank label falls back to a human-readable default; a long one is capped, not rejected. */
@@ -58,10 +66,15 @@ export class TokenService {
     @Inject(SQLITE_CONNECTION) private readonly connection: Database.Database,
   ) {}
 
-  issue(userId: number, label: string): IssuedToken {
+  issue(
+    userId: number,
+    label: string,
+    ttlDays: number = loadConfig().tokenTtlDays,
+  ): IssuedToken {
     const token = `${TOKEN_PREFIX}${randomBytes(24).toString('hex')}`;
     const createdAt = Date.now();
     const normalized = normalizeLabel(label);
+    const expiresAt = expiryFrom(createdAt, ttlDays);
     const result = this.db
       .insert(apiTokens)
       .values({
@@ -69,6 +82,7 @@ export class TokenService {
         label: normalized,
         tokenHash: hashToken(token),
         createdAt: new Date(createdAt),
+        expiresAt,
       })
       .run();
     return {
@@ -76,6 +90,7 @@ export class TokenService {
       label: normalized,
       token,
       createdAt,
+      expiresAt: expiresAt === null ? null : expiresAt.getTime(),
     };
   }
 
@@ -98,9 +113,17 @@ export class TokenService {
         label: apiTokens.label,
         createdAt: apiTokens.createdAt,
         lastSeenAt: apiTokens.lastSeenAt,
+        expiresAt: apiTokens.expiresAt,
       })
       .from(apiTokens)
-      .where(and(eq(apiTokens.userId, userId), isNull(apiTokens.revokedAt)))
+      .where(
+        and(
+          eq(apiTokens.userId, userId),
+          isNull(apiTokens.revokedAt),
+          // Expired rows are dead weight: like revoked ones, they are not "active".
+          or(isNull(apiTokens.expiresAt), gt(apiTokens.expiresAt, new Date())),
+        ),
+      )
       .orderBy(desc(apiTokens.id))
       .all()
       .map((row) => ({
@@ -108,6 +131,7 @@ export class TokenService {
         label: row.label,
         createdAt: row.createdAt.getTime(),
         lastSeenAt: row.lastSeenAt === null ? null : row.lastSeenAt.getTime(),
+        expiresAt: row.expiresAt === null ? null : row.expiresAt.getTime(),
       }));
   }
 
@@ -133,6 +157,7 @@ export class TokenService {
         id: apiTokens.id,
         userId: apiTokens.userId,
         lastSeenAt: apiTokens.lastSeenAt,
+        expiresAt: apiTokens.expiresAt,
       })
       .from(apiTokens)
       .where(and(eq(apiTokens.tokenHash, hashToken(token)), isNull(apiTokens.revokedAt)))
@@ -141,6 +166,10 @@ export class TokenService {
       return null;
     }
     const now = Date.now();
+    if (row.expiresAt !== null && row.expiresAt.getTime() <= now) {
+      // Expired reads exactly like revoked: 401 and no detail.
+      return null;
+    }
     const lastSeen = row.lastSeenAt === null ? null : row.lastSeenAt.getTime();
     if (lastSeen === null || now - lastSeen >= SEEN_THROTTLE_MS) {
       this.db

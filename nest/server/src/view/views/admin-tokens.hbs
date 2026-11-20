@@ -42,6 +42,7 @@
             <th>账号</th>
             <th>名称</th>
             <th>签发时间</th>
+            <th>有效期</th>
             <th>最近使用</th>
           </tr>
         </thead>
@@ -51,10 +52,11 @@
               <td><a href="/admin/users/{{ownerId}}">{{ownerName}}</a></td>
               <td>{{label}}</td>
               <td>{{createdAtLabel}}</td>
+              <td>{{expiresAtLabel}}</td>
               <td>{{lastSeenAtLabel}}</td>
             </tr>
           {{else}}
-            <tr><td colspan="4" class="admin-empty">没有有效令牌</td></tr>
+            <tr><td colspan="5" class="admin-empty">没有有效令牌</td></tr>
           {{/each}}
         </tbody>
       </table>

@@ -107,6 +107,8 @@ export class AdminController {
       createdAtLabel: formatTimestamp(token.createdAt),
       lastSeenAtLabel:
         token.lastSeenAt === null ? '从未使用' : formatTimestamp(token.lastSeenAt),
+      expiresAtLabel:
+        token.expiresAt === null ? '永不过期' : `有效期至 ${formatTimestamp(token.expiresAt)}`,
     }));
     res.render('admin-tokens', { user: req.user, tokens });
   }

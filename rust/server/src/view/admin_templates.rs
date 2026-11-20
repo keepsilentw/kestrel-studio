@@ -37,6 +37,7 @@ pub struct TokenRow {
     pub label: String,
     pub created_at_label: String,
     pub last_seen_at_label: String,
+    pub expires_at_label: String,
 }
 
 pub struct AccountChip {
@@ -132,22 +133,23 @@ pub fn tokens_page(username: &str, rows: &[TokenRow]) -> String {
     let mut body = String::new();
     for row in rows {
         body.push_str(&format!(
-            "          <tr>\n            <td><a href=\"/admin/users/{owner_id}\">{owner}</a></td>\n            <td>{label}</td>\n            <td>{created}</td>\n            <td>{seen}</td>\n          </tr>\n",
+            "          <tr>\n            <td><a href=\"/admin/users/{owner_id}\">{owner}</a></td>\n            <td>{label}</td>\n            <td>{created}</td>\n            <td>{expires}</td>\n            <td>{seen}</td>\n          </tr>\n",
             owner_id = row.owner_id,
             owner = escape(&row.owner_name),
             label = escape(&row.label),
             created = escape(&row.created_at_label),
+            expires = escape(&row.expires_at_label),
             seen = escape(&row.last_seen_at_label),
         ));
     }
     if body.is_empty() {
         body.push_str(
-            "          <tr><td colspan=\"4\" class=\"admin-empty\">没有有效令牌</td></tr>\n",
+            "          <tr><td colspan=\"5\" class=\"admin-empty\">没有有效令牌</td></tr>\n",
         );
     }
 
     let main = format!(
-        "  <main class=\"admin-main\">\n    <section class=\"admin-card\">\n      <h2 class=\"admin-title\">设备令牌（{count}）</h2>\n      <p class=\"admin-hint\">\n        只列有效令牌。明文只在签发时出现一次，超管也看不到；撤销由账号本人完成。\n      </p>\n      <table class=\"admin-table\">\n        <thead>\n          <tr>\n            <th>账号</th>\n            <th>名称</th>\n            <th>签发时间</th>\n            <th>最近使用</th>\n          </tr>\n        </thead>\n        <tbody>\n{rows}        </tbody>\n      </table>\n    </section>\n  </main>\n",
+        "  <main class=\"admin-main\">\n    <section class=\"admin-card\">\n      <h2 class=\"admin-title\">设备令牌（{count}）</h2>\n      <p class=\"admin-hint\">\n        只列有效令牌。明文只在签发时出现一次，超管也看不到；撤销由账号本人完成。\n      </p>\n      <table class=\"admin-table\">\n        <thead>\n          <tr>\n            <th>账号</th>\n            <th>名称</th>\n            <th>签发时间</th>\n            <th>有效期</th>\n            <th>最近使用</th>\n          </tr>\n        </thead>\n        <tbody>\n{rows}        </tbody>\n      </table>\n    </section>\n  </main>\n",
         count = rows.len(),
         rows = body,
     );

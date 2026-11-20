@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { hash } from 'bcryptjs';
-import { asc, count, desc, eq, isNull, sum } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gt, isNull, or, sum } from 'drizzle-orm';
 import { ROLE_LABEL, parseRole, type Role, type Viewer } from '@/auth/roles';
 import { ConversationService } from '@/conversation/conversation.service';
 import { DRIZZLE_INSTANCE, type DrizzleDb } from '@/database/database.module';
@@ -28,6 +28,7 @@ export interface AdminTokenView {
   label: string;
   createdAt: number;
   lastSeenAt: number | null;
+  expiresAt: number | null;
 }
 
 export type CreateAccountResult =
@@ -118,10 +119,16 @@ export class AdminService {
         label: apiTokens.label,
         createdAt: apiTokens.createdAt,
         lastSeenAt: apiTokens.lastSeenAt,
+        expiresAt: apiTokens.expiresAt,
       })
       .from(apiTokens)
       .innerJoin(users, eq(apiTokens.userId, users.id))
-      .where(isNull(apiTokens.revokedAt))
+      .where(
+        and(
+          isNull(apiTokens.revokedAt),
+          or(isNull(apiTokens.expiresAt), gt(apiTokens.expiresAt, new Date())),
+        ),
+      )
       .orderBy(desc(apiTokens.id))
       .all()
       .map((row) => ({
@@ -130,6 +137,7 @@ export class AdminService {
         label: row.label,
         createdAt: row.createdAt.getTime(),
         lastSeenAt: row.lastSeenAt === null ? null : row.lastSeenAt.getTime(),
+        expiresAt: row.expiresAt === null ? null : row.expiresAt.getTime(),
       }));
   }
 

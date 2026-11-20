@@ -33,6 +33,13 @@ const MAX_TURNS_PER_USER_CEILING = 16;
  */
 const DEFAULT_DAILY_ASSET_LIMIT = 200;
 const MAX_DAILY_ASSET_LIMIT = 10_000;
+/**
+ * Device token lifetime in days; `0` means no expiry. Rows with a NULL expiry are
+ * backfilled at boot while this is non-zero, so turning it on reaches tokens that
+ * predate the column.
+ */
+const DEFAULT_TOKEN_TTL_DAYS = 90;
+const MAX_TOKEN_TTL_DAYS = 3650;
 
 export interface BailianConfig {
   baseUrl: string;
@@ -75,6 +82,8 @@ export interface AppConfig {
   maxTurnsPerUser: number;
   /** Generated assets per account per trailing 24 hours; `0` disables it. */
   dailyAssetLimit: number;
+  /** Device token lifetime in days; `0` means no expiry. */
+  tokenTtlDays: number;
   /**
    * One access line per request (`common/access-log.ts`). Off unless asked for, so
    * nobody turns production log volume up by accident — the Rust server gates the
@@ -108,6 +117,19 @@ function readAssetQuota(): number {
   }
   const parsed = Number(raw);
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : DEFAULT_ASSET_QUOTA_BYTES;
+}
+
+/** `0` is meaningful (no expiry), so it is not clamped up to 1. */
+function readTokenTtlDays(): number {
+  const raw = readEnv('TOKEN_TTL_DAYS');
+  if (raw === null) {
+    return DEFAULT_TOKEN_TTL_DAYS;
+  }
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    return DEFAULT_TOKEN_TTL_DAYS;
+  }
+  return Math.min(parsed, MAX_TOKEN_TTL_DAYS);
 }
 
 /** `0` is meaningful (off), so it is not clamped up to 1. */
@@ -214,6 +236,7 @@ export function loadConfig(): AppConfig {
     assetQuotaBytes: readAssetQuota(),
     maxTurnsPerUser: readMaxTurnsPerUser(),
     dailyAssetLimit: readDailyAssetLimit(),
+    tokenTtlDays: readTokenTtlDays(),
     accessLog: readAccessLog(),
     superAdmin: readSuperAdmin(),
     bailian: {

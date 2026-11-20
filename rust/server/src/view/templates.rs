@@ -425,12 +425,13 @@ pub fn tokens_page(username: &str, is_super: bool) -> String {
           <tr>
             <th>名称</th>
             <th>签发时间</th>
+            <th>有效期</th>
             <th>最近使用</th>
             <th></th>
           </tr>
         </thead>
         <tbody id="token-list">
-          <tr><td colspan="4" class="admin-empty">加载中…</td></tr>
+          <tr><td colspan="5" class="admin-empty">加载中…</td></tr>
         </tbody>
       </table>
     </section>

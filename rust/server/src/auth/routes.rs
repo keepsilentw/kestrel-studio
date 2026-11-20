@@ -158,7 +158,13 @@ pub async fn create_token(
     State(state): State<AppState>,
     Json(body): Json<NewToken>,
 ) -> Result<Response, AppError> {
-    let issued = tokens::issue(&state.pool, user.id, &body.label).await?;
+    let issued = tokens::issue(
+        &state.pool,
+        user.id,
+        &body.label,
+        state.config.token_ttl_days,
+    )
+    .await?;
     Ok((
         StatusCode::CREATED,
         Json(json!({
@@ -166,6 +172,7 @@ pub async fn create_token(
             "label": tokens::normalize_label(&body.label),
             "token": issued.token,
             "createdAt": issued.created_at,
+            "expiresAt": issued.expires_at,
         })),
     )
         .into_response())

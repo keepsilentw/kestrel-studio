@@ -46,6 +46,9 @@ services:
       - MAX_TURNS_PER_USER=${MAX_TURNS_PER_USER:-2}
       # Generated assets per account per trailing 24 hours; `0` disables the check.
       - DAILY_ASSET_LIMIT=${DAILY_ASSET_LIMIT:-200}
+      # Device-token lifetime in days; `0` means no expiry. Existing NULL rows are
+      # backfilled at boot while this is non-zero.
+      - TOKEN_TTL_DAYS=${TOKEN_TTL_DAYS:-90}
       # Per-account media budget. Deployment config, not a secret, so it follows
       # PORT/RUST_LOG into compose instead of the never-rewritten `.env`; `0`
       # disables the check. Default 2 GiB.
