@@ -163,13 +163,35 @@ pub fn tokens_page(username: &str, rows: &[TokenRow]) -> String {
     )
 }
 
+/// A link to one page of the site-wide list, carrying the filters through. `q` is
+/// encoded: it is free text and may be Chinese.
+fn page_link(page: i64, owner_id: Option<i64>, query: Option<&str>) -> String {
+    let mut url = format!("/admin/conversations?page={page}");
+    if let Some(id) = owner_id {
+        url.push_str(&format!("&user={id}"));
+    }
+    if let Some(text) = query {
+        let encoded = url::form_urlencoded::Serializer::new(String::new())
+            .append_pair("q", text)
+            .finish();
+        url.push('&');
+        url.push_str(&encoded);
+    }
+    url
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn conversations_page(
     username: &str,
     rows: &[ConversationRow],
     chips: &[AccountChip],
     owner_name: Option<&str>,
     query: Option<&str>,
-    site_total: usize,
+    site_total: i64,
+    matched: i64,
+    page: i64,
+    has_prev: bool,
+    has_more: bool,
     notice: Option<&Notice>,
 ) -> String {
     let all_active = if owner_name.is_none() {
@@ -213,6 +235,7 @@ pub fn conversations_page(
         Some(name) => format!("，当前只看 {} 的", escape(name)),
     };
     let query_value = query.map(escape).unwrap_or_default();
+    let active_owner = chips.iter().find(|chip| chip.is_active).map(|chip| chip.id);
     let owner_filter = chips
         .iter()
         .find(|chip| chip.is_active)
@@ -223,16 +246,40 @@ pub fn conversations_page(
             )
         })
         .unwrap_or_default();
+    // The filters go into the pager links, or page 2 silently drops them and shows
+    // a different list.
+    let pager = if has_prev || has_more {
+        let mut links = String::new();
+        if has_prev {
+            links.push_str(&format!(
+                "        <a class=\"admin-button\" href=\"{}\">较新的</a>\n",
+                page_link(page - 1, active_owner, query)
+            ));
+        }
+        links.push_str(&format!(
+            "        <span class=\"admin-page-label\">第 {page} 页</span>\n"
+        ));
+        if has_more {
+            links.push_str(&format!(
+                "        <a class=\"admin-button\" href=\"{}\">更早的</a>\n",
+                page_link(page + 1, active_owner, query)
+            ));
+        }
+        format!("      <p class=\"admin-pager\">\n{links}      </p>\n")
+    } else {
+        String::new()
+    };
     let main = format!(
-        "  <main class=\"admin-main\">\n{note}    <section class=\"admin-card\">\n      <h2 class=\"admin-title\">全站会话</h2>\n      <p class=\"admin-hint\">\n        共 {total} 个会话{scoped}，匹配 {matched} 条。查看他人会话是只读的。\n      </p>\n\n      <form class=\"admin-search\" action=\"/admin/conversations\" method=\"get\">\n        {owner_filter}<input name=\"q\" type=\"search\" value=\"{query}\" placeholder=\"按会话标题或账号筛选\">\n        <button type=\"submit\" class=\"admin-button\">筛选</button>\n      </form>\n\n      <ul class=\"admin-chips\">\n{chips}      </ul>\n\n      <table class=\"admin-table\">\n        <thead>\n          <tr>\n            <th>会话</th>\n            <th>归属</th>\n            <th>更新时间</th>\n            <th></th>\n          </tr>\n        </thead>\n        <tbody>\n{rows}        </tbody>\n      </table>\n    </section>\n  </main>\n",
+        "  <main class=\"admin-main\">\n{note}    <section class=\"admin-card\">\n      <h2 class=\"admin-title\">全站会话</h2>\n      <p class=\"admin-hint\">\n        共 {total} 个会话{scoped}，匹配 {matched} 条。查看他人会话是只读的。\n      </p>\n\n      <form class=\"admin-search\" action=\"/admin/conversations\" method=\"get\">\n        {owner_filter}<input name=\"q\" type=\"search\" value=\"{query}\" placeholder=\"按会话标题或账号筛选\">\n        <button type=\"submit\" class=\"admin-button\">筛选</button>\n      </form>\n\n      <ul class=\"admin-chips\">\n{chips}      </ul>\n\n      <table class=\"admin-table\">\n        <thead>\n          <tr>\n            <th>会话</th>\n            <th>归属</th>\n            <th>更新时间</th>\n            <th></th>\n          </tr>\n        </thead>\n        <tbody>\n{rows}        </tbody>\n      </table>\n{pager}    </section>\n  </main>\n",
         note = notice_html(notice),
         total = site_total,
-        matched = rows.len(),
+        matched = matched,
         scoped = scoped,
         query = query_value,
         owner_filter = owner_filter,
         chips = chip_items,
         rows = body,
+        pager = pager,
     );
     shell(
         "全站会话",

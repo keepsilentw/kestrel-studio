@@ -19,6 +19,10 @@ use crate::view::admin_templates::{
 };
 use crate::view::render::{format_timestamp, render_messages};
 
+/// Rows per page of the site-wide list. Small enough that the page is a page;
+/// the header still prints the size of the whole filtered set.
+const ADMIN_PAGE_SIZE: i64 = 50;
+
 // The super admin's surface: account management and a read-only view of every
 // normal account's conversations. Server-rendered forms with POST + redirect,
 // exactly like /login and /logout — there is no client script on these pages.
@@ -130,17 +134,21 @@ pub async fn conversations_page_handler(
         .filter(|value| !value.is_empty());
 
     let note = notice(params.get("notice").map(String::as_str));
-    let all = state.conversations.list_all().await?;
-    let rows: Vec<ConversationRow> = all
+    let page = params
+        .get("page")
+        .and_then(|raw| raw.trim().parse::<i64>().ok())
+        .filter(|value| *value >= 1)
+        .unwrap_or(1)
+        .min(1_000_000);
+    let offset = (page - 1).saturating_mul(ADMIN_PAGE_SIZE);
+    let owner_id = owner.as_ref().map(|item| item.id);
+    let listing = state
+        .conversations
+        .admin_page(owner_id, query.as_deref(), ADMIN_PAGE_SIZE, offset)
+        .await?;
+    let rows: Vec<ConversationRow> = listing
+        .rows
         .iter()
-        .filter(|item| owner.as_ref().is_none_or(|owned| item.owner_id == owned.id))
-        .filter(|item| {
-            query.as_ref().is_none_or(|needle| {
-                let needle = needle.to_lowercase();
-                item.title.to_lowercase().contains(&needle)
-                    || item.owner_name.to_lowercase().contains(&needle)
-            })
-        })
         .map(|item| ConversationRow {
             id: item.id,
             title: item.title.clone(),
@@ -157,6 +165,8 @@ pub async fn conversations_page_handler(
             is_active: owner.as_ref().is_some_and(|owned| owned.id == item.id),
         })
         .collect();
+    let site_total: i64 = accounts.iter().map(|item| item.conversation_count).sum();
+    let has_more = offset + (rows.len() as i64) < listing.matched;
 
     Ok(html(conversations_page(
         &actor.username,
@@ -164,7 +174,11 @@ pub async fn conversations_page_handler(
         &chips,
         owner.as_ref().map(|item| item.username.as_str()),
         query.as_deref(),
-        all.len(),
+        site_total,
+        listing.matched,
+        page,
+        page > 1,
+        has_more,
         note.as_ref(),
     )))
 }

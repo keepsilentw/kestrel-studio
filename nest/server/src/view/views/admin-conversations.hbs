@@ -83,6 +83,14 @@
           {{/each}}
         </tbody>
       </table>
+
+      {{#if paged}}
+        <p class="admin-pager">
+          {{#if prevUrl}}<a class="admin-button" href="{{prevUrl}}">较新的</a>{{/if}}
+          <span class="admin-page-label">第 {{page}} 页</span>
+          {{#if nextUrl}}<a class="admin-button" href="{{nextUrl}}">更早的</a>{{/if}}
+        </p>
+      {{/if}}
     </section>
   </main>
 </body>

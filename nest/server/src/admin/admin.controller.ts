@@ -29,6 +29,9 @@ interface AccountChip {
   isActive: boolean;
 }
 
+/// Rows per page of the site-wide list; mirrors `ADMIN_PAGE_SIZE` on the Rust side.
+const ADMIN_PAGE_SIZE = 50;
+
 const NOTICE_BY_CODE = new Map<string, Notice>([
   ['created', { text: '账号已创建', isError: false }],
   ['duplicate', { text: '该用户名已存在', isError: true }],
@@ -115,35 +118,48 @@ export class AdminController {
     @Res() res: Response,
     @Query('user') user: string | undefined,
     @Query('q') q: string | undefined,
+    @Query('page') pageParam: string | undefined,
     @Query('notice') notice: string | undefined,
   ): void {
     const accounts = this.admin.list();
     const filter = readPositiveInt(user);
     const owner = filter === null ? null : (accounts.find((item) => item.id === filter) ?? null);
     const query = q?.trim() ?? '';
-    const needle = query.toLowerCase();
+    const page = readPositiveInt(pageParam) ?? 1;
+    const offset = (page - 1) * ADMIN_PAGE_SIZE;
 
-    const all = this.conversations.listAll();
-    const rows = all
-      .filter((item) => owner === null || item.ownerId === owner.id)
-      .filter(
-        (item) =>
-          needle.length === 0 ||
-          item.title.toLowerCase().includes(needle) ||
-          item.ownerName.toLowerCase().includes(needle),
-      )
-      .map((item) => ({
-        ...item,
-        updatedAtLabel: formatTimestamp(item.updatedAt),
-        // Shown rather than filtered out: a soft-deleted conversation is one its
-        // owner hid, and reading it is the super admin's reason for having this page.
-        deletedAtLabel: item.deletedAt === null ? null : formatTimestamp(item.deletedAt),
-      }));
+    // Filters run in SQL now: the page holds ADMIN_PAGE_SIZE rows, not the whole
+    // site, and `matched` is the size of the filtered set for the header.
+    const listing = this.conversations.adminPage(
+      owner?.id ?? null,
+      query.length === 0 ? null : query,
+      ADMIN_PAGE_SIZE,
+      offset,
+    );
+    const rows = listing.rows.map((item) => ({
+      ...item,
+      updatedAtLabel: formatTimestamp(item.updatedAt),
+      // Shown rather than filtered out: a soft-deleted conversation is one its
+      // owner hid, and reading it is the super admin's reason for having this page.
+      deletedAtLabel: item.deletedAt === null ? null : formatTimestamp(item.deletedAt),
+    }));
     const chips: AccountChip[] = accounts.map((item) => ({
       id: item.id,
       username: item.username,
       isActive: owner !== null && owner.id === item.id,
     }));
+    const siteTotal = accounts.reduce((total, item) => total + item.conversationCount, 0);
+    const hasMore = offset + rows.length < listing.matched;
+    const pageUrl = (target: number): string => {
+      const params = new URLSearchParams({ page: String(target) });
+      if (owner !== null) {
+        params.set('user', String(owner.id));
+      }
+      if (query.length > 0) {
+        params.set('q', query);
+      }
+      return `/admin/conversations?${params.toString()}`;
+    };
 
     res.render('admin-conversations', {
       user: req.user,
@@ -152,8 +168,12 @@ export class AdminController {
       ownerName: owner?.username ?? null,
       ownerId: owner?.id ?? null,
       query,
-      matched: rows.length,
-      siteTotal: all.length,
+      matched: listing.matched,
+      siteTotal,
+      page,
+      prevUrl: page > 1 ? pageUrl(page - 1) : null,
+      nextUrl: hasMore ? pageUrl(page + 1) : null,
+      paged: page > 1 || hasMore,
       notice: readNotice(notice),
     });
   }

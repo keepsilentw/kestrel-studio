@@ -1188,6 +1188,18 @@ body {
   margin: 0 0 14px;
 }
 
+.admin-pager {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 14px 0 0;
+}
+
+.admin-page-label {
+  color: var(--muted);
+  font-size: 13px;
+}
+
 .admin-search input[type="search"] {
   flex: 1;
   min-width: 0;

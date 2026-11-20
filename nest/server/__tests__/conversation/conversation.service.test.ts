@@ -865,6 +865,44 @@ describe('ConversationService.softDeleteConversations', () => {
 });
 
 describe('ConversationService 的全站视图', () => {
+  it('adminPage 分页、按账号与关键词过滤，matched 是全集', () => {
+    const alice = harness.seedUser('alice');
+    const bob = harness.seedUser('bob');
+    const a1 = harness.service.create(alice, '红隼一');
+    const a2 = harness.service.create(alice, '红隼二');
+    const b1 = harness.service.create(bob, '别的');
+    const stamp = (id: number, at: number): void => {
+      harness.raw.prepare('UPDATE conversations SET updated_at = ? WHERE id = ?').run(at, id);
+    };
+    stamp(a1, 1000);
+    stamp(a2, 2000);
+    stamp(b1, 3000);
+
+    const first = harness.service.adminPage(null, null, 1, 0);
+    expect(first.matched).toBe(3);
+    expect(first.rows.map((row) => row.id)).toEqual([b1]);
+
+    const second = harness.service.adminPage(null, null, 1, 1);
+    expect(second.rows.map((row) => row.id)).toEqual([a2]);
+
+    const mine = harness.service.adminPage(alice, null, 10, 0);
+    expect(mine.matched).toBe(2);
+    expect(mine.rows.map((row) => row.id)).toEqual([a2, a1]);
+
+    const search = harness.service.adminPage(null, '红隼', 10, 0);
+    expect(search.matched).toBe(2);
+    expect(search.rows.map((row) => row.id)).toEqual([a2, a1]);
+
+    // Case-insensitive on account names, which is what the SQL lower() buys.
+    const byName = harness.service.adminPage(null, 'BOB', 10, 0);
+    expect(byName.rows.map((row) => row.id)).toEqual([b1]);
+    expect(byName.matched).toBe(1);
+
+    const miss = harness.service.adminPage(null, '没有这个', 10, 0);
+    expect(miss.rows).toEqual([]);
+    expect(miss.matched).toBe(0);
+  });
+
   it('listAll 带上归属账号，按更新时间倒序', () => {
     const alice = harness.seedUser('alice');
     const bob = harness.seedUser('bob');

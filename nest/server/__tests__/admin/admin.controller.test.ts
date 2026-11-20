@@ -372,6 +372,42 @@ describe('GET /admin/conversations', () => {
     expect(html).not.toContain('超管的问题');
   });
 
+  it('超过一页时分页，链接保留筛选条件', async () => {
+    // 51 conversations, with explicit timestamps so the order is not a same-ms tie.
+    for (let index = 0; index < 51; index += 1) {
+      const id = conversations.create(ALICE, `会话 ${index}`);
+      connection
+        .prepare('UPDATE conversations SET updated_at = ? WHERE id = ?')
+        .run(1000 + index, id);
+    }
+
+    const first = await (await get('/admin/conversations')).text();
+    expect(first).toContain('第 1 页');
+    expect(first).toContain('更早的');
+    expect(first).not.toContain('较新的');
+    expect(first).toContain('会话 50');
+
+    const second = await (await get('/admin/conversations?page=2')).text();
+    expect(second).toContain('第 2 页');
+    expect(second).toContain('较新的');
+    expect(second).not.toContain('更早的');
+    expect(second).toContain('会话 0');
+
+    // The pager carries ?user= and ?q= through, or page 2 would show a different
+    // list. All 51 match the filter, so page 2 still exists and its "较新的" link
+    // has to repeat both.
+    const filtered = await (
+      await get(`/admin/conversations?page=2&user=${ALICE}&q=${encodeURIComponent('会话')}`)
+    ).text();
+    expect(filtered).toContain('第 2 页');
+    // Handlebars escapes `=` and `&` in the attribute; decode before asserting on
+    // the query string, or this passes/fails on the escaper rather than the link.
+    const href = filtered.match(/href="([^"]+)">较新的/)?.[1] ?? '';
+    const decoded = href.replaceAll('&#x3D;', '=').replaceAll('&amp;', '&');
+    expect(decoded).toContain(`user=${ALICE}`);
+    expect(decoded).toContain('q=%E4%BC%9A%E8%AF%9D');
+  });
+
   it('没有会话时给出空态', async () => {
     const html = await (await get('/admin/conversations')).text();
     expect(html).toContain('没有会话');

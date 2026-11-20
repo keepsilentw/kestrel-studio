@@ -257,7 +257,7 @@ Vite 只做打包，产物固定为 `public/assets/main.js` / `main.css`（由 `
 - `chat/` — 产品 API 面（`/api/v1`）：`chat.controller.ts`（建会话、轮次提交 202、会话事件流含续传、会话列表、消息回放、任务查询、下载、**软删除会话**）、`asset-frame.controller.ts`（见下）。
   删除是 `POST /api/v1/conversations/:id/delete`，**只写 `deleted_at`**：属主看不见了，消息/资产/文件全留着，超管照旧能看（`docs/architecture.md` §12.1）。因此它只对普通账号开放，对超管返 403。
   **读端点走 `ConversationService.canRead`，写端点走 `isOwnedBy`**——超管能看别人的会话但发不进去。
-- `admin/` — 超管管理面：`admin.guard.ts`（未登录 → `/login`；非超管 GET → `/`、POST → 403）、`admin.service.ts`（账号 CRUD + 级联删库外文件）、`admin.controller.ts`（纯表单 + 302 + `?notice=`）。它自己不写任何可见性查询，只用 `ConversationService`。
+- `admin/` — 超管管理面：`admin.guard.ts`（未登录 → `/login`；非超管 GET → `/`、POST → 403）、`admin.service.ts`（账号 CRUD + 级联删库外文件）、`admin.controller.ts`（纯表单 + 302 + `?notice=`；`/admin/conversations` 按 50 条分页，`?user=` / `?q=` 的筛选与计数都进 SQL）。它自己不写任何可见性查询，只用 `ConversationService`。
 - `view/view.controller.ts` — hbs 页面：`GET /login`、`GET /`（`?c=` 指定会话）、`GET /voice`；共用的模板预处理（markdown、轮次锚点、时间格式化）在 `view/render.ts`，管理页也用它。
 
 ### 语音：第二条传输通路（中继 `rust/server/src/voice/`，契约源 `nest/server/src/voice/`；客户端 `rust/client/src/voice_core.rs` + `voice_page.rs` 与 `nest/client/scripts/voice.ts`）

@@ -64,6 +64,13 @@ pub struct AdminConversationSummary {
     pub owner_name: String,
 }
 
+/// One page of the site-wide list plus the size of the whole filtered set, which
+/// is what the header prints ("共 N 个会话，匹配 M 条").
+pub struct AdminPage {
+    pub rows: Vec<AdminConversationSummary>,
+    pub matched: i64,
+}
+
 fn now_ms() -> i64 {
     chrono::Utc::now().timestamp_millis()
 }
@@ -243,13 +250,47 @@ impl ConversationService {
     }
 
     /// Every conversation on the site, with its owner. Only for the admin surface.
-    pub async fn list_all(&self) -> Result<Vec<AdminConversationSummary>, AppError> {
+    /// One page of the site-wide list, with the filters pushed into SQL so a page
+    /// fetch holds 50 rows rather than the whole site.
+    ///
+    /// The search is `LOWER(...) LIKE`, which SQLite implements for ASCII only.
+    /// That is enough here: titles are Chinese (no case) and account names are
+    /// restricted to `[A-Za-z0-9_-]` at creation.
+    pub async fn admin_page(
+        &self,
+        owner: Option<i64>,
+        query: Option<&str>,
+        limit: i64,
+        offset: i64,
+    ) -> Result<AdminPage, AppError> {
+        let pattern = query.map(|needle| format!("%{}%", needle.to_lowercase()));
         // Tie-broken by id for the same reason as list_by_user: same-millisecond
         // updates would otherwise be ordered by whatever the scan produced.
-        let rows = sqlx::query(&format!("{ADMIN_SUMMARY_SELECT}{ADMIN_SUMMARY_ORDER}"))
-            .fetch_all(&self.pool)
-            .await?;
-        Ok(rows.iter().map(to_admin_summary).collect())
+        let rows = sqlx::query(&format!(
+            "{ADMIN_SUMMARY_SELECT} WHERE (?1 IS NULL OR c.user_id = ?1) \
+             AND (?2 IS NULL OR LOWER(c.title) LIKE ?2 OR LOWER(u.username) LIKE ?2) \
+             {ADMIN_SUMMARY_ORDER} LIMIT ?3 OFFSET ?4"
+        ))
+        .bind(owner)
+        .bind(pattern.as_deref())
+        .bind(limit)
+        .bind(offset)
+        .fetch_all(&self.pool)
+        .await?;
+        let matched: i64 = sqlx::query(
+            "SELECT COUNT(*) FROM conversations c JOIN users u ON u.id = c.user_id \
+             WHERE (?1 IS NULL OR c.user_id = ?1) \
+             AND (?2 IS NULL OR LOWER(c.title) LIKE ?2 OR LOWER(u.username) LIKE ?2)",
+        )
+        .bind(owner)
+        .bind(pattern.as_deref())
+        .fetch_one(&self.pool)
+        .await?
+        .try_get(0)?;
+        Ok(AdminPage {
+            rows: rows.iter().map(to_admin_summary).collect(),
+            matched,
+        })
     }
 
     /// One conversation with its owner, for the admin read-only view.
@@ -1189,7 +1230,11 @@ mod tests {
         assert_eq!(service.list_by_user(1).await.expect("list").len(), 1);
 
         // The admin surface sees everything, with the owner attached.
-        let all = service.list_all().await.expect("admin list");
+        let all = service
+            .admin_page(None, None, 100, 0)
+            .await
+            .expect("admin list")
+            .rows;
         assert_eq!(all.len(), 3);
         assert_eq!(all[0].owner_name, "owner");
         assert!(all.iter().any(|item| item.deleted_at.is_some()));
@@ -1197,6 +1242,45 @@ mod tests {
         assert_eq!(one.owner_id, 2);
         assert_eq!(service.owner_of(20).await.expect("owner"), Some(2));
         assert_eq!(service.owner_of(999).await.expect("missing"), None);
+    }
+
+    #[tokio::test]
+    async fn the_admin_list_pages_and_filters_in_sql() {
+        let (service, _) = seeded().await;
+        // Order: 10, 11, 20 (updated_at DESC).
+        let first = service.admin_page(None, None, 2, 0).await.expect("page 1");
+        assert_eq!(
+            first.rows.iter().map(|r| r.id).collect::<Vec<_>>(),
+            [10, 11]
+        );
+        assert_eq!(first.matched, 3, "the header counts the whole filtered set");
+
+        let second = service.admin_page(None, None, 2, 2).await.expect("page 2");
+        assert_eq!(second.rows.iter().map(|r| r.id).collect::<Vec<_>>(), [20]);
+        assert_eq!(second.matched, 3);
+
+        let owned = service
+            .admin_page(Some(1), None, 10, 0)
+            .await
+            .expect("owner filter");
+        assert_eq!(owned.rows.len(), 2);
+        assert_eq!(owned.matched, 2);
+
+        // Matching by account name still works: only `other`'s row qualifies, and
+        // the query was uppercase — SQLite's LOWER covers ASCII.
+        let by_name = service
+            .admin_page(None, Some("OTH"), 10, 0)
+            .await
+            .expect("search");
+        assert_eq!(by_name.rows.iter().map(|r| r.id).collect::<Vec<_>>(), [20]);
+        assert_eq!(by_name.matched, 1);
+
+        let miss = service
+            .admin_page(None, Some("nothing"), 10, 0)
+            .await
+            .expect("miss");
+        assert!(miss.rows.is_empty());
+        assert_eq!(miss.matched, 0);
     }
 
     #[tokio::test]

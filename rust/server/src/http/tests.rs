@@ -523,9 +523,10 @@ async fn turn_submission_answers_201_400_404_and_409() {
     );
     assert!(state
         .conversations
-        .list_all()
+        .admin_page(None, None, 100, 0)
         .await
         .expect("admin list")
+        .rows
         .iter()
         .any(|item| item.id == conversation_id && item.deleted_at.is_some()));
 

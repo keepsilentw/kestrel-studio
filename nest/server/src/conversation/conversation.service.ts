@@ -1,5 +1,5 @@
 import { Inject, Injectable, Logger, type OnApplicationBootstrap } from '@nestjs/common';
-import { and, asc, count, desc, eq, inArray, isNull, lt, or, sum, type SQL } from 'drizzle-orm';
+import { and, asc, count, desc, eq, inArray, isNull, lt, or, sql, sum, type SQL } from 'drizzle-orm';
 import { closeSync, openSync, readSync, statSync } from 'node:fs';
 import type { ResponsesInputItem } from '@/bailian/responses-client';
 import type { Mode } from '@/agent/mode';
@@ -413,7 +413,46 @@ export class ConversationService implements OnApplicationBootstrap {
     return row !== undefined;
   }
 
-  /** Every conversation on the site, with its owner. Only for the admin surface. */
+  /**
+   * One page of the site-wide list, with the filters pushed into SQL, plus the size
+   * of the whole filtered set (the header prints it). Mirrors
+   * `rust/server/src/conversation/repo.rs::admin_page`; SQLite's `lower()` is
+   * ASCII-only, which is enough here (Chinese titles have no case, account names
+   * are `[A-Za-z0-9_-]`).
+   */
+  adminPage(
+    owner: number | null,
+    query: string | null,
+    limit: number,
+    offset: number,
+  ): { rows: AdminConversationSummary[]; matched: number } {
+    const needle = query === null || query.length === 0 ? null : `%${query.toLowerCase()}%`;
+    const where = and(
+      owner === null ? undefined : eq(conversations.userId, owner),
+      needle === null
+        ? undefined
+        : sql`(lower(${conversations.title}) like ${needle} or lower(${users.username}) like ${needle})`,
+    );
+    const rows = this.db
+      .select(ADMIN_SUMMARY_COLUMNS)
+      .from(conversations)
+      .innerJoin(users, eq(users.id, conversations.userId))
+      .where(where)
+      .orderBy(desc(conversations.updatedAt), desc(conversations.id))
+      .limit(limit)
+      .offset(offset)
+      .all()
+      .map(toAdminSummary);
+    const total = this.db
+      .select({ value: count() })
+      .from(conversations)
+      .innerJoin(users, eq(users.id, conversations.userId))
+      .where(where)
+      .get();
+    return { rows, matched: total?.value ?? 0 };
+  }
+
+  /** Kept for tests of the ordering; the admin page reads `adminPage` instead. */
   listAll(): AdminConversationSummary[] {
     return this.db
       .select(ADMIN_SUMMARY_COLUMNS)
