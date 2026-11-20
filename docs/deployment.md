@@ -400,7 +400,7 @@ compose 注入 `MAX_TURNS_PER_USER=${MAX_TURNS_PER_USER:-2}`：一个账号同�
 ssh lavo-test "cd /opt/kestrel-studio && MAX_TURNS_PER_USER=4 docker compose up -d"
 ```
 
-启动日志带着这个值：`kestrel-studio listening on … client="wasm" max_turns_per_user=2`。
+启动日志带着这个值：`kestrel-studio listening on … client="wasm" max_turns_per_user=2 daily_asset_limit=200`。
 它与「每会话一轮」是两条独立边界：前者 `409`、后者 `429`。为什么语音轮次不在计数内，
 见 architecture.md §4.2。
 
