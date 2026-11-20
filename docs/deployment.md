@@ -241,41 +241,38 @@ ssh lavo-test "cd /opt/kestrel-studio && docker compose up -d"
 
 ## 2.2 浏览器包切换（`CLIENT_BUNDLE`，2026-11-03）
 
-`docker-compose.yml` 里 `CLIENT_BUNDLE=${CLIENT_BUNDLE:-nest}`，和 `PORT`、`RUST_LOG` 同一条规则：
-它是部署配置而不是密钥，所以不进那份"只写一次、永不覆盖"的 `.env`。
+`docker-compose.yml` 里 `CLIENT_BUNDLE=${CLIENT_BUNDLE:-nest}`。它按 compose 的规则解析：命令行环境
+变量 > 项目根 `.env` > 默认值。**2026-11-20 起 lavo-test 把它写在 `.env` 里**（`make tier-wasm`，见下）：
+`make deploy` 不转发这个变量，只有落在 `.env` 才活得过一次部署。
 
 | 值 | `/` 与 `/voice` 加载 | 用途 |
 |---|---|---|
-| `nest`（compose 默认） | `assets/main.js` / `assets/voice.js` | 代码默认与 `make deploy` 的默认，也就是**回滚档**：去掉环境变量就回到这份 |
-| `wasm` | 内联 module loader → `/wasm/kestrel_client.js` + `_bg.wasm`，再调 `initChat` / `initVoice` | **当前线上档位**（11-03 13:23 拨上，之后每次部署都手工重拨；11-07 16:28 之后是 11-09 09:49 / 11:37 / 12:43 / 13:51 / **14:45**，最近一次的核对见 verification.md §43.5）——roadmap.md §4.3 P3 的灰度 |
+| `nest`（compose 默认） | `assets/main.js` / `assets/voice.js` | 代码默认，也就是**回滚档**：去掉环境变量就回到这份 |
+| `wasm` | `/assets/wasm-loader.js` → `/wasm/kestrel_client.js` + `_bg.wasm`，再调 `initChat` / `initVoice` | **当前线上档位**（11-03 13:23 拨上，此后每次部署靠手工重拨；**2026-11-20 起写进宿主机 `.env`**，部署不再回退，读数见 verification.md §67.3）——roadmap.md §4.3 P3 的灰度 |
 
 ```bash
-# 打开：只重启容器，不重新构建、不重新上传
+# 持久切换（写进宿主机 .env 并重建容器；之后的 make deploy 也带不走它）
+make tier-wasm
+make tier-nest
+
+# 一次性切换（只影响这一次容器，下一次 make deploy 就回到 .env 的值）
 ssh lavo-test "cd /opt/kestrel-studio && CLIENT_BUNDLE=wasm docker compose up -d"
-# 关掉（回到默认）：同一条命令去掉变量
-ssh lavo-test "cd /opt/kestrel-studio && docker compose up -d"
 ```
 
 四个必须知道的性质：
 
 1. **它决定服务端会登出人吗？不决定。** 换的是页面加载哪个脚本，session 与 cookie 一行不动。
-2. **`make deploy` 会把它带回 `nest`**：脚本不转发这个变量，所以下一次部署自动回滚。想让它长期
-   保持 `wasm`，就把它写进服务器上那份 `.env`（`deploy.sh` 永不覆盖该文件，改它本来就是运维的活）——
+2. **`make deploy` 本身不转发这个变量**：宿主机 `.env` 里没写的话，下一次部署会退回 `nest`。想让它
+   长期保持 `wasm`，就把它写进服务器上那份 `.env`（`deploy.sh` 永不覆盖该文件）——
    这是**长期启用**的唯一写法，别以为 `docker compose up -d` 的效果能扛过一次部署。
-   2026-11-20 起这一步有一条命令，不必手改 `.env`：
-
-   ```bash
-   make tier-wasm    # 写 CLIENT_BUNDLE=wasm 进宿主机 .env，重建容器，回读启动日志的 client=
-   make tier-nest    # 同一件事，回到 nest
-   ```
-
-   脚本只换这一行（其余键与 0600 权限保持原样），最后从 `main.rs` 的启动行 `client=` 回读核对，
-   而不是「文件写进去了就算成功」。
+   2026-11-20 起线上已经这么做了（`make tier-wasm`），所以部署不再需要手工重拨。那条命令只换这一行
+   （其余键与 0600 权限保持原样），最后从 `main.rs` 的启动行 `client=` 回读核对，而不是「文件写进去了
+   就算成功」。
 3. **启动日志会写用了哪个**：`client=nest` / `client=wasm`（`main.rs`）。判断"用户拿到的是哪份
    客户端"不必猜，也不必读宿主机环境变量。
 4. **它按 `nest` 起、按 `wasm` 灰度时，出错是页面级而不是服务级**：接口、SSR、登录都还在跑同一份
    Rust 服务端。WASM 加载失败时 loader 会在页面上落一条 `.client-error` 提示并 `console.error`；
-   回滚就是上面那条命令。
+   回滚用 `make tier-nest`（持久），只想试一次就用上面那条一次性命令。
 
 ## 2.3 Nest 侧的访问日志开关（`ACCESS_LOG`，2026-11-07）
 
