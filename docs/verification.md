@@ -3628,7 +3628,7 @@ Nest 的同一套解析测试。
 ### 59.1 没证的
 
 - 每日 cron 已于 11-19 安装（`/etc/cron.d/kestrel-backup`，`crond` active），但第一次
-  03:30 自动执行尚未发生。
+  03:30 自动执行尚未发生。**已于 2026-11-20 03:30 自动跑通，读数见 §67.1。**
 - 没有把快照拷回一台临时实例并登录验证；只做了数据层恢复演练：
   解包 `storage-20261119-105816.tar.gz` 后逐行核对 23 个 `assets`，文件 23 个、
   缺失 0、字节数不一致 0。
@@ -3673,7 +3673,7 @@ Nest 侧 `sendFile` 自带的 freshness 判断把 `max-age=0` 当作 stale，因
 ### 61.1 没证的
 
 - 没有用真实登录会话请求 `/api/v1/assets/:id/download` 观察 304；该行为仍只有进程内测试。
-- 每日 03:30 的自动备份还没有实际触发过。
+- 每日 03:30 的自动备份还没有实际触发过。**已于 2026-11-20 03:30 触发，读数见 §67.1。**
 
 ## 62. WASM loader 外置与 CSP 去 inline（2026-11-19）
 
@@ -3801,3 +3801,67 @@ Rust 模板包含 `.conversation-search`。
 
 第一次 `make deploy` 的 release 构建报了一条 `list_by_user` 从未使用的 warning（它只剩测试
 在用）。已改为 `#[cfg(test)]`（提交 `c15790c`）并重新部署；最终镜像的构建没有再出现 warning。
+
+## 67. 部署锚与宿主机运维落地（2026-11-20 10:50）
+
+本轮把三件只有出事时才会发现缺失的运维件落进了仓库（提交 `fafeeda`），并在 lavo-test 上逐条执行。
+这一节记的是**执行读数**，不是设计（设计在 [deployment.md](./deployment.md) §1、§2.2、§2.5）。
+
+### 67.1 每日备份的第一次自动执行（关闭 §59.1 / §61.1 的未决项）
+
+11-19 装上的 `/etc/cron.d/kestrel-backup` 在 **11-20 03:30 真的跑了一次**：
+
+| 项 | 读数 |
+|---|---|
+| `kestrel-studio-20261120-033001.db` | 872,448 B（前一晚手跑的是 872,448 B，同一份库） |
+| `storage-20261120-033001.tar.gz` | 70,708,471 B（与 11-19 10:58 那份逐字节同大小） |
+| `backup.log` | `backup written path=data/backup-20261120-033001.db bytes=872448` / `backup: /opt/kestrel-backups/…` |
+| 目录 mtime | `Nov 20 03:30`（由 cron 创建，不是手跑） |
+
+`make backup-cron` 重装同一份内容并回读：
+
+```cron
+SHELL=/bin/bash
+PATH=/usr/bin:/bin
+30 3 * * * root cd /opt/kestrel-studio && /usr/bin/make backup >> /opt/kestrel-backups/backup.log 2>&1
+```
+
+`crond` 状态 `active`。**保留 14 天的删除分支仍未被执行过**（还没到 14 天）。
+
+### 67.2 当前在跑的镜像有了回滚锚
+
+| 项 | 读数 |
+|---|---|
+| 容器镜像 | `sha256:1f069d53…`（与 §66 记录的那次部署同一个 ID） |
+| 补打的标签 | `kestrel-studio:ad5418c`（§66 记的提交；`5700953` 是 docs-only） |
+| `docker images kestrel-studio` | `ad5418c 1f069d53bc37 22 hours ago 10.9MB` / `latest 1f069d53bc37 …` |
+
+`.`env` 与 `data/`、`storage/` 未动。
+
+### 67.3 客户端档位持久化（`make tier-wasm`）
+
+先确认没有在飞的轮次（`generation_tasks` 非终态 0 行；`messages` / `conversation_events` 最新一行
+都是 11-08 的），再执行：
+
+| 项 | 读数 |
+|---|---|
+| `.env` | 第 6 行 `CLIENT_BUNDLE=wasm`，`grep -c` 为 1，`stat` = `600 root` |
+| 重建 | `docker compose up -d --no-build --force-recreate`，没有重新构建 |
+| 镜像 | 仍是 `sha256:1f069d53…`（`--no-build` 生效） |
+| 启动日志 | `kestrel-studio listening on http://localhost:8848 client="wasm"` |
+| 健康 | `running` / `healthy`，构造后 25 s 复查 |
+| 日志 | 新容器 `ERROR` / `WARN` 0 行 |
+| 公网 | `/healthz` 200、`/login` 200（909 B）、`/assets/wasm-loader.js` 200（991 B） |
+| 公网 wasm | `content-encoding: gzip`，`content-length: 147898`（与本地构建一致） |
+
+写进 `.env` 而不是命令行，意味着**下一次 `make deploy` 不会再把它打回 `nest`**——这正是 §2.2 那条
+「长期启用的唯一写法」，此前一直靠每次部署后手工重拨。
+
+### 67.4 没证的
+
+- **`make rollback` 一次都没跑过**：没有坏版本可回滚。它的两条命令（retag + `--force-recreate`）
+  在 67.3 里被间接走过一半（同一条 recreate 路径），但「切回旧镜像」这件事本身没有读数。
+- **`deploy.sh` 的新打标签分支要等下一次 `make deploy`**才被执行；今天这个 `ad5418c` 标签是手工补的。
+- 备份只验到「文件生成了、大小对得上」，**没有解包回灌到临时实例**；11-19 §59.1 的解包核对是上一份，
+  这一份没有重做。
+- 保留期删除（14 天）与 `make backup-now` 都没有执行。
