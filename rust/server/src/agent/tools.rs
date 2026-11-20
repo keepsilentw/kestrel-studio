@@ -250,6 +250,18 @@ async fn generate_image(
     let size = read_string(args, "size", "1024*1024");
     let count = clamp(read_number(args, "count", 1.0), 1, 6) as u32;
 
+    // The daily cap is checked before the provider call, and the request is
+    // trimmed to what is left: generating more and throwing them away would bill
+    // for images nobody sees.
+    let mut daily = state.remaining_daily_assets(context.conversation_id).await;
+    if daily == Some(0) {
+        return ToolOutcome::failure(state.daily_limit_message());
+    }
+    let count = match daily {
+        Some(left) => count.min(left as u32),
+        None => count,
+    };
+
     let urls = match state
         .media
         .generate_images(api_key, &prompt, DEFAULT_IMAGE_MODEL, &size, count)
@@ -266,6 +278,9 @@ async fn generate_image(
             Ok(stored) => {
                 if let Some(left) = remaining.as_mut() {
                     *left = (*left - stored.bytes).max(0);
+                }
+                if let Some(left) = daily.as_mut() {
+                    *left = (*left - 1).max(0);
                 }
                 assets.push(stored);
             }

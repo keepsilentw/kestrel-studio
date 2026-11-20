@@ -184,6 +184,17 @@ impl TaskWorker {
             None
         };
 
+        // Same cap as the image path: a task that would exceed it is a terminal
+        // failure, because the provider's URL will not wait for the window.
+        if self
+            .state
+            .remaining_daily_assets(task.conversation_id)
+            .await
+            == Some(0)
+        {
+            return self.fail(task, &self.state.daily_limit_message()).await;
+        }
+
         let stored = match self
             .state
             .media

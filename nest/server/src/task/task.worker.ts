@@ -2,6 +2,7 @@ import { Injectable, Logger, type OnModuleDestroy, type OnModuleInit } from '@ne
 import { ConversationEventsService, type ConversationEvent } from '@/conversation/conversation-events.service';
 import { ConversationService } from '@/conversation/conversation.service';
 import { loadConfig } from '@/config/configuration';
+import { dailyLimitMessage } from '@/common/quota';
 import type { GenerationTask } from '@/database/schema';
 import {
   MediaService,
@@ -148,6 +149,15 @@ export class TaskWorker implements OnModuleInit, OnModuleDestroy {
       if (owner !== null) {
         remaining = Math.max(0, quota - this.conversations.assetUsage(owner));
       }
+    }
+
+    // Same cap as the image path. A task that would exceed it is a terminal
+    // failure: the provider's URL will not wait for the window to roll over.
+    const dailyLimit = loadConfig().dailyAssetLimit;
+    const daily = this.conversations.remainingDailyAssets(task.conversationId, dailyLimit);
+    if (daily === 0) {
+      await this.fail(task, dailyLimitMessage(dailyLimit));
+      return;
     }
 
     let stored;

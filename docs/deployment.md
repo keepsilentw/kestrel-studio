@@ -404,6 +404,19 @@ ssh lavo-test "cd /opt/kestrel-studio && MAX_TURNS_PER_USER=4 docker compose up 
 它与「每会话一轮」是两条独立边界：前者 `409`、后者 `429`。为什么语音轮次不在计数内，
 见 architecture.md §4.2。
 
+## 2.10 每日生成配额（`DAILY_ASSET_LIMIT`，2026-11-20）
+
+compose 注入 `DAILY_ASSET_LIMIT=${DAILY_ASSET_LIMIT:-200}`：每账号滚动 24 小时内最多多少个生成
+结果。超过后图片在调供应商**之前**被拒、视频任务在镜像前终态失败（`0` 关闭）。部署配置，
+不进 `.env`：
+
+```bash
+ssh lavo-test "cd /opt/kestrel-studio && DAILY_ASSET_LIMIT=100 docker compose up -d"
+```
+
+计数失败时放行（只打 WARN），所以一次数据库抖动不会挡住正常生成。三条限制的分工：
+`MAX_TURNS_PER_USER` 挡突发、这个挡慢速刷、`ASSET_QUOTA_BYTES` 挡存储增长。
+
 ## 3. 对外暴露：openresty 反代
 
 服务器的对外入口是 1Panel 管理的 openresty（容器名形如 `1Panel-openresty-*`，监听 80/443）。

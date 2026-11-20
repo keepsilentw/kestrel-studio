@@ -23,6 +23,7 @@ const ENV_KEYS = [
   'BAILIAN_VIDEO_MODEL',
   'ACCESS_LOG',
   'MAX_TURNS_PER_USER',
+  'DAILY_ASSET_LIMIT',
 ] as const;
 
 const saved = new Map<string, string | undefined>();
@@ -59,6 +60,7 @@ describe('loadConfig — 默认值', () => {
     expect(config.accessLog).toBe(false);
     // Two paid turns at once per account, unless configured otherwise; 0 turns it off.
     expect(config.maxTurnsPerUser).toBe(2);
+    expect(config.dailyAssetLimit).toBe(200);
     // No super admin without credentials — the repository must not describe a
     // working login for a deployed instance.
     expect(config.superAdmin).toBeNull();
@@ -93,6 +95,22 @@ describe('loadConfig — MAX_TURNS_PER_USER', () => {
     expect(loadConfig().maxTurnsPerUser).toBe(2);
     process.env.MAX_TURNS_PER_USER = 'two';
     expect(loadConfig().maxTurnsPerUser).toBe(2);
+  });
+});
+
+describe('loadConfig — DAILY_ASSET_LIMIT', () => {
+  it('缺省 200，0 表示关闭，上限 10000', () => {
+    expect(loadConfig().dailyAssetLimit).toBe(200);
+    process.env.DAILY_ASSET_LIMIT = '0';
+    expect(loadConfig().dailyAssetLimit).toBe(0);
+    process.env.DAILY_ASSET_LIMIT = '50';
+    expect(loadConfig().dailyAssetLimit).toBe(50);
+    process.env.DAILY_ASSET_LIMIT = '999999';
+    expect(loadConfig().dailyAssetLimit).toBe(10_000);
+    process.env.DAILY_ASSET_LIMIT = '-1';
+    expect(loadConfig().dailyAssetLimit).toBe(200);
+    process.env.DAILY_ASSET_LIMIT = 'lots';
+    expect(loadConfig().dailyAssetLimit).toBe(200);
   });
 });
 

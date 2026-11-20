@@ -4,6 +4,7 @@ import { clamp, readNumber, readOptionalNumber, readString } from '@/common/args
 import { describeError } from '@/common/errors';
 import { buildSignedFrameUrl, isPubliclyReachable } from '@/common/signed-url';
 import { loadConfig } from '@/config/configuration';
+import { dailyLimitMessage } from '@/common/quota';
 import { ConversationService } from '@/conversation/conversation.service';
 import { DEFAULT_IMAGE_MODEL, MediaService, type StoredAsset } from '@/media/media.service';
 import { TaskService } from '@/task/task.service';
@@ -176,11 +177,21 @@ function createGenerateImageTool(
       const size = readString(args, 'size', '1024*1024');
       const count = clamp(readNumber(args, 'count', 1), 1, IMAGE_COUNT_MAX);
 
+      // The daily cap is checked before the provider call and the request is
+      // trimmed to what is left: generating more and throwing them away bills for
+      // images nobody sees. Same rule and sentence as the Rust tool.
+      const dailyLimit = loadConfig().dailyAssetLimit;
+      let daily = conversations.remainingDailyAssets(context.conversationId, dailyLimit);
+      if (daily === 0) {
+        return { ok: false, output: dailyLimitMessage(dailyLimit), assets: [] };
+      }
+      const effectiveCount = daily === undefined ? count : Math.min(count, daily);
+
       const urls = await media.generateImages({
         prompt,
         model: DEFAULT_IMAGE_MODEL,
         size,
-        count,
+        count: effectiveCount,
         ...(context.signal !== undefined ? { signal: context.signal } : {}),
       });
 
@@ -198,6 +209,9 @@ function createGenerateImageTool(
         const stored = await media.store('image', url, remaining);
         if (remaining !== undefined) {
           remaining = Math.max(0, remaining - stored.bytes);
+        }
+        if (daily !== undefined) {
+          daily = Math.max(0, daily - 1);
         }
         assets.push(stored);
       }

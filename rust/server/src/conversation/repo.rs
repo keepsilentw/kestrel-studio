@@ -327,6 +327,24 @@ impl ConversationService {
         Ok(row.try_get("used").unwrap_or(0))
     }
 
+    /// Assets the account created at or after `since` (epoch ms). The daily cap
+    /// uses a trailing window, not a calendar day: no timezone to argue about, and
+    /// "wait for the window" is the same sentence in every zone.
+    pub async fn assets_since(&self, user_id: i64, since: i64) -> Result<i64, AppError> {
+        let row = sqlx::query(
+            "SELECT COUNT(*) AS used
+             FROM assets a
+             JOIN messages m ON m.id = a.message_id
+             JOIN conversations c ON c.id = m.conversation_id
+             WHERE c.user_id = ?1 AND a.created_at >= ?2",
+        )
+        .bind(user_id)
+        .bind(since)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(row.try_get("used").unwrap_or(0))
+    }
+
     pub async fn views(&self, conversation_id: i64) -> Result<Vec<MessageView>, AppError> {
         Ok(self.views_page(conversation_id, None, None).await?.views)
     }

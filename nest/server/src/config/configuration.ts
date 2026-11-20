@@ -26,6 +26,13 @@ const DEFAULT_ASSET_QUOTA_BYTES = 2 * 1024 * 1024 * 1024;
  */
 const DEFAULT_MAX_TURNS_PER_USER = 2;
 const MAX_TURNS_PER_USER_CEILING = 16;
+/**
+ * Generated assets per account per trailing 24 hours; `0` disables it. The burst
+ * guard is `MAX_TURNS_PER_USER`; this is the volume guard, so a script that spaces
+ * its calls out still stops. Generous on purpose.
+ */
+const DEFAULT_DAILY_ASSET_LIMIT = 200;
+const MAX_DAILY_ASSET_LIMIT = 10_000;
 
 export interface BailianConfig {
   baseUrl: string;
@@ -66,6 +73,8 @@ export interface AppConfig {
   assetQuotaBytes: number;
   /** In-flight turns one account may have; `0` disables the check. */
   maxTurnsPerUser: number;
+  /** Generated assets per account per trailing 24 hours; `0` disables it. */
+  dailyAssetLimit: number;
   /**
    * One access line per request (`common/access-log.ts`). Off unless asked for, so
    * nobody turns production log volume up by accident — the Rust server gates the
@@ -99,6 +108,19 @@ function readAssetQuota(): number {
   }
   const parsed = Number(raw);
   return Number.isInteger(parsed) && parsed >= 0 ? parsed : DEFAULT_ASSET_QUOTA_BYTES;
+}
+
+/** `0` is meaningful (off), so it is not clamped up to 1. */
+function readDailyAssetLimit(): number {
+  const raw = readEnv('DAILY_ASSET_LIMIT');
+  if (raw === null) {
+    return DEFAULT_DAILY_ASSET_LIMIT;
+  }
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 0) {
+    return DEFAULT_DAILY_ASSET_LIMIT;
+  }
+  return Math.min(parsed, MAX_DAILY_ASSET_LIMIT);
 }
 
 /** `0` is meaningful (off), so it is not clamped up to 1. */
@@ -191,6 +213,7 @@ export function loadConfig(): AppConfig {
     publicBaseUrl: (readEnv('PUBLIC_BASE_URL') ?? DEFAULT_PUBLIC_BASE_URL).replace(/\/+$/, ''),
     assetQuotaBytes: readAssetQuota(),
     maxTurnsPerUser: readMaxTurnsPerUser(),
+    dailyAssetLimit: readDailyAssetLimit(),
     accessLog: readAccessLog(),
     superAdmin: readSuperAdmin(),
     bailian: {

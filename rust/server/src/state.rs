@@ -10,6 +10,9 @@ use crate::error::AppError;
 use crate::media::service::MediaService;
 use crate::task::service::TaskService;
 
+/// The trailing window of the daily asset cap.
+const DAILY_WINDOW_MS: i64 = 24 * 60 * 60 * 1000;
+
 /// Everything a handler needs. `AppState` is `Clone` (pool and client are
 /// reference counted) and handed to axum by `State<_>`.
 #[derive(Clone)]
@@ -88,6 +91,42 @@ impl AppState {
         Err(AppError::unavailable(
             crate::bailian::token::MISSING_KEY_MESSAGE,
         ))
+    }
+
+    /// Assets the conversation's owner may still generate in the trailing 24
+    /// hours. `None` means "no cap, or we could not find out": a counting error
+    /// fails open on purpose, because it must not block a generation the user
+    /// asked for.
+    pub async fn remaining_daily_assets(&self, conversation_id: i64) -> Option<i64> {
+        let limit = self.config.daily_asset_limit;
+        if limit == 0 {
+            return None;
+        }
+        let user_id = match self.conversations.owner_of(conversation_id).await {
+            Ok(Some(id)) => id,
+            Ok(None) => return None,
+            Err(error) => {
+                tracing::warn!(%error, "daily quota: owner lookup failed");
+                return None;
+            }
+        };
+        let since = chrono::Utc::now().timestamp_millis() - DAILY_WINDOW_MS;
+        match self.conversations.assets_since(user_id, since).await {
+            Ok(used) => Some((i64::from(limit) - used).max(0)),
+            Err(error) => {
+                tracing::warn!(%error, "daily quota: count lookup failed");
+                None
+            }
+        }
+    }
+
+    /// The sentence a person sees when the daily cap stops a generation. Same text
+    /// on both stacks.
+    pub fn daily_limit_message(&self) -> String {
+        format!(
+            "生成额度已用完：每账号 24 小时内最多 {} 个生成结果，请等窗口过去后再试。",
+            self.config.daily_asset_limit
+        )
     }
 
     /// Whether a turn may start on this conversation right now. Takes the slot in

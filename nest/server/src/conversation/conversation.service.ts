@@ -1,5 +1,5 @@
 import { Inject, Injectable, Logger, type OnApplicationBootstrap } from '@nestjs/common';
-import { and, asc, count, desc, eq, inArray, isNull, lt, or, sql, sum, type SQL } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gte, inArray, isNull, lt, or, sql, sum, type SQL } from 'drizzle-orm';
 import { closeSync, openSync, readSync, statSync } from 'node:fs';
 import type { ResponsesInputItem } from '@/bailian/responses-client';
 import type { Mode } from '@/agent/mode';
@@ -10,6 +10,9 @@ import { assets, conversations, conversationEvents, generationTasks, messages, u
 import { removeAssetFiles, resolveAssetPath, storedAssetName } from '@/media/asset-path';
 import { imageDims } from '@/media/image-dims';
 import type { StoredAsset } from '@/media/media.service';
+
+/** The trailing window of the daily asset cap. */
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 export interface ToolCallRecord {
   name: string;
@@ -411,6 +414,36 @@ export class ConversationService implements OnApplicationBootstrap {
       .where(and(eq(conversations.id, id), readableBy(viewer)))
       .get();
     return row !== undefined;
+  }
+
+  /**
+   * Assets the conversation's owner may still generate in the trailing 24 hours,
+   * or `undefined` when there is no cap or the owner cannot be found. Mirrors
+   * `AppState::remaining_daily_assets`; a lookup failure fails open on the Rust
+   * side, and `ownerOf` returning null here means the same thing.
+   */
+  remainingDailyAssets(conversationId: number, limit: number): number | undefined {
+    if (limit <= 0) {
+      return undefined;
+    }
+    const owner = this.ownerOf(conversationId);
+    if (owner === null) {
+      return undefined;
+    }
+    const used = this.assetCountSince(owner, new Date(Date.now() - DAY_MS));
+    return Math.max(0, limit - used);
+  }
+
+  /** Assets the account created at or after `since`, for the daily cap. */
+  assetCountSince(userId: number, since: Date): number {
+    const row = this.db
+      .select({ value: count() })
+      .from(assets)
+      .innerJoin(messages, eq(messages.id, assets.messageId))
+      .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+      .where(and(eq(conversations.userId, userId), gte(assets.createdAt, since)))
+      .get();
+    return row?.value ?? 0;
   }
 
   /**

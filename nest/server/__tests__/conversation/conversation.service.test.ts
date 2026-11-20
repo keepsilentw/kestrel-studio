@@ -940,3 +940,26 @@ describe('ConversationService 的全站视图', () => {
     expect(harness.service.summaryOf(9999)).toBeNull();
   });
 });
+
+describe('ConversationService 的每日配额', () => {
+  it('assetCountSince 只数窗口内、只数本账号；remainingDailyAssets 扣减', () => {
+    const alice = harness.seedUser('alice');
+    const bob = harness.seedUser('bob');
+    const conversationId = harness.service.create(alice, '配额');
+    const messageId = harness.service.appendUserMessage(conversationId, '生一张', 'image');
+    const insert = harness.raw.prepare(
+      "INSERT INTO assets (message_id, kind, file_path, mime, bytes, created_at) VALUES (?, 'image', 'a.png', 'image/png', 1, ?)",
+    );
+    insert.run(messageId, Date.now());
+    insert.run(messageId, Date.now() - 2 * 24 * 60 * 60 * 1000);
+
+    const windowStart = new Date(Date.now() - 24 * 60 * 60 * 1000);
+    expect(harness.service.assetCountSince(alice, windowStart)).toBe(1);
+    expect(harness.service.assetCountSince(alice, new Date(0))).toBe(2);
+    expect(harness.service.assetCountSince(bob, new Date(0))).toBe(0);
+
+    expect(harness.service.remainingDailyAssets(conversationId, 5)).toBe(4);
+    expect(harness.service.remainingDailyAssets(conversationId, 0)).toBeUndefined();
+    expect(harness.service.remainingDailyAssets(conversationId, 1)).toBe(0);
+  });
+});
