@@ -4072,3 +4072,38 @@ architecture.md §12.3 与 deployment.md §2.10。
 - 配额计数口径与 `/admin` 的字节用量不同：前者是**笔数**、按滚动窗口；后者是字节、全量。两个
   数字本来就不该相等。
 - 额度用完后用户看到的那句中文，没有在浏览器里看过（它由工具失败路径渲染）。
+
+## 72. 设备令牌 90 天过期（2026-11-20 11:25）
+
+`api_tokens` 加了 `expires_at`；`TOKEN_TTL_DAYS`（默认 90，`0` 不过期，clamp 3650）在签发时写入。
+过期与撤销同形：下一次请求 401，用户与超管的列表都不再显示它，行本身留着（审计）。设计写在
+architecture 的 `api_tokens` 行与 roadmap §5.1，运维写在 deployment.md §2.11。
+
+### 72.1 质量门
+
+| 命令 | 读数 |
+|---|---|
+| `make check` | 通过 |
+| `make test` | Nest server **533**（+3）、Nest client **73**、Rust server **228**（+3）、Rust client **52** |
+| 新增断言 | 90 天令牌带 `expiresAt`、过期后 `resolve` 为 `None` 且列表为空；`0` 的令牌没有 deadline；两侧配置 clamp；管理页出现「有效期」列 |
+
+**一个踩到的坑**：新加的 DDL 注释里写了一个分号（`-- Epoch ms; NULL means ...`），而 Rust 侧
+`apply_schema` 是按 `;` 切分 DDL 的——注释把 `CREATE TABLE api_tokens` 从中间截断，整棵 schema
+在 81 个测试里同时炸掉。注释已改成句号。Nest 侧是整段 `exec`，不吃这一刀。
+
+### 72.2 上线读数（11:25）
+
+| 项 | 读数 |
+|---|---|
+| 提交 / 镜像 | `04905f6` / `sha256:26cf7d5d…` |
+| 启动日志 | `client="wasm" max_turns_per_user=2 daily_asset_limit=200 token_ttl_days=90` |
+| 库结构 | `PRAGMA table_info(api_tokens)` 第 7 列 `expires_at INTEGER` |
+| 回填 | `api_tokens` 当前 **0 行**，所以回填跑过但没有对象 |
+| 日志 / 健康 | `ERROR` / `WARN` 0 行；`running` / `healthy` |
+
+### 72.3 没证的
+
+- **没有真签发一个令牌再等它过期**：线上没有可用登录凭据，`401` 那条路径只有单测。
+- **回填在有数据的库上没有跑过**：线上令牌表是空的；逻辑是 `created_at + TTL`，一条 UPDATE。
+- 令牌列表的「有效期」列没有在浏览器里看过（用户页与超管页都只验了渲染函数）。
+- `TOKEN_TTL_DAYS=0` 的线上行为没验，只有单测里 `expiresAt === null`。
