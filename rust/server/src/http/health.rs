@@ -7,8 +7,9 @@ use serde_json::json;
 use crate::state::AppState;
 
 /// Liveness plus the one dependency that makes every page useless when it is
-/// gone. `SELECT 1` is deliberately cheap: the pool has a single connection, so a
-/// hung or locked database shows up here without adding measurable traffic.
+/// gone. `SELECT 1` is deliberately cheap: it borrows one pooled connection for
+/// the length of the query, so a hung or locked database shows up here without
+/// adding measurable traffic.
 pub async fn health(State(state): State<AppState>) -> Response {
     match sqlx::query("SELECT 1").fetch_one(&state.pool).await {
         Ok(_) => (StatusCode::OK, Json(json!({ "ok": true }))).into_response(),
