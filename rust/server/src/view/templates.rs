@@ -161,7 +161,7 @@ fn header(page: &ChatPage) -> String {
     }
 
     format!(
-        "  <header class=\"topbar\">\n    <a class=\"brand\" href=\"/\">\n      <img class=\"brand-logo\" src=\"/logo.svg\" alt=\"\" width=\"32\" height=\"32\">\n      <span class=\"brand-name\">Kestrel Studio</span>\n    </a>\n\n    <nav class=\"menu\">\n      <button type=\"button\" class=\"menu-button\" id=\"new-conversation\">新会话</button>\n      <a class=\"menu-button\" href=\"/voice\">语音</a>\n      <a class=\"menu-button\" href=\"/settings/tokens\">令牌</a>\n{admin}      <details class=\"menu-dropdown\">\n        <summary class=\"menu-button\">历史会话</summary>\n        <div class=\"conversation-panel\">\n          <input type=\"search\" class=\"conversation-search\" id=\"conversation-search\" placeholder=\"搜索会话\" aria-label=\"搜索会话\">\n          <ul class=\"conversation-list\">\n{items}          </ul>\n        </div>\n      </details>\n    </nav>\n\n    <div class=\"account\">\n      <div class=\"account-menu\">\n        <span class=\"account-name\">{name}</span>\n        <form action=\"/logout\" method=\"post\" class=\"logout-form\">\n          <button type=\"submit\" class=\"logout-button\">退出登录</button>\n        </form>\n      </div>\n    </div>\n  </header>\n",
+        "  <header class=\"topbar\">\n    <a class=\"brand\" href=\"/\">\n      <img class=\"brand-logo\" src=\"/logo.svg\" alt=\"\" width=\"32\" height=\"32\">\n      <span class=\"brand-name\">Kestrel Studio</span>\n    </a>\n\n    <nav class=\"menu\">\n      <button type=\"button\" class=\"menu-button\" id=\"new-conversation\">新会话</button>\n      <a class=\"menu-button\" href=\"/settings/tokens\">令牌</a>\n{admin}      <details class=\"menu-dropdown\">\n        <summary class=\"menu-button\">历史会话</summary>\n        <div class=\"conversation-panel\">\n          <input type=\"search\" class=\"conversation-search\" id=\"conversation-search\" placeholder=\"搜索会话\" aria-label=\"搜索会话\">\n          <ul class=\"conversation-list\">\n{items}          </ul>\n        </div>\n      </details>\n    </nav>\n\n    <div class=\"account\">\n      <div class=\"account-menu\">\n        <span class=\"account-name\">{name}</span>\n        <form action=\"/logout\" method=\"post\" class=\"logout-form\">\n          <button type=\"submit\" class=\"logout-button\">退出登录</button>\n        </form>\n      </div>\n    </div>\n  </header>\n",
         admin = admin,
         items = items,
         name = escape(&page.username)
@@ -272,11 +272,19 @@ const COMPOSER_AND_DIALOGS: &str = r#"  <footer class="composer">
         ></textarea>
         <p class="composer-hint"><kbd>Enter</kbd> 发送，<kbd>Shift</kbd> + <kbd>Enter</kbd> 换行</p>
       </div>
-      <button type="submit" class="composer-send" id="send" aria-label="发送">
-        <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
-          <path d="M3 20.5 21 12 3 3.5 3 10l12 2-12 2z" fill="currentColor"/>
-        </svg>
-      </button>
+      <div class="composer-actions">
+        <a class="composer-action composer-voice" href="/voice" aria-label="语音输入" title="语音输入">
+          <svg viewBox="0 0 24 24" width="18" height="18" fill="none" aria-hidden="true">
+            <path d="M12 3a3 3 0 0 1 3 3v6a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3Z" stroke="currentColor" stroke-width="1.8"/>
+            <path d="M5 11v1a7 7 0 0 0 14 0v-1M12 19v2M8.5 21h7" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+          </svg>
+        </a>
+        <button type="submit" class="composer-action composer-send" id="send" aria-label="发送">
+          <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+            <path d="M3 20.5 21 12 3 3.5 3 10l12 2-12 2z" fill="currentColor"/>
+          </svg>
+        </button>
+      </div>
     </form>
   </footer>
 
