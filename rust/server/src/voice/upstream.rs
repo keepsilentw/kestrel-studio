@@ -72,7 +72,7 @@ impl std::fmt::Debug for Command {
 
 pub struct Upstream {
     pub commands: mpsc::Sender<Command>,
-    pub events: mpsc::UnboundedReceiver<RealtimeEvent>,
+    pub events: mpsc::Receiver<RealtimeEvent>,
 }
 
 impl Upstream {
@@ -84,7 +84,7 @@ impl Upstream {
     #[cfg(test)]
     pub fn from_channels(
         commands: mpsc::Sender<Command>,
-        events: mpsc::UnboundedReceiver<RealtimeEvent>,
+        events: mpsc::Receiver<RealtimeEvent>,
     ) -> Self {
         Self { commands, events }
     }
@@ -143,7 +143,11 @@ pub async fn open(
 ) -> Result<Upstream, UpstreamError> {
     let UpstreamSocket { reader, writer } = connect(base_url, model, api_key).await?;
     let (command_tx, command_rx) = mpsc::channel::<Command>(64);
-    let (event_tx, event_rx) = mpsc::unbounded_channel::<RealtimeEvent>();
+    // Backpressure, not loss. Once the browser's outbound queue and this queue are
+    // both full, the read loop stops draining the upstream socket and TCP applies
+    // the same pressure there. A slow browser therefore cannot grow a call's memory
+    // without bound, and terminal events stay ordered behind the audio already read.
+    let (event_tx, event_rx) = mpsc::channel::<RealtimeEvent>(256);
 
     let setup = message::session_update(
         instructions,
@@ -199,7 +203,7 @@ async fn write_loop<W: AsyncWriteExt + Unpin>(
 
 async fn read_loop<R: AsyncReadExt + Unpin>(
     mut reader: R,
-    events: mpsc::UnboundedSender<RealtimeEvent>,
+    events: mpsc::Sender<RealtimeEvent>,
     commands: mpsc::Sender<Command>,
     setup: Value,
     pending_acks: AckQueue,
@@ -212,22 +216,28 @@ async fn read_loop<R: AsyncReadExt + Unpin>(
     loop {
         let read = match reader.read(&mut buf).await {
             Ok(0) => {
-                let _ = events.send(RealtimeEvent::Closed {
-                    code: 1006,
-                    reason: String::new(),
-                });
+                let _ = events
+                    .send(RealtimeEvent::Closed {
+                        code: 1006,
+                        reason: String::new(),
+                    })
+                    .await;
                 return;
             }
             Ok(read) => read,
             Err(error) => {
-                let _ = events.send(RealtimeEvent::Failed(format!("上游读取失败: {error}")));
+                let _ = events
+                    .send(RealtimeEvent::Failed(format!("上游读取失败: {error}")))
+                    .await;
                 return;
             }
         };
         let frames = match decoder.push(&buf[..read], false) {
             Ok(frames) => frames,
             Err(error) => {
-                let _ = events.send(RealtimeEvent::Failed(format!("上游帧错误: {error:?}")));
+                let _ = events
+                    .send(RealtimeEvent::Failed(format!("上游帧错误: {error:?}")))
+                    .await;
                 return;
             }
         };
@@ -260,7 +270,7 @@ async fn read_loop<R: AsyncReadExt + Unpin>(
                                 }
                             }
                             other => {
-                                let _ = events.send(other);
+                                let _ = events.send(other).await;
                             }
                         }
                     }
@@ -271,10 +281,12 @@ async fn read_loop<R: AsyncReadExt + Unpin>(
                     }
                 }
                 Frame::Close(code) => {
-                    let _ = events.send(RealtimeEvent::Closed {
-                        code: code.unwrap_or(1000),
-                        reason: String::new(),
-                    });
+                    let _ = events
+                        .send(RealtimeEvent::Closed {
+                            code: code.unwrap_or(1000),
+                            reason: String::new(),
+                        })
+                        .await;
                     return;
                 }
                 _ => {}

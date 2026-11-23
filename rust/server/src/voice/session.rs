@@ -601,7 +601,7 @@ mod tests {
     async fn fixture() -> (
         VoiceCall,
         mpsc::Receiver<Command>,
-        mpsc::UnboundedSender<RealtimeEvent>,
+        mpsc::Sender<RealtimeEvent>,
         mpsc::Receiver<Outbound>,
         AppState,
     ) {
@@ -611,7 +611,7 @@ mod tests {
             Some("test-key".to_string()),
         );
         let (cmd_tx, cmd_rx) = mpsc::channel(16);
-        let (event_tx, event_rx) = mpsc::unbounded_channel();
+        let (event_tx, event_rx) = mpsc::channel(16);
         let (out_tx, out_rx) = mpsc::channel(64);
         // A real account row: `conversations.user_id` has a foreign key, and the
         // point of these tests is that the rows land in the same database the text
