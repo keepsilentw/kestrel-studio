@@ -50,6 +50,7 @@ web-sys = { version = "0.3", features = [
   "HtmlImageElement",
   "HtmlCanvasElement",
   "CanvasRenderingContext2d",
+  "CssStyleDeclaration",
   "Blob",
   "BlobPropertyBag",
   "Url",

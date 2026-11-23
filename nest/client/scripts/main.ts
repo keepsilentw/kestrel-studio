@@ -153,6 +153,94 @@ function scrollToBottom(): void {
   stream.scrollTop = stream.scrollHeight;
 }
 
+interface LoadOlderPosition {
+  conversationId: string;
+  messageId: number;
+  offset: number;
+}
+
+const LOAD_OLDER_POSITION_KEY = 'kestrel-studio:load-older-position';
+
+function isUnknownRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function readLoadOlderPosition(raw: string | null): LoadOlderPosition | null {
+  if (raw === null) {
+    return null;
+  }
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    if (!isUnknownRecord(parsed)) {
+      return null;
+    }
+    const { conversationId, messageId, offset } = parsed;
+    if (
+      typeof conversationId !== 'string' ||
+      typeof messageId !== 'number' ||
+      !Number.isInteger(messageId) ||
+      typeof offset !== 'number' ||
+      !Number.isFinite(offset)
+    ) {
+      return null;
+    }
+    return { conversationId, messageId, offset };
+  } catch {
+    return null;
+  }
+}
+
+/** Remember the first visible turn before the full-page "load older" navigation. */
+function rememberLoadOlderPosition(): void {
+  const streamTop = stream.getBoundingClientRect().top;
+  for (const turn of stream.querySelectorAll<HTMLElement>('.turn[data-message-id]')) {
+    const messageId = Number(turn.dataset.messageId);
+    if (!Number.isInteger(messageId) || turn.getBoundingClientRect().bottom <= streamTop) {
+      continue;
+    }
+    const position: LoadOlderPosition = {
+      conversationId: body.dataset.conversationId ?? '',
+      messageId,
+      offset: turn.getBoundingClientRect().top - streamTop,
+    };
+    try {
+      window.sessionStorage.setItem(LOAD_OLDER_POSITION_KEY, JSON.stringify(position));
+    } catch {
+      // Private mode or a full storage bucket: the navigation still works, it
+      // just cannot restore the reading position.
+    }
+    return;
+  }
+}
+
+/** Restore that turn after the server rendered the larger message window. */
+function restoreLoadOlderPosition(): void {
+  if (!new URLSearchParams(window.location.search).has('messages')) {
+    return;
+  }
+  try {
+    const raw = window.sessionStorage.getItem(LOAD_OLDER_POSITION_KEY);
+    const position = readLoadOlderPosition(raw);
+    window.sessionStorage.removeItem(LOAD_OLDER_POSITION_KEY);
+    if (position === null || position.conversationId !== (body.dataset.conversationId ?? '')) {
+      return;
+    }
+    const target = document.querySelector<HTMLElement>(
+      `.turn[data-message-id="${position.messageId}"]`,
+    );
+    if (target === null) {
+      return;
+    }
+    const delta =
+      target.getBoundingClientRect().top -
+      stream.getBoundingClientRect().top -
+      position.offset;
+    stream.scrollTop += delta;
+  } catch {
+    // Storage unavailable: leave the browser's default scroll position alone.
+  }
+}
+
 function buildModeBadge(mode: Mode): HTMLElement {
   const badge = document.createElement('span');
   badge.className = 'turn-mode';
@@ -1148,6 +1236,10 @@ document.addEventListener('click', (event) => {
   }
 });
 
+document
+  .querySelector<HTMLAnchorElement>('.load-older-link')
+  ?.addEventListener('click', rememberLoadOlderPosition);
+
 /**
  * Bound to the dropdown, not to the document: the dropdown itself is painted by
  * the server and the listener outlives its rows, so it needs no re-binding when
@@ -1467,6 +1559,7 @@ for (const link of document.querySelectorAll<HTMLButtonElement>('.turn-index-lin
     bindTurnAnchor(link, target);
   }
 }
+restoreLoadOlderPosition();
 updateActiveAnchor();
 
 const initialConversationId = body.dataset.conversationId;

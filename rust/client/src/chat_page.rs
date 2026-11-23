@@ -28,8 +28,8 @@ use wasm_bindgen_futures::{spawn_local, JsFuture};
 use web_sys::{
     CanvasRenderingContext2d, Document, Element, EventSource, Headers, HtmlButtonElement,
     HtmlCanvasElement, HtmlDetailsElement, HtmlDialogElement, HtmlElement, HtmlImageElement,
-    HtmlInputElement, HtmlSelectElement, HtmlTextAreaElement, MessageEvent, Request, RequestInit,
-    Response, ScrollBehavior, ScrollIntoViewOptions, ScrollLogicalPosition,
+    HtmlInputElement, HtmlSelectElement, HtmlTextAreaElement, MessageEvent, Node, Request,
+    RequestInit, Response, ScrollBehavior, ScrollIntoViewOptions, ScrollLogicalPosition,
 };
 
 use crate::chat_core::{
@@ -44,6 +44,16 @@ pub const MODE_STORAGE_KEY: &str = "kestrel-studio:mode";
 /// One history request. The sidebar is the only place this grows without bound;
 /// the page fetches the first page on open and appends older ones on demand.
 const HISTORY_PAGE_SIZE: i64 = 50;
+
+const LOAD_OLDER_POSITION_KEY: &str = "kestrel-studio:load-older-position";
+
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LoadOlderPosition {
+    conversation_id: String,
+    message_id: i64,
+    offset: f64,
+}
 
 /// The journaled names. Listed here so an event the server adds and this page does
 /// not handle is a visible gap in one place, not a silently unpainted turn.
@@ -204,6 +214,7 @@ pub fn init_chat() -> Result<(), JsValue> {
     seed_rendered(&document, &page);
     paint_modes(&dom, mode);
     sync_composer(&page);
+    resize_prompt(&dom.prompt);
     bind(&page, &dom)?;
     bind_extras(&page);
 
@@ -389,6 +400,12 @@ fn bind(page: &Handle, dom: &Dom) -> Result<(), JsValue> {
     dom.prompt
         .add_event_listener_with_callback("keydown", enter.as_ref().unchecked_ref())?;
     enter.forget();
+
+    let prompt = dom.prompt.clone();
+    let grow = Closure::<dyn FnMut()>::new(move || resize_prompt(&prompt));
+    dom.prompt
+        .add_event_listener_with_callback("input", grow.as_ref().unchecked_ref())?;
+    grow.forget();
 
     let scoped = Rc::clone(page);
     let fresh = Closure::<dyn FnMut()>::new(move || {
@@ -1144,6 +1161,7 @@ fn send_prompt(page: &Handle) {
             append_item(&dom.stream, &message, "turn-error");
         } else {
             dom.prompt.set_value("");
+            resize_prompt(&dom.prompt);
         }
         scoped.borrow_mut().submitting = false;
         sync_composer(&scoped);
@@ -1665,6 +1683,140 @@ fn bind_history(page: &Handle, dom: &Dom) {
         }
     }
     on_search.forget();
+
+    let history = dom.history.clone();
+    let outside =
+        Closure::<dyn FnMut(web_sys::MouseEvent)>::new(move |event: web_sys::MouseEvent| {
+            if !history.open() {
+                return;
+            }
+            let Some(target) = event
+                .target()
+                .and_then(|value| value.dyn_into::<Node>().ok())
+            else {
+                return;
+            };
+            if !history.contains(Some(&target)) {
+                history.set_open(false);
+            }
+        });
+    if let Some(document) = dom.body.owner_document() {
+        if document
+            .add_event_listener_with_callback("click", outside.as_ref().unchecked_ref())
+            .is_ok()
+        {
+            outside.forget();
+        }
+    }
+}
+
+fn resize_prompt(prompt: &HtmlTextAreaElement) {
+    let Ok(element) = prompt.clone().dyn_into::<HtmlElement>() else {
+        return;
+    };
+    let style = element.style();
+    let _ = style.set_property("height", "auto");
+    let height = prompt.scroll_height().min(200);
+    let _ = style.set_property("height", &format!("{height}px"));
+}
+
+/// The "load older" link is a full-page navigation. Keep the first visible turn
+/// fixed across that reload so adding rows above it does not move the reader.
+fn bind_load_older(dom: &Dom, document: &Document) {
+    let Ok(Some(link)) = document.query_selector(".load-older-link") else {
+        return;
+    };
+    let stream = dom.stream.clone();
+    let body = dom.body.clone();
+    let on_click =
+        Closure::<dyn FnMut(web_sys::MouseEvent)>::new(move |_event: web_sys::MouseEvent| {
+            let Some(window) = web_sys::window() else {
+                return;
+            };
+            let Ok(Some(storage)) = window.session_storage() else {
+                return;
+            };
+            let Some(document) = stream.owner_document() else {
+                return;
+            };
+            let Ok(turns) = document.query_selector_all(".turn[data-message-id]") else {
+                return;
+            };
+            let stream_top = stream.get_bounding_client_rect().top();
+            for index in 0..turns.length() {
+                let Some(turn) = turns
+                    .item(index)
+                    .and_then(|node| node.dyn_into::<HtmlElement>().ok())
+                else {
+                    continue;
+                };
+                let rect = turn.get_bounding_client_rect();
+                if rect.bottom() <= stream_top {
+                    continue;
+                }
+                let Ok(message_id) = turn
+                    .dataset()
+                    .get("messageId")
+                    .unwrap_or_default()
+                    .parse::<i64>()
+                else {
+                    continue;
+                };
+                let position = LoadOlderPosition {
+                    conversation_id: conversation_id(&body).unwrap_or_default(),
+                    message_id,
+                    offset: rect.top() - stream_top,
+                };
+                if let Ok(raw) = serde_json::to_string(&position) {
+                    let _ = storage.set_item(LOAD_OLDER_POSITION_KEY, &raw);
+                }
+                return;
+            }
+        });
+    if link
+        .add_event_listener_with_callback("click", on_click.as_ref().unchecked_ref())
+        .is_ok()
+    {
+        on_click.forget();
+    }
+}
+
+fn restore_load_older_position(dom: &Dom) {
+    let Some(window) = web_sys::window() else {
+        return;
+    };
+    if !window
+        .location()
+        .search()
+        .unwrap_or_default()
+        .contains("messages=")
+    {
+        return;
+    }
+    let Ok(Some(storage)) = window.session_storage() else {
+        return;
+    };
+    let raw = storage.get_item(LOAD_OLDER_POSITION_KEY).ok().flatten();
+    let _ = storage.remove_item(LOAD_OLDER_POSITION_KEY);
+    let Some(position) = raw.and_then(|raw| serde_json::from_str::<LoadOlderPosition>(&raw).ok())
+    else {
+        return;
+    };
+    if position.conversation_id != conversation_id(&dom.body).unwrap_or_default() {
+        return;
+    }
+    let Some(document) = dom.stream.owner_document() else {
+        return;
+    };
+    let selector = format!(".turn[data-message-id=\"{}\"]", position.message_id);
+    let Ok(Some(target)) = document.query_selector(&selector) else {
+        return;
+    };
+    let delta = target.get_bounding_client_rect().top()
+        - dom.stream.get_bounding_client_rect().top()
+        - position.offset;
+    let next = (f64::from(dom.stream.scroll_top()) + delta).round() as i32;
+    dom.stream.set_scroll_top(next.max(0));
 }
 
 /// Replace the dropdown's rows with what the server says they should be.
@@ -1956,6 +2108,8 @@ fn bind_extras(page: &Handle) {
 
     bind_download(page, &dom);
     bind_history(page, &dom);
+    restore_load_older_position(&dom);
+    bind_load_older(&dom, &document);
 
     // Rows the shell already rendered, each pointing at a turn by message id.
     if let Ok(links) = document.query_selector_all(".turn-index-link[data-target]") {
