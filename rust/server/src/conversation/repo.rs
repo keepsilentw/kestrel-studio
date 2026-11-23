@@ -16,6 +16,11 @@ use crate::task::TaskKind;
 
 const MAX_TITLE_LENGTH: usize = 30;
 
+/// A management delete can lose the deferred transaction's snapshot race while
+/// another connection commits. The busy timeout has already waited once; these
+/// extra attempts cover that narrow upgrade gap without retrying other failures.
+const DELETE_RETRY_LIMIT: u32 = 3;
+
 /// How old an assistant placeholder with no `owner` has to be before this stack's
 /// boot recovery may end it. Rows written by a build that predates the column are
 /// indistinguishable from rows the *other* stack is writing right now, and a turn
@@ -754,6 +759,30 @@ impl ConversationService {
         }
         let asset_names = self.asset_names_of(ids).await?;
 
+        for attempt in 1..=DELETE_RETRY_LIMIT {
+            match self.delete_conversation_rows(ids).await {
+                Ok(()) => {
+                    crate::media::asset_path::remove_asset_files(&self.config, &asset_names).await;
+                    return Ok((ids.len(), asset_names.len()));
+                }
+                Err(error) if is_busy(&error) && attempt < DELETE_RETRY_LIMIT => {
+                    tracing::warn!(
+                        %error,
+                        attempt,
+                        "conversation delete hit SQLite BUSY, retrying"
+                    );
+                    tokio::time::sleep(std::time::Duration::from_millis(25 * u64::from(attempt)))
+                        .await;
+                }
+                Err(error) => return Err(error.into()),
+            }
+        }
+        Err(AppError::internal(anyhow::anyhow!(
+            "conversation delete exhausted {DELETE_RETRY_LIMIT} attempts"
+        )))
+    }
+
+    async fn delete_conversation_rows(&self, ids: &[i64]) -> Result<(), sqlx::Error> {
         let mut tx = self.pool.begin().await?;
         // Children before parents: assets and tasks both hang off rows that go next.
         let message_ids = message_ids_in(&mut tx, ids).await?;
@@ -765,9 +794,7 @@ impl ConversationService {
         delete_where_in(&mut tx, "messages", "conversation_id", ids).await?;
         delete_where_in(&mut tx, "conversations", "id", ids).await?;
         tx.commit().await?;
-
-        crate::media::asset_path::remove_asset_files(&self.config, &asset_names).await;
-        Ok((ids.len(), asset_names.len()))
+        Ok(())
     }
 
     /// Stored names of every asset hanging off these conversations.
@@ -1040,10 +1067,24 @@ fn build_message_view(
     }
 }
 
+/// SQLite reports both ordinary lock contention and the WAL snapshot-upgrade
+/// failure as BUSY. Only this management transaction retries them; normal writes
+/// keep their existing failure semantics.
+fn is_busy(error: &sqlx::Error) -> bool {
+    error.as_database_error().is_some_and(|database| {
+        database.code().is_some_and(|code| {
+            matches!(
+                code.as_ref(),
+                "5" | "SQLITE_BUSY" | "517" | "SQLITE_BUSY_SNAPSHOT"
+            )
+        }) || database.message().contains("database is locked")
+    })
+}
+
 async fn message_ids_in(
     tx: &mut Transaction<'_, sqlx::Sqlite>,
     ids: &[i64],
-) -> Result<Vec<i64>, AppError> {
+) -> Result<Vec<i64>, sqlx::Error> {
     let marks = placeholders(ids.len(), 1);
     let rows = sqlx::query(&format!(
         "SELECT id FROM messages WHERE conversation_id IN ({marks})"
@@ -1062,7 +1103,7 @@ async fn delete_where_in(
     table: &str,
     column: &str,
     ids: &[i64],
-) -> Result<(), AppError> {
+) -> Result<(), sqlx::Error> {
     let marks = placeholders(ids.len(), 1);
     sqlx::query(&format!("DELETE FROM {table} WHERE {column} IN ({marks})"))
         .bind_many(ids)

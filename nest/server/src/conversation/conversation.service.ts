@@ -14,6 +14,25 @@ import type { StoredAsset } from '@/media/media.service';
 /** The trailing window of the daily asset cap. */
 const DAY_MS = 24 * 60 * 60 * 1000;
 
+/**
+ * A management delete uses a deferred transaction. If another connection commits
+ * between its first read and its write, SQLite can reject the snapshot upgrade
+ * with BUSY even after the connection's five-second busy timeout.
+ */
+const DELETE_RETRY_LIMIT = 3;
+
+function isBusy(error: unknown): boolean {
+  if (!(error instanceof Error)) {
+    return false;
+  }
+  const code = 'code' in error && typeof error.code === 'string' ? error.code : '';
+  return (
+    code === 'SQLITE_BUSY' ||
+    code === 'SQLITE_BUSY_SNAPSHOT' ||
+    error.message.includes('database is locked')
+  );
+}
+
 export interface ToolCallRecord {
   name: string;
   arguments: Record<string, unknown>;
@@ -831,26 +850,36 @@ export class ConversationService implements OnApplicationBootstrap {
 
     const assetNames = this.assetNamesOf(conversationIds);
 
-    this.db.transaction((tx) => {
-      // Children before parents: assets and tasks both hang off rows that go next.
-      const messageIds = tx
-        .select({ id: messages.id })
-        .from(messages)
-        .where(inArray(messages.conversationId, conversationIds))
-        .all()
-        .map((row) => row.id);
-      if (messageIds.length > 0) {
-        tx.delete(assets).where(inArray(assets.messageId, messageIds)).run();
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        this.db.transaction((tx) => {
+          // Children before parents: assets and tasks both hang off rows that go next.
+          const messageIds = tx
+            .select({ id: messages.id })
+            .from(messages)
+            .where(inArray(messages.conversationId, conversationIds))
+            .all()
+            .map((row) => row.id);
+          if (messageIds.length > 0) {
+            tx.delete(assets).where(inArray(assets.messageId, messageIds)).run();
+          }
+          tx.delete(conversationEvents)
+            .where(inArray(conversationEvents.conversationId, conversationIds))
+            .run();
+          tx.delete(generationTasks)
+            .where(inArray(generationTasks.conversationId, conversationIds))
+            .run();
+          tx.delete(messages).where(inArray(messages.conversationId, conversationIds)).run();
+          tx.delete(conversations).where(inArray(conversations.id, conversationIds)).run();
+        });
+        break;
+      } catch (error: unknown) {
+        if (isBusy(error) && attempt < DELETE_RETRY_LIMIT) {
+          continue;
+        }
+        throw error;
       }
-      tx.delete(conversationEvents)
-        .where(inArray(conversationEvents.conversationId, conversationIds))
-        .run();
-      tx.delete(generationTasks)
-        .where(inArray(generationTasks.conversationId, conversationIds))
-        .run();
-      tx.delete(messages).where(inArray(messages.conversationId, conversationIds)).run();
-      tx.delete(conversations).where(inArray(conversations.id, conversationIds)).run();
-    });
+    }
 
     await removeAssetFiles(assetNames);
     return { conversations: conversationIds.length, assets: assetNames.length };
